@@ -42,3 +42,5 @@ artifacts/
 
 # VS Code
 .vscode/
+AppMode.json
+ClientConfig.json
