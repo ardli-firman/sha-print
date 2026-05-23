@@ -19,7 +19,7 @@ namespace ShaPrint.App
                     {
                         if (enable)
                         {
-                            key.SetValue(AppName, exePath);
+                            key.SetValue(AppName, $"\"{exePath}\"");
                             ShaPrint.Core.AppLogger.Log("[SYSTEM] Enabled Run on Windows Startup.");
                         }
                         else

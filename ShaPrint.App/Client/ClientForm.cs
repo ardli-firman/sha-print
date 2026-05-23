@@ -27,7 +27,7 @@ namespace ShaPrint.Client
         private List<DiscoveryResponseMessage> _discoveredServers = new List<DiscoveryResponseMessage>();
         private List<PipeListener> _activeListeners = new List<PipeListener>();
         
-        private readonly string _configFile = "ClientConfig.json";
+        private readonly string _configFile = Path.Combine(Application.StartupPath, "ClientConfig.json");
         private List<InstalledPrinterConfig> _installedPrinters = new List<InstalledPrinterConfig>();
 
         public ClientForm()
@@ -315,7 +315,8 @@ namespace ShaPrint.Client
                 
                 try
                 {
-                    File.Delete("AppMode.json");
+                    if (File.Exists(Path.Combine(Application.StartupPath, "AppMode.json")))
+                        File.Delete(Path.Combine(Application.StartupPath, "AppMode.json"));
                 }
                 catch { }
 

@@ -19,7 +19,7 @@ namespace ShaPrint.Server
         private DiscoveryServer _discoveryServer;
         private PrintReceiver _printReceiver;
         private bool _isRunning = false;
-        private readonly string _configFile = "ServerConfig.json";
+        private readonly string _configFile = Path.Combine(Application.StartupPath, "ServerConfig.json");
 
         public MainForm()
         {
@@ -190,7 +190,8 @@ namespace ShaPrint.Server
                 
                 try
                 {
-                    File.Delete("AppMode.json");
+                    if (File.Exists(Path.Combine(Application.StartupPath, "AppMode.json")))
+                        File.Delete(Path.Combine(Application.StartupPath, "AppMode.json"));
                 }
                 catch { }
 

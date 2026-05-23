@@ -12,7 +12,7 @@ namespace ShaPrint.App
     {
         private Button btnServer;
         private Button btnClient;
-        private readonly string _modeFile = "AppMode.json";
+        private readonly string _modeFile = Path.Combine(Application.StartupPath, "AppMode.json");
 
         public LauncherForm()
         {
