@@ -64,6 +64,29 @@ namespace ShaPrint.Server
             lblStatus.AutoSize = true;
             this.Controls.Add(lblStatus);
 
+            var txtLog = new TextBox();
+            txtLog.Multiline = true;
+            txtLog.ReadOnly = true;
+            txtLog.ScrollBars = ScrollBars.Vertical;
+            txtLog.Location = new Point(10, 230);
+            txtLog.Size = new Size(360, 200);
+            txtLog.BackColor = Color.Black;
+            txtLog.ForeColor = Color.Lime;
+            txtLog.Font = new Font("Consolas", 9F);
+            this.Controls.Add(txtLog);
+
+            this.Size = new Size(400, 500); // Expanded size for logs
+
+            ShaPrint.Core.AppLogger.OnLog += (msg) => 
+            {
+                if (this.IsHandleCreated)
+                {
+                    this.Invoke(new Action(() => {
+                        txtLog.AppendText(msg + Environment.NewLine);
+                    }));
+                }
+            };
+
             trayMenu = new ContextMenuStrip();
             trayMenu.Items.Add("Open", null, (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; });
             trayMenu.Items.Add("Exit", null, (s, e) => { Application.Exit(); });

@@ -15,7 +15,7 @@ namespace ShaPrint.Client
                     var portResult = RunPowerShell($"Add-PrinterPort -Name '{pipeName}'");
                     if (!portResult.Success && !portResult.ErrorMessage.Contains("already exists"))
                     {
-                        Console.WriteLine("Add-PrinterPort warning: " + portResult.ErrorMessage);
+                        ShaPrint.Core.AppLogger.Log("[CLIENT] Add-PrinterPort warning: " + portResult.ErrorMessage);
                     }
 
                     // Try adding the driver if it's an inbox driver (might fail if it's external, but we try)
@@ -24,7 +24,7 @@ namespace ShaPrint.Client
                     var addPrinterResult = RunPowerShell($"Add-Printer -Name '{virtualPrinterName}' -DriverName '{driverName}' -PortName '{pipeName}'");
                     if (!addPrinterResult.Success)
                     {
-                        Console.WriteLine($"[CLIENT] Warning: Failed to install with Native Driver '{driverName}'. Falling back to 'Generic / Text Only'.");
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Warning: Failed to install with Native Driver '{driverName}'. Falling back to 'Generic / Text Only'.");
                         RunPowerShell($"Add-PrinterDriver -Name 'Generic / Text Only'");
                         addPrinterResult = RunPowerShell($"Add-Printer -Name '{virtualPrinterName}' -DriverName 'Generic / Text Only' -PortName '{pipeName}'");
                     }
@@ -32,7 +32,7 @@ namespace ShaPrint.Client
                     if (addPrinterResult.Success)
                     {
                         // Disable Bidirectional Support (BIDI) to prevent Windows Spooler / Word from hanging while "Connecting to printer"
-                        Console.WriteLine("[CLIENT] Disabling Bidirectional Support on the Virtual Printer to prevent UI hanging...");
+                        ShaPrint.Core.AppLogger.Log("[CLIENT] Disabling Bidirectional Support on the Virtual Printer to prevent UI hanging...");
                         RunPowerShell($"$printer = Get-WmiObject -Class Win32_Printer | Where-Object {{ $_.Name -eq '{virtualPrinterName}' }}; if ($printer) {{ $printer.EnableBIDI = $false; $printer.Put() }}");
                         
                         return (true, string.Empty);

@@ -46,34 +46,34 @@ namespace ShaPrint.Server
             using (client)
             {
                 var remoteIp = ((IPEndPoint)client.Client.RemoteEndPoint!).Address.ToString();
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SERVER] Incoming TCP connection from {remoteIp}");
+                ShaPrint.Core.AppLogger.Log($"[SERVER] Incoming TCP connection from {remoteIp}");
 
                 using (var stream = client.GetStream())
                 {
                     try
                     {
                         var payload = await PrintJobPayload.ReadAsync(stream);
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SERVER] Received payload. Printer: '{payload.TargetPrinterName}', Data size: {payload.SpoolData?.Length ?? 0} bytes.");
+                        ShaPrint.Core.AppLogger.Log($"[SERVER] Received payload. Printer: '{payload.TargetPrinterName}', Data size: {payload.SpoolData?.Length ?? 0} bytes.");
 
                         if (!string.IsNullOrEmpty(payload.TargetPrinterName) && payload.SpoolData != null && payload.SpoolData.Length > 0)
                         {
                             string docName = "ShaPrint Job - " + DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SERVER] Injecting {payload.SpoolData.Length} bytes into Windows Spooler for '{payload.TargetPrinterName}'...");
+                            ShaPrint.Core.AppLogger.Log($"[SERVER] Injecting {payload.SpoolData.Length} bytes into Windows Spooler for '{payload.TargetPrinterName}'...");
                             bool printed = SpoolerApi.PrintRawData(payload.TargetPrinterName, payload.SpoolData, docName);
                             
                             if (printed)
-                                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SERVER] SUCCESS: Print job accepted by Windows Spooler.");
+                                ShaPrint.Core.AppLogger.Log($"[SERVER] SUCCESS: Print job accepted by Windows Spooler.");
                             else
-                                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SERVER] FAILED: Windows Spooler rejected the job. Check SpoolerApi logs.");
+                                ShaPrint.Core.AppLogger.Error($"[SERVER] FAILED: Windows Spooler rejected the job. Check SpoolerApi logs.");
                         }
                         else
                         {
-                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SERVER] ERROR: Empty payload or missing printer name.");
+                            ShaPrint.Core.AppLogger.Error($"[SERVER] ERROR: Empty payload or missing printer name.");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SERVER] ERROR handling print job: " + ex.Message);
+                        ShaPrint.Core.AppLogger.Error($"[SERVER] ERROR handling print job: " + ex.Message);
                     }
                 }
             }

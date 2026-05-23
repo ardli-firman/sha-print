@@ -44,11 +44,11 @@ namespace ShaPrint.Client
                     using var pipeServer = new NamedPipeServerStream(pipeNameOnly, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
                     await pipeServer.WaitForConnectionAsync(token);
 
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [CLIENT] Caught new print job on pipe: {pipeNameOnly}");
+                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Caught new print job on pipe: {pipeNameOnly}");
                     using var ms = new MemoryStream();
                     await pipeServer.CopyToAsync(ms, token);
                     byte[] spoolData = ms.ToArray();
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [CLIENT] Read {spoolData.Length} bytes from Windows Spooler.");
+                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Read {spoolData.Length} bytes from Windows Spooler.");
 
                     if (spoolData.Length > 0)
                     {
@@ -60,7 +60,7 @@ namespace ShaPrint.Client
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("Pipe error: " + ex.Message);
+                    ShaPrint.Core.AppLogger.Log("[CLIENT] Pipe error: " + ex.Message);
                     await Task.Delay(1000); // Backoff on error
                 }
             }
@@ -70,10 +70,10 @@ namespace ShaPrint.Client
         {
             try
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [CLIENT] Connecting to Server at {_serverIp}:{Constants.PrintTcpPort}...");
+                ShaPrint.Core.AppLogger.Log($"[CLIENT] Connecting to Server at {_serverIp}:{Constants.PrintTcpPort}...");
                 using var tcpClient = new TcpClient();
                 await tcpClient.ConnectAsync(_serverIp, Constants.PrintTcpPort);
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [CLIENT] Connected. Sending payload...");
+                ShaPrint.Core.AppLogger.Log($"[CLIENT] Connected. Sending payload...");
                 using var stream = tcpClient.GetStream();
 
                 var payload = new PrintJobPayload
@@ -83,11 +83,11 @@ namespace ShaPrint.Client
                 };
 
                 await PrintJobPayload.WriteAsync(stream, payload);
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [CLIENT] Successfully sent {spoolData.Length} bytes to Server for printer: {_targetPrinterName}");
+                ShaPrint.Core.AppLogger.Log($"[CLIENT] Successfully sent {spoolData.Length} bytes to Server for printer: {_targetPrinterName}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [CLIENT] Failed to send print job to server: " + ex.Message);
+                ShaPrint.Core.AppLogger.Error($"[CLIENT] Failed to send print job to server: " + ex.Message);
             }
         }
     }

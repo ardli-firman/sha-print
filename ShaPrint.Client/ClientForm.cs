@@ -103,6 +103,29 @@ namespace ShaPrint.Client
             lblStatus.AutoSize = true;
             this.Controls.Add(lblStatus);
 
+            var txtLog = new TextBox();
+            txtLog.Multiline = true;
+            txtLog.ReadOnly = true;
+            txtLog.ScrollBars = ScrollBars.Vertical;
+            txtLog.Location = new Point(10, 415);
+            txtLog.Size = new Size(480, 140);
+            txtLog.BackColor = Color.Black;
+            txtLog.ForeColor = Color.Lime;
+            txtLog.Font = new Font("Consolas", 9F);
+            this.Controls.Add(txtLog);
+
+            this.Size = new Size(520, 600); // Expanded size for logs
+
+            ShaPrint.Core.AppLogger.OnLog += (msg) => 
+            {
+                if (this.IsHandleCreated)
+                {
+                    this.Invoke(new Action(() => {
+                        txtLog.AppendText(msg + Environment.NewLine);
+                    }));
+                }
+            };
+
             lbServers.SelectedIndexChanged += (s, e) => 
             { 
                 btnInstall.Enabled = lbServers.SelectedIndex >= 0; 

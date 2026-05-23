@@ -34,7 +34,7 @@ namespace ShaPrint.Server
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("Firewall config error: " + ex.Message);
+                    ShaPrint.Core.AppLogger.Error("Firewall config error: " + ex.Message);
                 }
             });
         }

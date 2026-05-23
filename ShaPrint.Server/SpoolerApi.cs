@@ -163,10 +163,10 @@ namespace ShaPrint.Server
             try
             {
                 IntPtr hPrinter = new IntPtr(0);
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] Attempting to open printer: '{printerName}'");
+                ShaPrint.Core.AppLogger.Log($"[SPOOLER] Attempting to open printer: '{printerName}'");
                 if (OpenPrinter(printerName.Normalize(), out hPrinter, IntPtr.Zero))
                 {
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] Printer opened successfully. Starting document '{documentName}'...");
+                    ShaPrint.Core.AppLogger.Log($"[SPOOLER] Printer opened successfully. Starting document '{documentName}'...");
                     DOCINFO di = new DOCINFO
                     {
                         pDocName = documentName,
@@ -180,27 +180,27 @@ namespace ShaPrint.Server
                             int dwWritten = 0;
                             success = WritePrinter(hPrinter, pBytes, data.Length, out dwWritten);
                             if (!success)
-                                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] WritePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                                ShaPrint.Core.AppLogger.Error($"[SPOOLER] WritePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                             else
-                                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] WritePrinter wrote {dwWritten} bytes to the spooler.");
+                                ShaPrint.Core.AppLogger.Log($"[SPOOLER] WritePrinter wrote {dwWritten} bytes to the spooler.");
 
                             EndPagePrinter(hPrinter);
                         }
                         else
                         {
-                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] StartPagePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                            ShaPrint.Core.AppLogger.Error($"[SPOOLER] StartPagePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                         }
                         EndDocPrinter(hPrinter);
                     }
                     else
                     {
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] StartDocPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                        ShaPrint.Core.AppLogger.Error($"[SPOOLER] StartDocPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                     }
                     ClosePrinter(hPrinter);
                 }
                 else
                 {
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] OpenPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                    ShaPrint.Core.AppLogger.Error($"[SPOOLER] OpenPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                 }
             }
             finally
