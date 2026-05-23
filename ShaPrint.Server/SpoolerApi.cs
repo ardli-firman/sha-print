@@ -116,6 +116,45 @@ namespace ShaPrint.Server
             return printers;
         }
 
+        public static List<ShaPrint.Core.Network.PrinterInfo> GetLocalPrintersDetailed()
+        {
+            var printers = new List<ShaPrint.Core.Network.PrinterInfo>();
+            uint flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
+            uint cbNeeded = 0;
+            uint cReturned = 0;
+
+            EnumPrinters(flags, null, 2, IntPtr.Zero, 0, out cbNeeded, out cReturned);
+            if (cbNeeded > 0)
+            {
+                IntPtr pAddr = Marshal.AllocHGlobal((int)cbNeeded);
+                try
+                {
+                    if (EnumPrinters(flags, null, 2, pAddr, cbNeeded, out cbNeeded, out cReturned))
+                    {
+                        var infoArray = new PRINTER_INFO_2[cReturned];
+                        Type type = typeof(PRINTER_INFO_2);
+                        int increment = Marshal.SizeOf(type);
+                        
+                        for (int i = 0; i < cReturned; i++)
+                        {
+                            IntPtr currentAddr = IntPtr.Add(pAddr, i * increment);
+                            infoArray[i] = (PRINTER_INFO_2)Marshal.PtrToStructure(currentAddr, type)!;
+                            printers.Add(new ShaPrint.Core.Network.PrinterInfo 
+                            {
+                                Name = infoArray[i].pPrinterName ?? "",
+                                DriverName = infoArray[i].pDriverName ?? ""
+                            });
+                        }
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(pAddr);
+                }
+            }
+            return printers;
+        }
+
         public static bool PrintRawData(string printerName, byte[] data, string documentName)
         {
             IntPtr pBytes = Marshal.AllocCoTaskMem(data.Length);

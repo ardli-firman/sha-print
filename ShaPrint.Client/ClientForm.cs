@@ -161,8 +161,9 @@ namespace ShaPrint.Client
 
                 string safeName = item.Printer.Name.Replace(" ", "_").Replace("\\", "_");
                 string pipeName = $@"\\.\pipe\shaprint_{item.Server.ServerName}_{safeName}";
+                string driverName = !string.IsNullOrEmpty(item.Printer.DriverName) ? item.Printer.DriverName : "Generic / Text Only";
 
-                var result = await VirtualPrinterManager.InstallPrinterAsync(virtualPrinterName, pipeName);
+                var result = await VirtualPrinterManager.InstallPrinterAsync(virtualPrinterName, pipeName, driverName);
 
                 if (result.Success)
                 {

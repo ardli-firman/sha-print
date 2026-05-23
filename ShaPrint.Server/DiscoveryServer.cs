@@ -47,11 +47,24 @@ namespace ShaPrint.Server
                     
                     if (request == Constants.DiscoveryRequestMessage)
                     {
+                        var allDetailedPrinters = SpoolerApi.GetLocalPrintersDetailed();
+                        var exposedInfos = new List<PrinterInfo>();
+                        foreach (var p in _exposedPrinters)
+                        {
+                            var detailed = allDetailedPrinters.FirstOrDefault(x => x.Name == p);
+                            exposedInfos.Add(new PrinterInfo 
+                            { 
+                                Name = p, 
+                                Description = "Shared via ShaPrint",
+                                DriverName = detailed?.DriverName ?? "Generic / Text Only"
+                            });
+                        }
+
                         var response = new DiscoveryResponseMessage
                         {
                             ServerName = Environment.MachineName,
                             IpAddress = GetLocalIPAddress(),
-                            ExposedPrinters = _exposedPrinters.Select(p => new PrinterInfo { Name = p, Description = "Shared via ShaPrint" }).ToList()
+                            ExposedPrinters = exposedInfos
                         };
 
                         string jsonResponse = JsonSerializer.Serialize(response);

@@ -6,44 +6,34 @@ namespace ShaPrint.Client
 {
     public static class VirtualPrinterManager
     {
-        public static async Task<(bool Success, string ErrorMessage)> InstallPrinterAsync(string printerName, string pipeName)
+        public static async Task<(bool Success, string ErrorMessage)> InstallPrinterAsync(string virtualPrinterName, string pipeName, string driverName)
         {
             return await Task.Run(() =>
             {
                 try
                 {
-                    // 1. Add Local Port (Named Pipe)
                     var portResult = RunPowerShell($"Add-PrinterPort -Name '{pipeName}'");
                     if (!portResult.Success && !portResult.ErrorMessage.Contains("already exists"))
                     {
-                        // Only log if it's an unexpected error
                         Console.WriteLine("Add-PrinterPort warning: " + portResult.ErrorMessage);
                     }
 
-                    // 2. Try adding printer with various common inbox drivers
-                    string[] candidateDrivers = new[] 
-                    {
-                        "Microsoft Print To PDF",
-                        "Universal Print Class Driver",
-                        "Microsoft Virtual Print Class Driver",
-                        "Microsoft IPP Class Driver",
-                        "Microsoft XPS Document Writer",
-                        "Microsoft XPS Document Writer v4"
-                    };
-
-                    string lastError = "No drivers found.";
-
-                    foreach (var driverName in candidateDrivers)
-                    {
-                        var result = RunPowerShell($"Add-Printer -Name '{printerName}' -DriverName '{driverName}' -PortName '{pipeName}'");
-                        if (result.Success)
-                        {
-                            return (true, string.Empty);
-                        }
-                        lastError = result.ErrorMessage;
-                    }
+                    // Try adding the driver if it's an inbox driver (might fail if it's external, but we try)
+                    RunPowerShell($"Add-PrinterDriver -Name '{driverName}'");
                     
-                    return (false, "All driver installation attempts failed. Last error: " + lastError);
+                    var addPrinterResult = RunPowerShell($"Add-Printer -Name '{virtualPrinterName}' -DriverName '{driverName}' -PortName '{pipeName}'");
+                    if (!addPrinterResult.Success)
+                    {
+                        Console.WriteLine($"[CLIENT] Warning: Failed to install with Native Driver '{driverName}'. Falling back to 'Generic / Text Only'.");
+                        RunPowerShell($"Add-PrinterDriver -Name 'Generic / Text Only'");
+                        addPrinterResult = RunPowerShell($"Add-Printer -Name '{virtualPrinterName}' -DriverName 'Generic / Text Only' -PortName '{pipeName}'");
+                    }
+
+                    if (addPrinterResult.Success)
+                    {
+                        return (true, string.Empty);
+                    }
+                    return (false, "All driver installation attempts failed. Last error: " + addPrinterResult.ErrorMessage);
                 }
                 catch (Exception ex)
                 {
