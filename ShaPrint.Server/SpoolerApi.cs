@@ -7,7 +7,7 @@ namespace ShaPrint.Server
     public static class SpoolerApi
     {
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-        public struct DOCINFO
+        public class DOCINFO
         {
             [MarshalAs(UnmanagedType.LPTStr)]
             public string pDocName;
@@ -124,8 +124,10 @@ namespace ShaPrint.Server
             try
             {
                 IntPtr hPrinter = new IntPtr(0);
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] Attempting to open printer: '{printerName}'");
                 if (OpenPrinter(printerName.Normalize(), out hPrinter, IntPtr.Zero))
                 {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] Printer opened successfully. Starting document '{documentName}'...");
                     DOCINFO di = new DOCINFO
                     {
                         pDocName = documentName,
@@ -138,11 +140,28 @@ namespace ShaPrint.Server
                         {
                             int dwWritten = 0;
                             success = WritePrinter(hPrinter, pBytes, data.Length, out dwWritten);
+                            if (!success)
+                                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] WritePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                            else
+                                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] WritePrinter wrote {dwWritten} bytes to the spooler.");
+
                             EndPagePrinter(hPrinter);
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] StartPagePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                         }
                         EndDocPrinter(hPrinter);
                     }
+                    else
+                    {
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] StartDocPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                    }
                     ClosePrinter(hPrinter);
+                }
+                else
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SPOOLER] OpenPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                 }
             }
             finally

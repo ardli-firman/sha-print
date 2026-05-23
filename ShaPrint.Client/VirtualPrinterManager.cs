@@ -14,9 +14,9 @@ namespace ShaPrint.Client
                 {
                     // 1. Add Local Port (Named Pipe)
                     var portResult = RunPowerShell($"Add-PrinterPort -Name '{pipeName}'");
-                    if (!portResult.Success)
+                    if (!portResult.Success && !portResult.ErrorMessage.Contains("already exists"))
                     {
-                        // Port might already exist, which is fine. But let's log it.
+                        // Only log if it's an unexpected error
                         Console.WriteLine("Add-PrinterPort warning: " + portResult.ErrorMessage);
                     }
 

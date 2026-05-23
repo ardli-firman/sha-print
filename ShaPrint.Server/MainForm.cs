@@ -28,6 +28,9 @@ namespace ShaPrint.Server
             InitializeComponent();
             LoadPrinters();
             LoadConfiguration();
+
+            // Auto-check firewall rules on startup
+            FirewallManager.CheckAndAddFirewallRules();
         }
 
         private void InitializeComponent()

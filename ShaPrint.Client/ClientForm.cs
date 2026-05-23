@@ -16,6 +16,8 @@ namespace ShaPrint.Client
         private Button btnInstall;
         private Button btnDelete;
         private Label lblStatus;
+        private Label lblIp;
+        private TextBox txtServerIp;
         
         private NotifyIcon trayIcon;
         private ContextMenuStrip trayMenu;
@@ -46,6 +48,17 @@ namespace ShaPrint.Client
             btnScan.Size = new Size(150, 30);
             btnScan.Click += BtnScan_Click;
             this.Controls.Add(btnScan);
+
+            lblIp = new Label();
+            lblIp.Text = "Specific IP (Optional):";
+            lblIp.Location = new Point(170, 15);
+            lblIp.AutoSize = true;
+            this.Controls.Add(lblIp);
+
+            txtServerIp = new TextBox();
+            txtServerIp.Location = new Point(295, 12);
+            txtServerIp.Size = new Size(130, 20);
+            this.Controls.Add(txtServerIp);
 
             lbServers = new ListBox();
             lbServers.Location = new Point(10, 50);
@@ -94,11 +107,22 @@ namespace ShaPrint.Client
 
         private async void BtnScan_Click(object? sender, EventArgs e)
         {
+            string? targetIp = null;
+            if (!string.IsNullOrWhiteSpace(txtServerIp.Text))
+            {
+                if (!System.Net.IPAddress.TryParse(txtServerIp.Text.Trim(), out _))
+                {
+                    MessageBox.Show("Format IP Address tidak valid!", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+                targetIp = txtServerIp.Text.Trim();
+            }
+
             btnScan.Enabled = false;
             lblStatus.Text = "Scanning...";
             lbServers.Items.Clear();
 
-            _discoveredServers = await _discoveryClient.DiscoverServersAsync();
+            _discoveredServers = await _discoveryClient.DiscoverServersAsync(targetIp);
 
             foreach (var server in _discoveredServers)
             {

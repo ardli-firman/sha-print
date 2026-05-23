@@ -12,13 +12,14 @@ namespace ShaPrint.Client
 {
     public class DiscoveryClient
     {
-        public async Task<List<DiscoveryResponseMessage>> DiscoverServersAsync(int timeoutMs = 2000)
+        public async Task<List<DiscoveryResponseMessage>> DiscoverServersAsync(string? targetIp = null, int timeoutMs = 2000)
         {
             var servers = new List<DiscoveryResponseMessage>();
             using var udpClient = new UdpClient();
             udpClient.EnableBroadcast = true;
             
-            var endpoint = new IPEndPoint(IPAddress.Broadcast, Constants.DiscoveryUdpPort);
+            IPAddress ip = string.IsNullOrWhiteSpace(targetIp) ? IPAddress.Broadcast : IPAddress.Parse(targetIp);
+            var endpoint = new IPEndPoint(ip, Constants.DiscoveryUdpPort);
             byte[] requestData = Encoding.UTF8.GetBytes(Constants.DiscoveryRequestMessage);
             
             await udpClient.SendAsync(requestData, requestData.Length, endpoint);
@@ -37,6 +38,8 @@ namespace ShaPrint.Client
                         var response = JsonSerializer.Deserialize<DiscoveryResponseMessage>(jsonResponse);
                         if (response != null)
                         {
+                            // Overwrite with the actual reachable IP address from the packet source
+                            response.IpAddress = result.RemoteEndPoint.Address.ToString();
                             servers.Add(response);
                         }
                     }
