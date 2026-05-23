@@ -12,10 +12,20 @@ namespace ShaPrint.App
     {
         private Button btnServer;
         private Button btnClient;
-        private readonly string _modeFile = Path.Combine(Application.StartupPath, "AppMode.json");
+        private string _modeFile;
+        private bool _isStartup;
 
-        public LauncherForm()
+        private string GetConfigPath(string fileName)
         {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            return Path.Combine(dir, fileName);
+        }
+
+        public LauncherForm(bool isStartup = false)
+        {
+            _isStartup = isStartup;
+            _modeFile = GetConfigPath("AppMode.json");
             this.Text = "ShaPrint - Choose Mode";
             this.Size = new Size(350, 250);
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -52,13 +62,13 @@ namespace ShaPrint.App
 
             if (mode == "Server")
             {
-                var form = new MainForm();
+                var form = new MainForm(_isStartup);
                 form.FormClosed += (s, e) => this.Close();
                 form.Show();
             }
             else
             {
-                var form = new ClientForm();
+                var form = new ClientForm(_isStartup);
                 form.FormClosed += (s, e) => this.Close();
                 form.Show();
             }

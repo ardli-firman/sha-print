@@ -27,11 +27,22 @@ namespace ShaPrint.Client
         private List<DiscoveryResponseMessage> _discoveredServers = new List<DiscoveryResponseMessage>();
         private List<PipeListener> _activeListeners = new List<PipeListener>();
         
-        private readonly string _configFile = Path.Combine(Application.StartupPath, "ClientConfig.json");
+        private bool _startHidden;
+        private string _configFile;
+
+        private string GetConfigPath(string fileName)
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            return Path.Combine(dir, fileName);
+        }
+        
         private List<InstalledPrinterConfig> _installedPrinters = new List<InstalledPrinterConfig>();
 
-        public ClientForm()
+        public ClientForm(bool startHidden = false)
         {
+            _startHidden = startHidden;
+            _configFile = GetConfigPath("ClientConfig.json");
             _discoveryClient = new DiscoveryClient();
             InitializeComponent();
             LoadConfiguration();
@@ -145,8 +156,16 @@ namespace ShaPrint.Client
 
             lbServers.SelectedIndexChanged += (s, e) => 
             { 
-                btnInstall.Enabled = lbServers.SelectedIndex >= 0; 
-                btnDelete.Enabled = lbServers.SelectedIndex >= 0; 
+                if (lbServers.SelectedItem is PrinterDisplayItem item)
+                {
+                    btnInstall.Enabled = !item.IsInstalled; 
+                    btnDelete.Enabled = item.IsInstalled; 
+                }
+                else
+                {
+                    btnInstall.Enabled = false; 
+                    btnDelete.Enabled = false; 
+                }
             };
 
             trayMenu = new ContextMenuStrip();
@@ -159,6 +178,17 @@ namespace ShaPrint.Client
             trayIcon.ContextMenuStrip = trayMenu;
             trayIcon.Visible = true;
             trayIcon.DoubleClick += (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; };
+        }
+
+        protected override void SetVisibleCore(bool value)
+        {
+            if (_startHidden)
+            {
+                value = false;
+                if (!this.IsHandleCreated) CreateHandle();
+                _startHidden = false; // Only hide on the first show
+            }
+            base.SetVisibleCore(value);
         }
 
         private async void BtnScan_Click(object? sender, EventArgs e)
@@ -315,8 +345,8 @@ namespace ShaPrint.Client
                 
                 try
                 {
-                    if (File.Exists(Path.Combine(Application.StartupPath, "AppMode.json")))
-                        File.Delete(Path.Combine(Application.StartupPath, "AppMode.json"));
+                    if (File.Exists(GetConfigPath("AppMode.json")))
+                        File.Delete(GetConfigPath("AppMode.json"));
                 }
                 catch { }
 

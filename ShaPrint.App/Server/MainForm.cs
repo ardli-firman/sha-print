@@ -19,10 +19,20 @@ namespace ShaPrint.Server
         private DiscoveryServer _discoveryServer;
         private PrintReceiver _printReceiver;
         private bool _isRunning = false;
-        private readonly string _configFile = Path.Combine(Application.StartupPath, "ServerConfig.json");
+        private bool _startHidden;
+        private string _configFile;
 
-        public MainForm()
+        private string GetConfigPath(string fileName)
         {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            return Path.Combine(dir, fileName);
+        }
+
+        public MainForm(bool startHidden = false)
+        {
+            _startHidden = startHidden;
+            _configFile = GetConfigPath("ServerConfig.json");
             _discoveryServer = new DiscoveryServer();
             _printReceiver = new PrintReceiver();
             
@@ -126,6 +136,25 @@ namespace ShaPrint.Server
             }
         }
 
+        protected override void SetVisibleCore(bool value)
+        {
+            if (_startHidden)
+            {
+                value = false;
+                if (!this.IsHandleCreated) CreateHandle();
+                _startHidden = false; // Only hide on the first show
+            }
+            base.SetVisibleCore(value);
+        }
+
+        private void MainForm_Load(object? sender, EventArgs e)
+        {
+            if (_isRunning)
+            {
+                StopServer();
+            }
+        }
+
         private void BtnToggleServer_Click(object? sender, EventArgs e)
         {
             if (_isRunning)
@@ -190,8 +219,8 @@ namespace ShaPrint.Server
                 
                 try
                 {
-                    if (File.Exists(Path.Combine(Application.StartupPath, "AppMode.json")))
-                        File.Delete(Path.Combine(Application.StartupPath, "AppMode.json"));
+                    if (File.Exists(GetConfigPath("AppMode.json")))
+                        File.Delete(GetConfigPath("AppMode.json"));
                 }
                 catch { }
 
