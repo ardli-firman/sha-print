@@ -31,6 +31,10 @@ namespace ShaPrint.Client
 
                     if (addPrinterResult.Success)
                     {
+                        // Disable Bidirectional Support (BIDI) to prevent Windows Spooler / Word from hanging while "Connecting to printer"
+                        Console.WriteLine("[CLIENT] Disabling Bidirectional Support on the Virtual Printer to prevent UI hanging...");
+                        RunPowerShell($"$printer = Get-WmiObject -Class Win32_Printer | Where-Object {{ $_.Name -eq '{virtualPrinterName}' }}; if ($printer) {{ $printer.EnableBIDI = $false; $printer.Put() }}");
+                        
                         return (true, string.Empty);
                     }
                     return (false, "All driver installation attempts failed. Last error: " + addPrinterResult.ErrorMessage);
