@@ -39,35 +39,51 @@ namespace ShaPrint.Client
         private void InitializeComponent()
         {
             this.Text = "ShaPrint Client";
-            this.Size = new Size(500, 400);
+            this.Size = new Size(520, 450);
             this.StartPosition = FormStartPosition.CenterScreen;
 
-            btnScan = new Button();
-            btnScan.Text = "Scan LAN for Printers";
-            btnScan.Location = new Point(10, 10);
-            btnScan.Size = new Size(150, 30);
-            btnScan.Click += BtnScan_Click;
-            this.Controls.Add(btnScan);
+            var grpNetwork = new GroupBox();
+            grpNetwork.Text = "Network Discovery";
+            grpNetwork.Location = new Point(10, 10);
+            grpNetwork.Size = new Size(480, 80);
+            this.Controls.Add(grpNetwork);
+
+            var lblHint = new Label();
+            lblHint.Text = "Hint: If Server is on a different Wi-Fi/VLAN, auto-scan won't work. Enter Server IP explicitly.";
+            lblHint.Location = new Point(10, 20);
+            lblHint.AutoSize = true;
+            lblHint.ForeColor = Color.DarkSlateGray;
+            grpNetwork.Controls.Add(lblHint);
 
             lblIp = new Label();
-            lblIp.Text = "Specific IP (Optional):";
-            lblIp.Location = new Point(170, 15);
+            lblIp.Text = "Specific Server IP :";
+            lblIp.Location = new Point(10, 47);
             lblIp.AutoSize = true;
-            this.Controls.Add(lblIp);
+            grpNetwork.Controls.Add(lblIp);
 
             txtServerIp = new TextBox();
-            txtServerIp.Location = new Point(295, 12);
+            txtServerIp.Location = new Point(125, 45);
             txtServerIp.Size = new Size(130, 20);
-            this.Controls.Add(txtServerIp);
+            grpNetwork.Controls.Add(txtServerIp);
+
+            var toolTip = new ToolTip();
+            toolTip.SetToolTip(txtServerIp, "Example: 192.168.1.50\nLeave blank for auto-discovery on the same local network.");
+
+            btnScan = new Button();
+            btnScan.Text = "Scan LAN / Connect";
+            btnScan.Location = new Point(270, 43);
+            btnScan.Size = new Size(150, 25);
+            btnScan.Click += BtnScan_Click;
+            grpNetwork.Controls.Add(btnScan);
 
             lbServers = new ListBox();
-            lbServers.Location = new Point(10, 50);
-            lbServers.Size = new Size(460, 250);
+            lbServers.Location = new Point(10, 100);
+            lbServers.Size = new Size(480, 240);
             this.Controls.Add(lbServers);
 
             btnInstall = new Button();
             btnInstall.Text = "Install Selected Printer";
-            btnInstall.Location = new Point(10, 310);
+            btnInstall.Location = new Point(10, 350);
             btnInstall.Size = new Size(150, 30);
             btnInstall.Enabled = false;
             btnInstall.Click += BtnInstall_Click;
@@ -75,7 +91,7 @@ namespace ShaPrint.Client
 
             btnDelete = new Button();
             btnDelete.Text = "Delete Selected Printer";
-            btnDelete.Location = new Point(170, 310);
+            btnDelete.Location = new Point(170, 350);
             btnDelete.Size = new Size(150, 30);
             btnDelete.Enabled = false;
             btnDelete.Click += BtnDelete_Click;
@@ -83,7 +99,7 @@ namespace ShaPrint.Client
 
             lblStatus = new Label();
             lblStatus.Text = "Ready";
-            lblStatus.Location = new Point(10, 345);
+            lblStatus.Location = new Point(10, 390);
             lblStatus.AutoSize = true;
             this.Controls.Add(lblStatus);
 
