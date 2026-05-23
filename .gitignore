@@ -44,3 +44,6 @@ artifacts/
 .vscode/
 AppMode.json
 ClientConfig.json
+ServerConfig.json
+
+Output/

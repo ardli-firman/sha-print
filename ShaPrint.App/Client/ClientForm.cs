@@ -18,6 +18,7 @@ namespace ShaPrint.Client
         private Label lblStatus;
         private Label lblIp;
         private TextBox txtServerIp;
+        private CheckBox chkRunOnStartup;
         
         private NotifyIcon trayIcon;
         private ContextMenuStrip trayMenu;
@@ -110,12 +111,20 @@ namespace ShaPrint.Client
             lblStatus.AutoSize = true;
             this.Controls.Add(lblStatus);
 
+            chkRunOnStartup = new CheckBox();
+            chkRunOnStartup.Text = "Run Automatically on Windows Startup";
+            chkRunOnStartup.Location = new Point(10, 420);
+            chkRunOnStartup.AutoSize = true;
+            chkRunOnStartup.Checked = ShaPrint.App.StartupManager.IsStartupEnabled();
+            chkRunOnStartup.CheckedChanged += (s, e) => ShaPrint.App.StartupManager.SetStartup(chkRunOnStartup.Checked);
+            this.Controls.Add(chkRunOnStartup);
+
             var txtLog = new TextBox();
             txtLog.Multiline = true;
             txtLog.ReadOnly = true;
             txtLog.ScrollBars = ScrollBars.Vertical;
-            txtLog.Location = new Point(10, 415);
-            txtLog.Size = new Size(480, 140);
+            txtLog.Location = new Point(10, 445);
+            txtLog.Size = new Size(480, 110);
             txtLog.BackColor = Color.Black;
             txtLog.ForeColor = Color.Lime;
             txtLog.Font = new Font("Consolas", 9F);

@@ -13,6 +13,7 @@ namespace ShaPrint.Server
         private CheckedListBox clbPrinters;
         private Button btnToggleServer;
         private Label lblStatus;
+        private CheckBox chkRunOnStartup;
         private NotifyIcon trayIcon;
         private ContextMenuStrip trayMenu;
         private DiscoveryServer _discoveryServer;
@@ -71,12 +72,20 @@ namespace ShaPrint.Server
             btnSwitchMode.Click += (s, e) => SwitchMode();
             this.Controls.Add(btnSwitchMode);
 
+            chkRunOnStartup = new CheckBox();
+            chkRunOnStartup.Text = "Run Server Automatically on Windows Startup";
+            chkRunOnStartup.Location = new Point(10, 225);
+            chkRunOnStartup.AutoSize = true;
+            chkRunOnStartup.Checked = ShaPrint.App.StartupManager.IsStartupEnabled();
+            chkRunOnStartup.CheckedChanged += (s, e) => ShaPrint.App.StartupManager.SetStartup(chkRunOnStartup.Checked);
+            this.Controls.Add(chkRunOnStartup);
+
             var txtLog = new TextBox();
             txtLog.Multiline = true;
             txtLog.ReadOnly = true;
             txtLog.ScrollBars = ScrollBars.Vertical;
-            txtLog.Location = new Point(10, 230);
-            txtLog.Size = new Size(360, 200);
+            txtLog.Location = new Point(10, 255);
+            txtLog.Size = new Size(360, 195);
             txtLog.BackColor = Color.Black;
             txtLog.ForeColor = Color.Lime;
             txtLog.Font = new Font("Consolas", 9F);
