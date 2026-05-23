@@ -1,0 +1,44 @@
+# Agent & Pi
+.agents/
+.pi/
+docs/
+skills-lock.json
+CONTEXT.md
+
+# .NET
+bin/
+obj/
+[Bb]uild/
+[Mm]erge/
+[Tt]est[Rr]esult*
+[Bb]uild[Ll]og.*
+*.Cache
+*.user
+*.suo
+*.cache
+*.dbmdl
+*.dbproj.schemaview
+*.jfm
+*.pfx
+*.publishsettings
+.vs/
+*.psess
+*.vspx
+*.pidb
+*.svclog
+*.scc
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Rider
+.idea/
+*.sln.im
+
+# VS Code
+.vscode/
