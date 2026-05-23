@@ -1,1 +1,53 @@
-init
+name: Release Workflow
+
+on:
+  push:
+    tags:
+      - '*-prod' # Only trigger on tags ending with -prod (e.g., v1.0.0-prod)
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Required for changelog generation
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Extract Version
+      id: extract_version
+      shell: bash
+      run: |
+        TAG_NAME=${GITHUB_REF#refs/tags/}
+        # Remove '-prod' suffix
+        CLEAN_TAG=${TAG_NAME%-prod}
+        # Remove 'v' prefix if it exists
+        VERSION=${CLEAN_TAG#v}
+        
+        echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Publish .NET Application
+      run: |
+        dotnet publish ShaPrint.App/ShaPrint.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=${{ steps.extract_version.outputs.version }}
+
+    - name: Build Installer (Inno Setup)
+      run: |
+        & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/DMyAppVersion=${{ steps.extract_version.outputs.version }}" "/DMyAppOutput=ShaPrint_Setup_v${{ steps.extract_version.outputs.version }}" installer.iss
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: Output/ShaPrint_Setup_v${{ steps.extract_version.outputs.version }}.exe
+        generate_release_notes: true
+        name: Release v${{ steps.extract_version.outputs.version }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
