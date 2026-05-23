@@ -19,7 +19,7 @@ namespace ShaPrint.App
                     {
                         if (enable)
                         {
-                            key.SetValue(AppName, $"\"{exePath}\"");
+                            key.SetValue(AppName, $"\"{exePath}\" --startup");
                             ShaPrint.Core.AppLogger.Log("[SYSTEM] Enabled Run on Windows Startup.");
                         }
                         else
@@ -42,7 +42,17 @@ namespace ShaPrint.App
             {
                 using (RegistryKey? key = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false))
                 {
-                    return key?.GetValue(AppName) != null;
+                    var val = key?.GetValue(AppName)?.ToString();
+                    if (val != null)
+                    {
+                        if (!val.Contains("--startup"))
+                        {
+                            // Trigger migration in the background
+                            System.Threading.Tasks.Task.Run(() => SetStartup(true));
+                        }
+                        return true;
+                    }
+                    return false;
                 }
             }
             catch
