@@ -42,6 +42,7 @@ namespace ShaPrint.Client
             this.Text = "ShaPrint Client";
             this.Size = new Size(520, 450);
             this.StartPosition = FormStartPosition.CenterScreen;
+            try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
             var grpNetwork = new GroupBox();
             grpNetwork.Text = "Network Discovery";
@@ -154,7 +155,7 @@ namespace ShaPrint.Client
 
             trayIcon = new NotifyIcon();
             trayIcon.Text = "ShaPrint Client";
-            trayIcon.Icon = SystemIcons.Application;
+            try { trayIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { trayIcon.Icon = SystemIcons.Application; }
             trayIcon.ContextMenuStrip = trayMenu;
             trayIcon.Visible = true;
             trayIcon.DoubleClick += (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; };

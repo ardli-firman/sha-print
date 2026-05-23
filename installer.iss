@@ -5,6 +5,7 @@ AppPublisher=ShaPrint Open Source
 DefaultDirName={autopf}\ShaPrint
 DefaultGroupName=ShaPrint
 UninstallDisplayIcon={app}\ShaPrint.App.exe
+SetupIconFile=ShaPrint.App\icon.ico
 Compression=lzma2
 SolidCompression=yes
 OutputDir=Output

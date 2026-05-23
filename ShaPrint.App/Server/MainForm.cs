@@ -39,6 +39,7 @@ namespace ShaPrint.Server
             this.Text = "ShaPrint Server";
             this.Size = new Size(400, 300);
             this.StartPosition = FormStartPosition.CenterScreen;
+            try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
             Label lblInfo = new Label();
             lblInfo.Text = "Select printers to expose to the network:";
@@ -109,7 +110,7 @@ namespace ShaPrint.Server
 
             trayIcon = new NotifyIcon();
             trayIcon.Text = "ShaPrint Server";
-            trayIcon.Icon = SystemIcons.Application;
+            try { trayIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { trayIcon.Icon = SystemIcons.Application; }
             trayIcon.ContextMenuStrip = trayMenu;
             trayIcon.Visible = true;
             trayIcon.DoubleClick += (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; };

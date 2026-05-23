@@ -21,6 +21,7 @@ namespace ShaPrint.App
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
+            try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
             Label lblInfo = new Label();
             lblInfo.Text = "Welcome to ShaPrint!\n\nDo you want this PC to act as a Server (Host Printer) or a Client (Send Print Jobs)?";
