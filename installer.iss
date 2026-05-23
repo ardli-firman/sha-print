@@ -1,6 +1,14 @@
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
+
+#ifndef MyAppOutput
+  #define MyAppOutput "ShaPrint_Setup_v1.0.0"
+#endif
+
 [Setup]
 AppName=ShaPrint
-AppVersion=1.0.0
+AppVersion={#MyAppVersion}
 AppPublisher=ShaPrint Open Source
 DefaultDirName={autopf}\ShaPrint
 DefaultGroupName=ShaPrint
@@ -9,7 +17,7 @@ SetupIconFile=ShaPrint.App\icon.ico
 Compression=lzma2
 SolidCompression=yes
 OutputDir=Output
-OutputBaseFilename=ShaPrint_Setup_v1.0
+OutputBaseFilename={#MyAppOutput}
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64
 
