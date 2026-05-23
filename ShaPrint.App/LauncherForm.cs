@@ -14,6 +14,7 @@ namespace ShaPrint.App
         private Button btnClient;
         private string _modeFile;
         private bool _isStartup;
+        public bool HasLaunchedMode { get; private set; } = false;
 
         private string GetConfigPath(string fileName)
         {
@@ -57,6 +58,7 @@ namespace ShaPrint.App
 
         private void LaunchMode(string mode)
         {
+            HasLaunchedMode = true;
             SaveMode(mode);
             this.Hide();
 
