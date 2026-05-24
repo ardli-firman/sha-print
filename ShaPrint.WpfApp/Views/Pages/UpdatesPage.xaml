@@ -1,0 +1,53 @@
+<Page x:Class="ShaPrint.WpfApp.Views.Pages.UpdatesPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="Updates"
+      ScrollViewer.VerticalScrollBarVisibility="Disabled">
+
+    <Grid Margin="24,20,24,24" MaxWidth="800">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <TextBlock Grid.Row="0" Text="Update Manager" FontSize="28" FontWeight="SemiBold"/>
+        <TextBlock Grid.Row="0" Text="Check for updates, switch channels, and manage application versions." 
+                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,38,0,24"/>
+
+        <!-- Controls -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,16">
+            <TextBlock Text="Auto-Update Channel:" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <ComboBox SelectedItem="{Binding ViewModel.SelectedChannel}" ItemsSource="{Binding ViewModel.AvailableChannels}" Width="150" Margin="0,0,16,0" />
+            
+            <ui:Button Command="{Binding ViewModel.LoadReleasesCommand}" Content="Refresh List" Icon="{ui:SymbolIcon ArrowClockwise24}" />
+        </StackPanel>
+
+        <!-- DataGrid -->
+        <DataGrid Grid.Row="2" ItemsSource="{Binding ViewModel.Releases}" SelectedItem="{Binding ViewModel.SelectedRelease}" 
+                  AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" HeadersVisibility="Column"
+                  SelectionMode="Single" Margin="0,0,0,16">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Version" Binding="{Binding Version}" Width="100"/>
+                <DataGridTextColumn Header="Channel" Binding="{Binding Channel}" Width="100"/>
+                <DataGridTextColumn Header="Date" Binding="{Binding PublishedAt, StringFormat=\{0:yyyy-MM-dd HH:mm\}}" Width="150"/>
+                <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Footer / Status / Action -->
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            
+            <TextBlock Grid.Column="0" Text="{Binding ViewModel.StatusMessage}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            
+            <ui:Button Grid.Column="1" Command="{Binding ViewModel.InstallSelectedCommand}" Content="Install Selected" Appearance="Primary" Icon="{ui:SymbolIcon ArrowDownload24}" />
+        </Grid>
+    </Grid>
+</Page>

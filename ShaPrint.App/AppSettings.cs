@@ -7,7 +7,7 @@ namespace ShaPrint.App
 {
     public enum UpdateChannel
     {
-        Production,
+        Stable,
         Beta
     }
 
@@ -15,7 +15,7 @@ namespace ShaPrint.App
     {
         public bool AutoUpdateEnabled { get; set; } = true;
         public DateTime LastUpdateCheck { get; set; } = DateTime.MinValue;
-        public UpdateChannel Channel { get; set; } = UpdateChannel.Production;
+        public UpdateChannel Channel { get; set; } = UpdateChannel.Stable;
     }
 
     public static class AppSettings

@@ -60,15 +60,15 @@ namespace ShaPrint.WpfApp.Services
                     if (string.IsNullOrEmpty(tagName)) continue;
 
                     string originalTag = tagName;
-                    UpdateChannel channel = UpdateChannel.Production;
+                    UpdateChannel channel = UpdateChannel.Stable;
 
                     if (tagName.StartsWith("v", StringComparison.OrdinalIgnoreCase))
                         tagName = tagName.Substring(1);
 
-                    if (tagName.EndsWith("-prod", StringComparison.OrdinalIgnoreCase))
+                    if (tagName.EndsWith("-stable", StringComparison.OrdinalIgnoreCase))
                     {
-                        tagName = tagName.Substring(0, tagName.Length - 5);
-                        channel = UpdateChannel.Production;
+                        tagName = tagName.Substring(0, tagName.Length - 7);
+                        channel = UpdateChannel.Stable;
                     }
                     else if (tagName.EndsWith("-beta", StringComparison.OrdinalIgnoreCase))
                     {
@@ -173,7 +173,7 @@ namespace ShaPrint.WpfApp.Services
             }
         }
 
-        private void LaunchUpdaterAndExit(string downloadUrl)
+        public void LaunchUpdaterAndExit(string downloadUrl)
         {
             string updaterPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ShaPrint.Updater.exe");
             if (File.Exists(updaterPath))

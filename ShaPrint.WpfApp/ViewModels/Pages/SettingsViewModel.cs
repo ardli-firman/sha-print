@@ -56,7 +56,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         partial void OnChannelIndexChanged(int value)
         {
-            AppSettings.Current.Channel = value == 1 ? UpdateChannel.Beta : UpdateChannel.Production;
+            AppSettings.Current.Channel = value == 1 ? UpdateChannel.Beta : UpdateChannel.Stable;
             AppSettings.Save();
         }
 

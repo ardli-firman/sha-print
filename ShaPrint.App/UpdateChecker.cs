@@ -45,15 +45,15 @@ namespace ShaPrint.App
                     if (string.IsNullOrEmpty(tagName)) continue;
 
                     string originalTag = tagName;
-                    UpdateChannel channel = UpdateChannel.Production;
+                    UpdateChannel channel = UpdateChannel.Stable;
 
                     if (tagName.StartsWith("v", StringComparison.OrdinalIgnoreCase))
                         tagName = tagName.Substring(1);
 
-                    if (tagName.EndsWith("-prod", StringComparison.OrdinalIgnoreCase))
+                    if (tagName.EndsWith("-stable", StringComparison.OrdinalIgnoreCase))
                     {
-                        tagName = tagName.Substring(0, tagName.Length - 5);
-                        channel = UpdateChannel.Production;
+                        tagName = tagName.Substring(0, tagName.Length - 7);
+                        channel = UpdateChannel.Stable;
                     }
                     else if (tagName.EndsWith("-beta", StringComparison.OrdinalIgnoreCase))
                     {
@@ -62,8 +62,8 @@ namespace ShaPrint.App
                     }
                     else
                     {
-                        // Fallback, consider plain tags as production
-                        channel = UpdateChannel.Production;
+                        // Fallback, consider plain tags as stable
+                        channel = UpdateChannel.Stable;
                     }
 
                     if (!Version.TryParse(tagName, out Version? parsedVersion)) continue;

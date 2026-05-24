@@ -39,8 +39,13 @@ namespace ShaPrint.WpfApp
                 services.AddTransient<SettingsPage>();
                 services.AddSingleton<SettingsViewModel>();
 
+                // Updates Page
+                services.AddTransient<UpdatesPage>();
+                services.AddTransient<UpdatesViewModel>();
+
                 // Background Services
-                services.AddHostedService<UpdateService>();
+                services.AddSingleton<UpdateService>();
+                services.AddHostedService(provider => provider.GetRequiredService<UpdateService>());
             }).Build();
 
         public static T? GetService<T>() where T : class

@@ -51,6 +51,7 @@
                 </ui:NavigationView.MenuItems>
 
                 <ui:NavigationView.FooterMenuItems>
+                    <ui:NavigationViewItem Content="Updates" Icon="{ui:SymbolIcon ArrowClockwise24}" TargetPageType="{x:Type pages:UpdatesPage}" />
                     <ui:NavigationViewItem Content="Settings" Icon="{ui:SymbolIcon Settings24}" TargetPageType="{x:Type pages:SettingsPage}" />
                 </ui:NavigationView.FooterMenuItems>
 
