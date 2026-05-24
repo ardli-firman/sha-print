@@ -6,6 +6,7 @@ using System.Windows.Forms;
 using System.IO;
 using System.Text.Json;
 using ShaPrint.Core;
+using ShaPrint.App;
 
 namespace ShaPrint.Server
 {
@@ -15,6 +16,9 @@ namespace ShaPrint.Server
         private Button btnToggleServer;
         private Label lblStatus;
         private CheckBox chkRunOnStartup;
+        private CheckBox chkAutoUpdate;
+        private Button btnAbout;
+        private Button btnCheckUpdate;
         private NotifyIcon trayIcon;
         private ContextMenuStrip trayMenu;
         private DiscoveryServer _discoveryServer;
@@ -93,12 +97,43 @@ namespace ShaPrint.Server
             chkRunOnStartup.CheckedChanged += (s, e) => ShaPrint.App.StartupManager.SetStartup(chkRunOnStartup.Checked);
             this.Controls.Add(chkRunOnStartup);
 
+            chkAutoUpdate = new CheckBox();
+            chkAutoUpdate.Text = "Enable Auto-Update on Startup";
+            chkAutoUpdate.Location = new Point(10, 245);
+            chkAutoUpdate.AutoSize = true;
+            chkAutoUpdate.Checked = AppSettings.Current.AutoUpdateEnabled;
+            chkAutoUpdate.CheckedChanged += (s, e) => {
+                AppSettings.Current.AutoUpdateEnabled = chkAutoUpdate.Checked;
+                AppSettings.Save();
+            };
+            this.Controls.Add(chkAutoUpdate);
+
+            btnAbout = new Button();
+            btnAbout.Text = "About";
+            btnAbout.Location = new Point(320, 240);
+            btnAbout.Size = new Size(50, 25);
+            btnAbout.Click += (s, e) => new AboutForm().ShowDialog();
+            this.Controls.Add(btnAbout);
+
+            btnCheckUpdate = new Button();
+            btnCheckUpdate.Text = "Check Update";
+            btnCheckUpdate.Location = new Point(220, 240);
+            btnCheckUpdate.Size = new Size(95, 25);
+            btnCheckUpdate.Click += async (s, e) => {
+                btnCheckUpdate.Enabled = false;
+                btnCheckUpdate.Text = "Checking...";
+                await UpdateChecker.CheckForUpdatesManualAsync();
+                btnCheckUpdate.Enabled = true;
+                btnCheckUpdate.Text = "Check Update";
+            };
+            this.Controls.Add(btnCheckUpdate);
+
             var txtLog = new TextBox();
             txtLog.Multiline = true;
             txtLog.ReadOnly = true;
             txtLog.ScrollBars = ScrollBars.Vertical;
-            txtLog.Location = new Point(10, 255);
-            txtLog.Size = new Size(360, 195);
+            txtLog.Location = new Point(10, 275);
+            txtLog.Size = new Size(360, 175);
             txtLog.BackColor = Color.Black;
             txtLog.ForeColor = Color.Lime;
             txtLog.Font = new Font("Consolas", 9F);
