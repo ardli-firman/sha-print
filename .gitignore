@@ -47,3 +47,4 @@ ClientConfig.json
 ServerConfig.json
 
 Output/
+crash.log

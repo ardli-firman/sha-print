@@ -1,0 +1,113 @@
+<Page x:Class="ShaPrint.WpfApp.Views.Pages.ClientPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="Client Dashboard">
+
+    <Page.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </Page.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="150"/>
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <StackPanel Grid.Row="0" Margin="0,0,0,15">
+                <TextBlock Text="Client Dashboard" FontSize="28" FontWeight="SemiBold"/>
+                <TextBlock Text="Discover and install network printers." Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+
+            <!-- Network Discovery -->
+            <ui:Card Grid.Row="1" Margin="0,0,0,15">
+                <StackPanel>
+                    <TextBlock Text="Network Discovery" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" Text="Specific Server IP:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <ui:TextBox Grid.Column="1" Text="{Binding ViewModel.TargetIp, UpdateSourceTrigger=PropertyChanged}" 
+                                    PlaceholderText="e.g. 192.168.1.50 (Leave blank for auto-discovery)"/>
+                        
+                        <ui:Button Grid.Column="2" Content="Scan LAN" Margin="10,0,0,0"
+                                   Command="{Binding ViewModel.ScanCommand}"
+                                   Appearance="Primary"
+                                   Icon="{ui:SymbolIcon Search24}" />
+                    </Grid>
+                    
+                    <TextBlock Text="Hint: If Server is on a different Wi-Fi/VLAN, auto-scan won't work. Enter Server IP explicitly." 
+                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" FontSize="11" Margin="0,5,0,0"/>
+                </StackPanel>
+            </ui:Card>
+
+            <!-- Printer List -->
+            <ListBox Grid.Row="2" ItemsSource="{Binding ViewModel.DiscoveredPrinters}" 
+                      SelectedItem="{Binding ViewModel.SelectedPrinter, Mode=TwoWay}"
+                      Margin="0,0,0,15" MinHeight="100"
+                      BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Margin="5">
+                            <ui:SymbolIcon Symbol="Print24" Margin="0,0,10,0"/>
+                            <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center"/>
+                            <Border Background="{DynamicResource SystemFillColorSuccessBrush}" 
+                                    CornerRadius="4" Padding="5,1" Margin="10,0,0,0"
+                                    Visibility="{Binding IsInstalled, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="Installed" Foreground="White" FontSize="10" FontWeight="Bold"/>
+                            </Border>
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- Controls -->
+            <Grid Grid.Row="3" Margin="0,0,0,15">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                    <TextBlock Text="{Binding ViewModel.StatusText}" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,10,0"/>
+                    <ui:ProgressRing IsIndeterminate="True" Width="16" Height="16" Visibility="{Binding ViewModel.IsScanning, Converter={StaticResource BoolToVis}}"/>
+                </StackPanel>
+
+                <ui:Button Grid.Column="1" Margin="0,0,10,0"
+                           Command="{Binding ViewModel.DeleteSelectedCommand}"
+                           Content="Delete Selected" Appearance="Danger"/>
+
+                <ui:Button Grid.Column="2" 
+                           Command="{Binding ViewModel.InstallSelectedCommand}"
+                           Content="Install Selected" Appearance="Success"/>
+            </Grid>
+            
+            <TextBlock Grid.Row="4" Text="Activity Log:" Margin="0,0,0,5" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+            <!-- Logs -->
+            <ListBox Grid.Row="5" ItemsSource="{Binding ViewModel.Logs}" 
+                      FontFamily="Consolas" FontSize="12"
+                      BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Grid>
+    </ScrollViewer>
+</Page>

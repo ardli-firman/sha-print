@@ -1,0 +1,64 @@
+<ui:FluentWindow x:Class="ShaPrint.WpfApp.Views.Windows.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:tb="http://www.hardcodet.net/taskbar"
+    xmlns:viewmodels="clr-namespace:ShaPrint.WpfApp.ViewModels.Windows"
+    xmlns:pages="clr-namespace:ShaPrint.WpfApp.Views.Pages"
+    Title="{Binding ViewModel.ApplicationTitle}" Height="600" Width="800"
+    WindowStartupLocation="CenterScreen"
+    ExtendsContentIntoTitleBar="True"
+    WindowBackdropType="Mica"
+    Icon="pack://application:,,,/icon.ico">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="{Binding ViewModel.ApplicationTitle}">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/icon.ico" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <tb:TaskbarIcon
+            ToolTipText="ShaPrint"
+            IconSource="/icon.ico"
+            LeftClickCommand="{Binding ViewModel.ShowApplicationCommand}">
+            <tb:TaskbarIcon.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="Open ShaPrint" Command="{Binding ViewModel.ShowApplicationCommand}" />
+                    <MenuItem Header="Exit" Command="{Binding ViewModel.ExitApplicationCommand}" />
+                </ContextMenu>
+            </tb:TaskbarIcon.ContextMenu>
+        </tb:TaskbarIcon>
+
+        <Grid Grid.Row="1">
+            <ui:NavigationView x:Name="RootNavigation" 
+                               PaneDisplayMode="Left"
+                               IsPaneOpen="False"
+                               Visibility="{Binding ViewModel.SidebarVisibility}"
+                               IsBackButtonVisible="Collapsed">
+                
+                <ui:NavigationView.MenuItems>
+                    <ui:NavigationViewItem Content="Server Dashboard" Icon="{ui:SymbolIcon Server24}" TargetPageType="{x:Type pages:ServerPage}" Visibility="{Binding ViewModel.IsServerMode}" />
+                    <ui:NavigationViewItem Content="Client Dashboard" Icon="{ui:SymbolIcon Desktop24}" TargetPageType="{x:Type pages:ClientPage}" Visibility="{Binding ViewModel.IsClientMode}" />
+                </ui:NavigationView.MenuItems>
+
+                <ui:NavigationView.FooterMenuItems>
+                    <ui:NavigationViewItem Content="Settings" Icon="{ui:SymbolIcon Settings24}" TargetPageType="{x:Type pages:SettingsPage}" />
+                </ui:NavigationView.FooterMenuItems>
+
+                <ui:NavigationView.ContentOverlay>
+                    <Grid>
+                        <ui:SnackbarPresenter x:Name="SnackbarPresenter" />
+                    </Grid>
+                </ui:NavigationView.ContentOverlay>
+            </ui:NavigationView>
+
+            <Frame x:Name="WelcomeFrame" Visibility="{Binding ViewModel.WelcomeVisibility}" NavigationUIVisibility="Hidden" />
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

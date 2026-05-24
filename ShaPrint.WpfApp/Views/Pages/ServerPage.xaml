@@ -1,0 +1,76 @@
+<Page x:Class="ShaPrint.WpfApp.Views.Pages.ServerPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="Server Dashboard">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="150"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Margin="0,0,0,15">
+                <TextBlock Text="Server Dashboard" FontSize="28" FontWeight="SemiBold"/>
+                <TextBlock Text="Select printers to expose to the network:" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+
+            <!-- Printer List -->
+            <ListBox Grid.Row="1" ItemsSource="{Binding ViewModel.Printers}" 
+                      IsEnabled="{Binding ViewModel.IsNotRunning}"
+                      Margin="0,0,0,15" MinHeight="100"
+                      BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected}" Margin="5"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- Controls -->
+            <Grid Grid.Row="2" Margin="0,0,0,15">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="{Binding ViewModel.StatusText}" 
+                           VerticalAlignment="Center" FontWeight="SemiBold">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ViewModel.IsRunning}" Value="True">
+                                    <Setter Property="Foreground" Value="{DynamicResource SystemFillColorSuccessBrush}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <ui:Button Grid.Column="1" 
+                           Command="{Binding ViewModel.ToggleServerCommand}"
+                           Content="{Binding ViewModel.ToggleButtonText}"
+                           Appearance="{Binding ViewModel.ToggleButtonAppearance}" />
+            </Grid>
+            
+            <TextBlock Grid.Row="3" Text="Activity Log:" Margin="0,0,0,5" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+            <!-- Logs -->
+            <ListBox Grid.Row="4" ItemsSource="{Binding ViewModel.Logs}" 
+                      FontFamily="Consolas" FontSize="12"
+                      BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Grid>
+    </ScrollViewer>
+</Page>
