@@ -62,40 +62,41 @@ namespace ShaPrint.Updater
                 var totalBytes = response.Content.Headers.ContentLength ?? -1L;
                 var canReportProgress = totalBytes != -1;
 
-                using var contentStream = await response.Content.ReadAsStreamAsync();
-                using var fileStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
-
-                var totalRead = 0L;
-                var buffer = new byte[8192];
-                var isMoreToRead = true;
-
-                do
+                using (var contentStream = await response.Content.ReadAsStreamAsync())
+                using (var fileStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true))
                 {
-                    var read = await contentStream.ReadAsync(buffer, 0, buffer.Length);
-                    if (read == 0)
-                    {
-                        isMoreToRead = false;
-                    }
-                    else
-                    {
-                        await fileStream.WriteAsync(buffer, 0, read);
+                    var totalRead = 0L;
+                    var buffer = new byte[8192];
+                    var isMoreToRead = true;
 
-                        totalRead += read;
-                        if (canReportProgress)
+                    do
+                    {
+                        var read = await contentStream.ReadAsync(buffer, 0, buffer.Length);
+                        if (read == 0)
                         {
-                            int percentage = (int)((totalRead * 100) / totalBytes);
-                            _progressBar.Value = percentage;
-                            _lblStatus.Text = $"Downloading update... {percentage}%";
+                            isMoreToRead = false;
+                        }
+                        else
+                        {
+                            await fileStream.WriteAsync(buffer, 0, read);
+
+                            totalRead += read;
+                            if (canReportProgress)
+                            {
+                                int percentage = (int)((totalRead * 100) / totalBytes);
+                                _progressBar.Value = percentage;
+                                _lblStatus.Text = $"Downloading update... {percentage}%";
+                            }
                         }
                     }
+                    while (isMoreToRead);
                 }
-                while (isMoreToRead);
 
                 _lblStatus.Text = "Installing update...";
                 _progressBar.Style = ProgressBarStyle.Marquee;
 
                 // Close the main application to avoid file locks
-                Process[] processes = Process.GetProcessesByName("ShaPrint.App");
+                Process[] processes = Process.GetProcessesByName("ShaPrint.WpfApp");
                 foreach (var p in processes)
                 {
                     p.Kill();
