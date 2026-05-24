@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows.Forms;
 using System.IO;
 using System.Text.Json;
+using ShaPrint.Core;
 
 namespace ShaPrint.Server
 {
@@ -49,7 +50,8 @@ namespace ShaPrint.Server
             this.Text = "ShaPrint Server";
             this.Size = new Size(400, 300);
             this.StartPosition = FormStartPosition.CenterScreen;
-            try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+            catch (Exception ex) { ShaPrint.Core.AppLogger.Error("Failed to load application icon", ex); }
 
             Label lblInfo = new Label();
             lblInfo.Text = "Select printers to expose to the network:";
@@ -102,7 +104,7 @@ namespace ShaPrint.Server
             txtLog.Font = new Font("Consolas", 9F);
             this.Controls.Add(txtLog);
 
-            this.Size = new Size(400, 500); // Expanded size for logs
+            this.Size = new Size(400, 500);
 
             ShaPrint.Core.AppLogger.OnLog += (msg) => 
             {
@@ -142,7 +144,7 @@ namespace ShaPrint.Server
             {
                 value = false;
                 if (!this.IsHandleCreated) CreateHandle();
-                _startHidden = false; // Only hide on the first show
+                _startHidden = false;
             }
             base.SetVisibleCore(value);
         }
@@ -198,6 +200,7 @@ namespace ShaPrint.Server
         {
             _discoveryServer.Stop();
             _printReceiver.Stop();
+            FirewallManager.RemoveFirewallRules();
 
             _isRunning = false;
             btnToggleServer.Text = "Start Server";
@@ -222,7 +225,7 @@ namespace ShaPrint.Server
                     if (File.Exists(GetConfigPath("AppMode.json")))
                         File.Delete(GetConfigPath("AppMode.json"));
                 }
-                catch { }
+                catch (Exception ex) { ShaPrint.Core.AppLogger.Error("Failed to delete app mode configuration", ex); }
 
                 Application.Restart();
                 Environment.Exit(0);
@@ -246,26 +249,40 @@ namespace ShaPrint.Server
 
         private void LoadConfiguration()
         {
-            if (File.Exists(_configFile))
+            if (!File.Exists(_configFile))
+                return;
+
+            try
             {
-                try
+                string raw = File.ReadAllText(_configFile);
+
+                // HMAC-wrapped config (v2+): reject tampered, fall back only for legacy
+                ConfigUnwrapResult result = ShaPrint.Core.CryptoHelper.UnwrapConfigWithHmac(raw, out string? json);
+                if (result == ConfigUnwrapResult.Valid)
                 {
-                    string json = File.ReadAllText(_configFile);
-                    var savedPrinters = JsonSerializer.Deserialize<List<string>>(json);
-                    if (savedPrinters != null && savedPrinters.Count > 0)
-                    {
-                        for (int i = 0; i < clbPrinters.Items.Count; i++)
-                        {
-                            if (savedPrinters.Contains(clbPrinters.Items[i].ToString()!))
-                            {
-                                clbPrinters.SetItemChecked(i, true);
-                            }
-                        }
-                        StartServer();
-                    }
+                    raw = json!;
                 }
-                catch { }
+                else if (result == ConfigUnwrapResult.Tampered)
+                {
+                    ShaPrint.Core.AppLogger.Error("[SERVER] Config file HMAC verification FAILED — possible tampering. Rejecting config.");
+                    return;
+                }
+                // LegacyNoHmac: use raw plaintext (unwrapped)
+
+                var savedPrinters = JsonSerializer.Deserialize<List<string>>(raw);
+                if (savedPrinters != null && savedPrinters.Count > 0)
+                {
+                    for (int i = 0; i < clbPrinters.Items.Count; i++)
+                    {
+                        if (savedPrinters.Contains(clbPrinters.Items[i].ToString()!))
+                        {
+                            clbPrinters.SetItemChecked(i, true);
+                        }
+                    }
+                    StartServer();
+                }
             }
+            catch (Exception ex) { ShaPrint.Core.AppLogger.Error("Failed to load server configuration", ex); }
         }
 
         private void SaveConfiguration(List<string> printers)
@@ -273,9 +290,10 @@ namespace ShaPrint.Server
             try
             {
                 string json = JsonSerializer.Serialize(printers);
-                File.WriteAllText(_configFile, json);
+                string wrapped = ShaPrint.Core.CryptoHelper.WrapConfigWithHmac(json);
+                File.WriteAllText(_configFile, wrapped);
             }
-            catch { }
+            catch (Exception ex) { ShaPrint.Core.AppLogger.Error("Failed to save server configuration", ex); }
         }
     }
 }

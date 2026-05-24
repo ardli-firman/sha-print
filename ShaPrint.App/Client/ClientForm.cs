@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Windows.Forms;
+using ShaPrint.Core;
 using ShaPrint.Core.Network;
 
 namespace ShaPrint.Client
@@ -19,14 +20,14 @@ namespace ShaPrint.Client
         private Label lblIp;
         private TextBox txtServerIp;
         private CheckBox chkRunOnStartup;
-        
+
         private NotifyIcon trayIcon;
         private ContextMenuStrip trayMenu;
 
         private DiscoveryClient _discoveryClient;
         private List<DiscoveryResponseMessage> _discoveredServers = new List<DiscoveryResponseMessage>();
         private List<PipeListener> _activeListeners = new List<PipeListener>();
-        
+
         private bool _startHidden;
         private string _configFile;
 
@@ -36,7 +37,7 @@ namespace ShaPrint.Client
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
             return Path.Combine(dir, fileName);
         }
-        
+
         private List<InstalledPrinterConfig> _installedPrinters = new List<InstalledPrinterConfig>();
 
         public ClientForm(bool startHidden = false)
@@ -142,9 +143,9 @@ namespace ShaPrint.Client
             txtLog.Font = new Font("Consolas", 9F);
             this.Controls.Add(txtLog);
 
-            this.Size = new Size(520, 600); // Expanded size for logs
+            this.Size = new Size(520, 600);
 
-            ShaPrint.Core.AppLogger.OnLog += (msg) => 
+            ShaPrint.Core.AppLogger.OnLog += (msg) =>
             {
                 if (this.IsHandleCreated)
                 {
@@ -154,17 +155,17 @@ namespace ShaPrint.Client
                 }
             };
 
-            lbServers.SelectedIndexChanged += (s, e) => 
-            { 
+            lbServers.SelectedIndexChanged += (s, e) =>
+            {
                 if (lbServers.SelectedItem is PrinterDisplayItem item)
                 {
-                    btnInstall.Enabled = !item.IsInstalled; 
-                    btnDelete.Enabled = item.IsInstalled; 
+                    btnInstall.Enabled = !item.IsInstalled;
+                    btnDelete.Enabled = item.IsInstalled;
                 }
                 else
                 {
-                    btnInstall.Enabled = false; 
-                    btnDelete.Enabled = false; 
+                    btnInstall.Enabled = false;
+                    btnDelete.Enabled = false;
                 }
             };
 
@@ -186,7 +187,7 @@ namespace ShaPrint.Client
             {
                 value = false;
                 if (!this.IsHandleCreated) CreateHandle();
-                _startHidden = false; // Only hide on the first show
+                _startHidden = false;
             }
             base.SetVisibleCore(value);
         }
@@ -216,12 +217,13 @@ namespace ShaPrint.Client
                 {
                     string virtualPrinterName = $"ShaPrint - {printer.Name}";
                     bool isInstalled = _installedPrinters.Any(p => p.VirtualPrinterName == virtualPrinterName);
-                    
-                    lbServers.Items.Add(new PrinterDisplayItem 
-                    { 
-                        Server = server, 
+
+                    lbServers.Items.Add(new PrinterDisplayItem
+                    {
+                        Server = server,
                         Printer = printer,
-                        IsInstalled = isInstalled
+                        IsInstalled = isInstalled,
+                        IsVerified = !string.IsNullOrEmpty(server.HmacSignature)
                     });
                 }
             }
@@ -232,9 +234,19 @@ namespace ShaPrint.Client
 
         private async void BtnInstall_Click(object? sender, EventArgs e)
         {
-            if (lbServers.SelectedItem is PrinterDisplayItem item)
+            if (lbServers.SelectedItem is not PrinterDisplayItem item)
+                return;
+
+            try
             {
-                string virtualPrinterName = $"ShaPrint - {item.Printer.Name}";
+                // Validate ALL input from network before use
+                string serverName = Validators.ValidateServerName(item.Server.ServerName);
+                string printerName = Validators.ValidatePrinterName(item.Printer.Name);
+                string driverName = Validators.ValidateDriverName(
+                    !string.IsNullOrEmpty(item.Printer.DriverName) ? item.Printer.DriverName : "Generic / Text Only");
+                string serverIp = Validators.ValidateIpAddress(item.Server.IpAddress);
+
+                string virtualPrinterName = $"ShaPrint - {printerName}";
 
                 if (_installedPrinters.Any(p => p.VirtualPrinterName == virtualPrinterName))
                 {
@@ -245,15 +257,16 @@ namespace ShaPrint.Client
                 btnInstall.Enabled = false;
                 lblStatus.Text = "Installing...";
 
-                string safeName = item.Printer.Name.Replace(" ", "_").Replace("\\", "_");
-                string pipeName = $@"\\.\pipe\shaprint_{item.Server.ServerName}_{safeName}";
-                string driverName = !string.IsNullOrEmpty(item.Printer.DriverName) ? item.Printer.DriverName : "Generic / Text Only";
+                // Use random GUID for pipe name — not predictable from network data
+                string pipeName = $@"\\.\pipe\shaprint_{Guid.NewGuid():N}";
+
+                AppLogger.Log($"[CLIENT] Installing virtual printer '{virtualPrinterName}' with pipe '{pipeName}'...");
 
                 var result = await VirtualPrinterManager.InstallPrinterAsync(virtualPrinterName, pipeName, driverName);
 
                 if (result.Success)
                 {
-                    var listener = new PipeListener(pipeName, item.Server.IpAddress, item.Printer.Name);
+                    var listener = new PipeListener(pipeName, serverIp, printerName);
                     listener.Start();
                     _activeListeners.Add(listener);
 
@@ -261,23 +274,34 @@ namespace ShaPrint.Client
                     {
                         VirtualPrinterName = virtualPrinterName,
                         PipeName = pipeName,
-                        ServerIp = item.Server.IpAddress,
-                        TargetPrinterName = item.Printer.Name
+                        ServerIp = serverIp,
+                        TargetPrinterName = printerName
                     });
                     SaveConfiguration();
 
                     item.IsInstalled = true;
-                    lbServers.Items[lbServers.SelectedIndex] = item; // Refresh display
+                    lbServers.Items[lbServers.SelectedIndex] = item;
 
                     lblStatus.Text = "Installed successfully! You can now print to it.";
-                    MessageBox.Show($"Printer '{virtualPrinterName}' has been installed.\n\nYou can now select it when printing from Word, Chrome, etc.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show($"Printer '{virtualPrinterName}' has been installed.\n\nYou can now select it when printing from Word, Chrome, etc.",
+                        "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 else
                 {
                     lblStatus.Text = "Installation failed.";
-                    MessageBox.Show($"Failed to install printer. Please ensure you run this application as Administrator.\n\nDetails: {result.ErrorMessage}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show($"Failed to install printer. Please ensure you run this application as Administrator.\n\nDetails: {result.ErrorMessage}",
+                        "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
-
+            }
+            catch (ArgumentException ex)
+            {
+                lblStatus.Text = "Installation rejected.";
+                MessageBox.Show($"Security: {ex.Message}\n\nThe server may be sending invalid or malicious data.",
+                    "Security Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                AppLogger.Error($"[CLIENT] Input validation failed: {ex.Message}");
+            }
+            finally
+            {
                 btnInstall.Enabled = true;
             }
         }
@@ -306,9 +330,8 @@ namespace ShaPrint.Client
                     SaveConfiguration();
 
                     item.IsInstalled = false;
-                    lbServers.Items[lbServers.SelectedIndex] = item; // Refresh display
+                    lbServers.Items[lbServers.SelectedIndex] = item;
 
-                    // Stop the listener
                     var listener = _activeListeners.FirstOrDefault(l => l.PipeName == config.PipeName);
                     if (listener != null)
                     {
@@ -330,10 +353,11 @@ namespace ShaPrint.Client
         }
 
         private bool _isSwitchingMode = false;
-        
+
         private void SwitchMode()
         {
-            var result = MessageBox.Show("Are you sure you want to switch to Server Mode?\n\nThis will restart the application.", "Switch Mode", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            var result = MessageBox.Show("Are you sure you want to switch to Server Mode?\n\nThis will restart the application.",
+                "Switch Mode", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (result == DialogResult.Yes)
             {
                 _isSwitchingMode = true;
@@ -342,13 +366,13 @@ namespace ShaPrint.Client
                     listener.Stop();
                 }
                 trayIcon.Visible = false;
-                
+
                 try
                 {
                     if (File.Exists(GetConfigPath("AppMode.json")))
                         File.Delete(GetConfigPath("AppMode.json"));
                 }
-                catch { }
+                catch (Exception ex) { AppLogger.Error("Failed to delete AppMode.json", ex); }
 
                 Application.Restart();
                 Environment.Exit(0);
@@ -379,20 +403,40 @@ namespace ShaPrint.Client
             {
                 try
                 {
-                    string json = File.ReadAllText(_configFile);
-                    var saved = JsonSerializer.Deserialize<List<InstalledPrinterConfig>>(json);
+                    string raw = File.ReadAllText(_configFile);
+
+                    // HMAC-wrapped config (v2+): reject tampered, fall back only for legacy
+                    ConfigUnwrapResult result = CryptoHelper.UnwrapConfigWithHmac(raw, out string? json);
+                    if (result == ConfigUnwrapResult.Valid)
+                    {
+                        raw = json!;
+                    }
+                    else if (result == ConfigUnwrapResult.Tampered)
+                    {
+                        AppLogger.Error("[CLIENT] Config file HMAC verification FAILED — possible tampering. Rejecting config.");
+                        return;
+                    }
+                    // LegacyNoHmac: use raw plaintext (unwrapped)
+                    var saved = JsonSerializer.Deserialize<List<InstalledPrinterConfig>>(raw);
                     if (saved != null)
                     {
                         _installedPrinters = saved;
                         foreach (var config in _installedPrinters)
                         {
+                            // Skip entries with invalid/missing data
+                            if (string.IsNullOrEmpty(config.PipeName) || string.IsNullOrEmpty(config.ServerIp))
+                            {
+                                AppLogger.Log($"[CLIENT] Skipping invalid config entry: {config.VirtualPrinterName}");
+                                continue;
+                            }
+
                             var listener = new PipeListener(config.PipeName, config.ServerIp, config.TargetPrinterName);
                             listener.Start();
                             _activeListeners.Add(listener);
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex) { AppLogger.Error("Failed to load client configuration", ex); }
             }
         }
 
@@ -401,9 +445,10 @@ namespace ShaPrint.Client
             try
             {
                 string json = JsonSerializer.Serialize(_installedPrinters);
-                File.WriteAllText(_configFile, json);
+                string wrapped = CryptoHelper.WrapConfigWithHmac(json);
+                File.WriteAllText(_configFile, wrapped);
             }
-            catch { }
+            catch (Exception ex) { AppLogger.Error("Failed to save client configuration", ex); }
         }
 
         private class PrinterDisplayItem
@@ -411,7 +456,9 @@ namespace ShaPrint.Client
             public DiscoveryResponseMessage Server { get; set; } = null!;
             public PrinterInfo Printer { get; set; } = null!;
             public bool IsInstalled { get; set; } = false;
-            public override string ToString() => $"[{Server.ServerName}] {Printer.Name} {(IsInstalled ? "(INSTALLED)" : "")}";
+            public bool IsVerified { get; set; } = false;
+            public override string ToString() =>
+                $"{(IsVerified ? "" : "[UNVERIFIED] ")}[{Server.ServerName}] {Printer.Name} {(IsInstalled ? "(INSTALLED)" : "")}";
         }
 
         public class InstalledPrinterConfig

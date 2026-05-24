@@ -1,43 +1,80 @@
 using System;
-using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Win32;
+using ShaPrint.Core;
+using ShaPrint.Server;
 
 namespace ShaPrint.Client
 {
+    /// <summary>
+    /// Manages virtual printer installation/removal using Win32 APIs.
+    /// PowerShell has been eliminated to prevent command injection (RCE).
+    /// All input MUST be validated by <see cref="Validators"/> before calling these methods.
+    /// </summary>
     public static class VirtualPrinterManager
     {
-        public static async Task<(bool Success, string ErrorMessage)> InstallPrinterAsync(string virtualPrinterName, string pipeName, string driverName)
+        [DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern IntPtr AddPrinter(string? pName, uint Level, IntPtr pPrinterInfo);
+
+        [DllImport("winspool.drv", SetLastError = true)]
+        private static extern bool DeletePrinter(IntPtr hPrinter);
+
+        [DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool XcvDataW(
+            IntPtr hXcv,
+            string pszDataName,
+            IntPtr pInputData,
+            uint cbInputData,
+            IntPtr pOutputData,
+            uint cbOutputData,
+            out uint pcbOutputNeeded,
+            out uint pdwStatus);
+
+        // -----------------------------------------------------------------
+        // Public API
+        // -----------------------------------------------------------------
+
+        public static async Task<(bool Success, string ErrorMessage)> InstallPrinterAsync(
+            string virtualPrinterName, string pipeName, string driverName)
         {
             return await Task.Run(() =>
             {
                 try
                 {
-                    var portResult = RunPowerShell($"Add-PrinterPort -Name '{pipeName}'");
-                    if (!portResult.Success && !portResult.ErrorMessage.Contains("already exists"))
+                    // 1. Add local port
+                    bool portOk = AddLocalPort(pipeName);
+                    if (!portOk)
                     {
-                        ShaPrint.Core.AppLogger.Log("[CLIENT] Add-PrinterPort warning: " + portResult.ErrorMessage);
+                        // Port might already exist — check if that's the case
+                        int lastErr = Marshal.GetLastWin32Error();
+                        AppLogger.Log($"[CLIENT] AddPort returned error {lastErr} (may already exist). Continuing.");
                     }
 
-                    // Try adding the driver if it's an inbox driver (might fail if it's external, but we try)
-                    RunPowerShell($"Add-PrinterDriver -Name '{driverName}'");
-                    
-                    var addPrinterResult = RunPowerShell($"Add-Printer -Name '{virtualPrinterName}' -DriverName '{driverName}' -PortName '{pipeName}'");
-                    if (!addPrinterResult.Success)
+                    // 2. Try native driver first
+                    IntPtr hPrinter = AddPrinterWithDriver(virtualPrinterName, pipeName, driverName);
+
+                    // 3. Fall back to Generic / Text Only if native driver fails
+                    if (hPrinter == IntPtr.Zero && !IsGenericDriver(driverName))
                     {
-                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Warning: Failed to install with Native Driver '{driverName}'. Falling back to 'Generic / Text Only'.");
-                        RunPowerShell($"Add-PrinterDriver -Name 'Generic / Text Only'");
-                        addPrinterResult = RunPowerShell($"Add-Printer -Name '{virtualPrinterName}' -DriverName 'Generic / Text Only' -PortName '{pipeName}'");
+                        AppLogger.Log($"[CLIENT] Warning: Failed to install with Native Driver '{driverName}'. Falling back to 'Generic / Text Only'.");
+                        hPrinter = AddPrinterWithDriver(virtualPrinterName, pipeName, "Generic / Text Only");
                     }
 
-                    if (addPrinterResult.Success)
+                    if (hPrinter == IntPtr.Zero)
                     {
-                        // Disable Bidirectional Support (BIDI) to prevent Windows Spooler / Word from hanging while "Connecting to printer"
-                        ShaPrint.Core.AppLogger.Log("[CLIENT] Disabling Bidirectional Support on the Virtual Printer to prevent UI hanging...");
-                        RunPowerShell($"$printer = Get-WmiObject -Class Win32_Printer | Where-Object {{ $_.Name -eq '{virtualPrinterName}' }}; if ($printer) {{ $printer.EnableBIDI = $false; $printer.Put() }}");
-                        
-                        return (true, string.Empty);
+                        int err = Marshal.GetLastWin32Error();
+                        return (false, $"AddPrinter failed with Win32 error {err}. Ensure you have the correct driver installed.");
                     }
-                    return (false, "All driver installation attempts failed. Last error: " + addPrinterResult.ErrorMessage);
+
+                    SpoolerApi.ClosePrinter(hPrinter);
+
+                    // 4. Disable BIDI to prevent Windows Spooler / Word hanging
+                    AppLogger.Log("[CLIENT] Disabling Bidirectional Support on the Virtual Printer to prevent UI hanging...");
+                    DisableBidirectionalSupport(virtualPrinterName);
+
+                    return (true, string.Empty);
                 }
                 catch (Exception ex)
                 {
@@ -52,12 +89,21 @@ namespace ShaPrint.Client
             {
                 try
                 {
-                    RunPowerShell($"Remove-Printer -Name '{printerName}'");
-                    RunPowerShell($"Remove-PrinterPort -Name '{pipeName}'");
+                    // Remove printer
+                    IntPtr hPrinter;
+                    if (SpoolerApi.OpenPrinter(printerName, out hPrinter, IntPtr.Zero))
+                    {
+                        DeletePrinter(hPrinter);
+                        SpoolerApi.ClosePrinter(hPrinter);
+                    }
+
+                    // Remove port
+                    DeleteLocalPort(pipeName);
                     return true;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    AppLogger.Error($"[CLIENT] Failed to remove printer '{printerName}': {ex.Message}");
                     return false;
                 }
             });
@@ -65,28 +111,156 @@ namespace ShaPrint.Client
 
         public static bool CheckPrinterExists(string printerName)
         {
-            var result = RunPowerShell($"Get-Printer -Name '{printerName}'");
-            return result.Success;
+            IntPtr hPrinter;
+            bool exists = SpoolerApi.OpenPrinter(printerName, out hPrinter, IntPtr.Zero);
+            if (exists)
+                SpoolerApi.ClosePrinter(hPrinter);
+            return exists;
         }
 
-        private static (bool Success, string ErrorMessage) RunPowerShell(string script)
+        // -----------------------------------------------------------------
+        // Port management via XcvData
+        // -----------------------------------------------------------------
+
+        private static IntPtr OpenXcvMonitor()
         {
-            var psi = new ProcessStartInfo
+            IntPtr hXcv;
+            if (!SpoolerApi.OpenPrinter(",XcvMonitor Local Port", out hXcv, IntPtr.Zero))
             {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script}\"",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                int err = Marshal.GetLastWin32Error();
+                AppLogger.Error($"[CLIENT] OpenPrinter for XcvMonitor failed: {err}");
+                return IntPtr.Zero;
+            }
+            return hXcv;
+        }
+
+        private static bool AddLocalPort(string portName)
+        {
+            IntPtr hXcv = OpenXcvMonitor();
+            if (hXcv == IntPtr.Zero)
+                return false;
+
+            try
+            {
+                byte[] data = Encoding.Unicode.GetBytes(portName + '\0');
+                IntPtr pData = Marshal.AllocHGlobal(data.Length);
+                try
+                {
+                    Marshal.Copy(data, 0, pData, data.Length);
+                    uint needed, status;
+                    bool ok = XcvDataW(hXcv, "AddPort", pData, (uint)data.Length,
+                        IntPtr.Zero, 0, out needed, out status);
+                    if (!ok)
+                    {
+                        int err = Marshal.GetLastWin32Error();
+                        AppLogger.Log($"[CLIENT] XcvData AddPort '{portName}': error {err}, status {status}");
+                    }
+                    return ok;
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(pData);
+                }
+            }
+            finally
+            {
+                SpoolerApi.ClosePrinter(hXcv);
+            }
+        }
+
+        private static bool DeleteLocalPort(string portName)
+        {
+            IntPtr hXcv = OpenXcvMonitor();
+            if (hXcv == IntPtr.Zero)
+                return false;
+
+            try
+            {
+                byte[] data = Encoding.Unicode.GetBytes(portName + '\0');
+                IntPtr pData = Marshal.AllocHGlobal(data.Length);
+                try
+                {
+                    Marshal.Copy(data, 0, pData, data.Length);
+                    uint needed, status;
+                    return XcvDataW(hXcv, "DeletePort", pData, (uint)data.Length,
+                        IntPtr.Zero, 0, out needed, out status);
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(pData);
+                }
+            }
+            finally
+            {
+                SpoolerApi.ClosePrinter(hXcv);
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Printer management
+        // -----------------------------------------------------------------
+
+        private static IntPtr AddPrinterWithDriver(string printerName, string portName, string driverName)
+        {
+            var pi2 = new SpoolerApi.PRINTER_INFO_2
+            {
+                pPrinterName = printerName,
+                pPortName = portName,
+                pDriverName = driverName,
+                pPrintProcessor = "WinPrint",
+                pDatatype = "RAW",
+                // All other fields default to null / 0
             };
 
-            using var process = Process.Start(psi);
-            if (process == null) return (false, "Failed to start powershell.");
-            
-            process.WaitForExit();
-            string errors = process.StandardError.ReadToEnd();
-            return (process.ExitCode == 0, errors);
+            int structSize = Marshal.SizeOf<SpoolerApi.PRINTER_INFO_2>();
+            IntPtr ptr = Marshal.AllocHGlobal(structSize);
+            try
+            {
+                Marshal.StructureToPtr(pi2, ptr, false);
+                IntPtr hPrinter = AddPrinter(null, 2, ptr);
+                if (hPrinter == IntPtr.Zero)
+                {
+                    int err = Marshal.GetLastWin32Error();
+                    AppLogger.Log($"[CLIENT] AddPrinter '{printerName}' with driver '{driverName}' failed: {err}");
+                }
+                return hPrinter;
+            }
+            finally
+            {
+                Marshal.DestroyStructure<SpoolerApi.PRINTER_INFO_2>(ptr);
+                Marshal.FreeHGlobal(ptr);
+            }
+        }
+
+        private static void DisableBidirectionalSupport(string printerName)
+        {
+            try
+            {
+                string regPath = $@"SYSTEM\CurrentControlSet\Control\Print\Printers\{printerName}";
+                using (var key = Registry.LocalMachine.OpenSubKey(regPath, writable: true))
+                {
+                    if (key != null)
+                    {
+                        key.SetValue("EnableBIDI", 0, RegistryValueKind.DWord);
+                        AppLogger.Log($"[CLIENT] BIDI disabled for '{printerName}'.");
+                    }
+                    else
+                    {
+                        AppLogger.Log($"[CLIENT] Could not open registry key to disable BIDI for '{printerName}'. Path: {regPath}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"[CLIENT] Failed to disable BIDI via registry: {ex.Message}");
+            }
+        }
+
+        private static bool IsGenericDriver(string driverName)
+        {
+            string n = driverName.Trim();
+            return n.Equals("Generic / Text Only", StringComparison.OrdinalIgnoreCase)
+                || n.Equals("Generic/Text Only", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

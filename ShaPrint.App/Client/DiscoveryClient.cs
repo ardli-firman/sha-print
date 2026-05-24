@@ -35,17 +35,42 @@ namespace ShaPrint.Client
                     {
                         var result = await udpClient.ReceiveAsync();
                         string jsonResponse = Encoding.UTF8.GetString(result.Buffer);
+
+                        // Parse without signature first
                         var response = JsonSerializer.Deserialize<DiscoveryResponseMessage>(jsonResponse);
-                        if (response != null)
+                        if (response == null)
+                            continue;
+
+                        // HMAC verification
+                        if (!string.IsNullOrEmpty(response.HmacSignature))
                         {
-                            // Overwrite with the actual reachable IP address from the packet source
-                            response.IpAddress = result.RemoteEndPoint.Address.ToString();
-                            servers.Add(response);
+                            // Reconstruct the JSON that was signed (without HmacSignature)
+                            string savedSig = response.HmacSignature;
+                            response.HmacSignature = null;
+                            string unsignedJson = JsonSerializer.Serialize(response);
+
+                            if (!CryptoHelper.VerifyHmac(Encoding.UTF8.GetBytes(unsignedJson), savedSig))
+                            {
+                                AppLogger.Log($"[DISCOVERY] HMAC verification failed for response from {result.RemoteEndPoint.Address}. Rejecting.");
+                                continue; // Drop unauthenticated response
+                            }
+
+                            // Restore signature for completeness
+                            response.HmacSignature = savedSig;
                         }
+                        else
+                        {
+                            // Legacy response without HMAC — accept but warn
+                            AppLogger.Log($"[DISCOVERY] Warning: received unsigned response from {result.RemoteEndPoint.Address}.");
+                        }
+
+                        // Overwrite with the actual reachable IP address from the packet source
+                        response.IpAddress = result.RemoteEndPoint.Address.ToString();
+                        servers.Add(response);
                     }
                 }
-                catch (ObjectDisposedException) { }
-                catch (Exception) { }
+                catch (ObjectDisposedException) { /* udpClient closed, normal */ }
+                catch (Exception ex) { AppLogger.Error("Discovery receive error", ex); }
             });
 
             await tcs.Task;
