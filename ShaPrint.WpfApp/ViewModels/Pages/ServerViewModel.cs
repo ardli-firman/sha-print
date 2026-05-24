@@ -141,7 +141,6 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
             _discoveryServer.Stop();
             _printReceiver.Stop();
-            FirewallManager.RemoveFirewallRules();
 
             IsRunning = false;
             StatusText = "Status: Stopped";

@@ -10,7 +10,13 @@ namespace ShaPrint.Server
     {
         private static bool _isCheckingFirewall = false;
 
-        public static void CheckAndAddFirewallRules()
+        /// <summary>
+        /// Checks if firewall rules exist. If they do, logs and returns silently (no elevation needed).
+        /// If they are missing, prompts the user once to add them. Rules are permanent — they are NOT
+        /// removed when the server stops, so subsequent starts and auto-start boots will pass the check
+        /// silently without any UAC prompt.
+        /// </summary>
+        public static void EnsureFirewallRules()
         {
             if (_isCheckingFirewall) return;
             _isCheckingFirewall = true;
@@ -22,40 +28,43 @@ namespace ShaPrint.Server
                     bool tcpExists = CheckRuleExists("ShaPrint Server TCP");
                     bool udpExists = CheckRuleExists("ShaPrint Server UDP");
 
-                    if (!tcpExists || !udpExists)
+                    if (tcpExists && udpExists)
                     {
-                        MessageBoxResult result = MessageBoxResult.No;
-                        try
-                        {
-                            result = MessageBox.Show(
-                                "ShaPrint Server needs to open network ports (TCP 9877 & UDP 9876) in Windows Firewall to allow clients to connect.\n\nDo you want to configure this automatically now?", 
-                                "Firewall Configuration", 
-                                MessageBoxButton.YesNo, 
-                                MessageBoxImage.Question);
-                        }
-                        catch (Exception ex)
-                        {
-                            ShaPrint.Core.AppLogger.Error("Failed to show firewall configuration prompt", ex);
-                        }
-                        if (result == MessageBoxResult.Yes)
-                        {
-                            if (!tcpExists) AddRule("ShaPrint Server TCP", "TCP", Constants.PrintTcpPort);
-                            if (!udpExists) AddRule("ShaPrint Server UDP", "UDP", Constants.DiscoveryUdpPort);
-                            AppLogger.Log("[SERVER] Firewall rules added successfully.");
-                        }
-                        else
-                        {
-                            AppLogger.Log("[SERVER] Firewall rules setup declined by user.");
-                        }
+                        AppLogger.Log("[SERVER] Firewall rules verified — ports are open.");
+                        return;
+                    }
+
+                    // Rules are missing — prompt user (first-time setup only)
+                    MessageBoxResult result = MessageBoxResult.No;
+                    try
+                    {
+                        result = MessageBox.Show(
+                            "ShaPrint Server needs to open network ports (TCP 9877 & UDP 9876) in Windows Firewall.\n\n" +
+                            "This is a one-time setup. After the rules are added, you will NOT be prompted again on future starts.\n\n" +
+                            "Configure now?", 
+                            "Firewall Configuration (one-time)", 
+                            MessageBoxButton.YesNo, 
+                            MessageBoxImage.Question);
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Error("Failed to show firewall configuration prompt", ex);
+                    }
+
+                    if (result == MessageBoxResult.Yes)
+                    {
+                        if (!tcpExists) AddRule("ShaPrint Server TCP", "TCP", Constants.PrintTcpPort);
+                        if (!udpExists) AddRule("ShaPrint Server UDP", "UDP", Constants.DiscoveryUdpPort);
+                        AppLogger.Log("[SERVER] Firewall rules added successfully (persistent).");
                     }
                     else
                     {
-                        AppLogger.Log("[SERVER] Firewall rules are active and verified.");
+                        AppLogger.Log("[SERVER] Firewall rules setup declined by user. Clients may not be able to connect.");
                     }
                 }
                 catch (Exception ex)
                 {
-                    ShaPrint.Core.AppLogger.Error("Firewall config error: " + ex.Message);
+                    AppLogger.Error("Firewall config error: " + ex.Message);
                 }
                 finally
                 {
@@ -65,22 +74,9 @@ namespace ShaPrint.Server
         }
 
         /// <summary>
-        /// Removes both ShaPrint firewall rules synchronously. Called when server stops.
-        /// Synchronous to ensure cleanup completes before process exit.
+        /// Legacy compatibility: old name still works as an alias.
         /// </summary>
-        public static void RemoveFirewallRules()
-        {
-            try
-            {
-                RemoveRule("ShaPrint Server TCP");
-                RemoveRule("ShaPrint Server UDP");
-                AppLogger.Log("[SERVER] Removed ShaPrint firewall rules.");
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Error("[SERVER] Failed to remove firewall rules: " + ex.Message);
-            }
-        }
+        public static void CheckAndAddFirewallRules() => EnsureFirewallRules();
 
         private static bool CheckRuleExists(string ruleName)
         {
@@ -129,34 +125,6 @@ namespace ShaPrint.Server
                 {
                     AppLogger.Error("Failed to show UAC warning message", ex);
                 }
-            }
-        }
-
-        private static void RemoveRule(string ruleName)
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "netsh",
-                Arguments = $"advfirewall firewall delete rule name=\"{ruleName}\"",
-                UseShellExecute = true,
-                Verb = "runas",
-                CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden
-            };
-
-            try
-            {
-                using var process = Process.Start(psi);
-                process?.WaitForExit();
-            }
-            catch (System.ComponentModel.Win32Exception)
-            {
-                // User declined UAC prompt — rule stays until manual cleanup
-                AppLogger.Log($"[SERVER] Firewall: UAC declined for removing rule '{ruleName}'. Rule may persist.");
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Error($"[SERVER] Firewall: netsh delete failed for '{ruleName}': {ex.Message}");
             }
         }
     }

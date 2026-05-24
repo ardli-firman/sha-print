@@ -8,24 +8,35 @@
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       mc:Ignorable="d">
 
-    <Grid>
-        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-            <TextBlock Text="Welcome to ShaPrint" FontSize="32" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,10"/>
-            <TextBlock Text="Select an operation mode:" FontSize="18" Foreground="{DynamicResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center" Margin="0,0,0,30"/>
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" 
+                    Margin="40,60" MaxWidth="420">
+            
+            <TextBlock Text="Welcome to ShaPrint" FontSize="32" FontWeight="Bold" 
+                       HorizontalAlignment="Center" Margin="0,0,0,8" 
+                       TextWrapping="Wrap" TextAlignment="Center"/>
+            <TextBlock Text="Select an operation mode to get started:" FontSize="16" 
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" 
+                       HorizontalAlignment="Center" Margin="0,0,0,36" 
+                       TextWrapping="Wrap" TextAlignment="Center"/>
 
             <ui:Button Appearance="Primary" Content="RUN AS SERVER" 
                        Icon="{ui:SymbolIcon Server24}"
                        Command="{Binding ViewModel.SelectServerModeCommand}"
                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                       Padding="20,15" FontSize="16" />
-            <TextBlock Text="Host your local printers to the network." FontSize="14" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="10,5,0,20"/>
+                       Padding="20,15" FontSize="16" Margin="0,0,0,4"/>
+            <TextBlock Text="Host your local printers to the network." FontSize="13" 
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" 
+                       Margin="12,0,0,24" TextWrapping="Wrap"/>
 
             <ui:Button Appearance="Secondary" Content="RUN AS CLIENT" 
                        Icon="{ui:SymbolIcon Desktop24}"
                        Command="{Binding ViewModel.SelectClientModeCommand}"
                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                       Padding="20,15" FontSize="16" />
-            <TextBlock Text="Connect and print to a ShaPrint Server." FontSize="14" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="10,5,0,0"/>
+                       Padding="20,15" FontSize="16" Margin="0,0,0,4"/>
+            <TextBlock Text="Connect and print to a ShaPrint Server." FontSize="13" 
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" 
+                       Margin="12,0,0,0" TextWrapping="Wrap"/>
         </StackPanel>
-    </Grid>
+    </ScrollViewer>
 </Page>

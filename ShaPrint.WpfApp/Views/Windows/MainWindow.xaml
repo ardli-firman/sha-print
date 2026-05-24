@@ -6,6 +6,7 @@
     xmlns:viewmodels="clr-namespace:ShaPrint.WpfApp.ViewModels.Windows"
     xmlns:pages="clr-namespace:ShaPrint.WpfApp.Views.Pages"
     Title="{Binding ViewModel.ApplicationTitle}" Height="600" Width="800"
+    MinHeight="400" MinWidth="520"
     WindowStartupLocation="CenterScreen"
     ExtendsContentIntoTitleBar="True"
     WindowBackdropType="Mica"
@@ -39,6 +40,8 @@
             <ui:NavigationView x:Name="RootNavigation" 
                                PaneDisplayMode="Left"
                                IsPaneOpen="False"
+                               OpenPaneLength="200"
+                               CompactPaneLength="44"
                                Visibility="{Binding ViewModel.SidebarVisibility}"
                                IsBackButtonVisible="Collapsed">
                 
