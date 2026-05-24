@@ -69,7 +69,7 @@ namespace ShaPrint.App
                 Width = 200,
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
-            cmbChannel.Items.Add("Production");
+            cmbChannel.Items.Add("Stable");
             cmbChannel.Items.Add("Beta");
             cmbChannel.SelectedIndex = AppSettings.Current.Channel == UpdateChannel.Beta ? 1 : 0;
             cmbChannel.SelectedIndexChanged += CmbChannel_SelectedIndexChanged;
@@ -171,7 +171,9 @@ namespace ShaPrint.App
 
             Version currentVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0, 0);
 
-            foreach (var release in _releases.OrderByDescending(r => r.Version))
+            var filteredReleases = _releases.Where(r => r.Channel == AppSettings.Current.Channel).ToList();
+
+            foreach (var release in filteredReleases.OrderByDescending(r => r.Version))
             {
                 var item = new ListViewItem(release.Version.ToString());
                 item.SubItems.Add(release.Channel.ToString());
@@ -194,12 +196,13 @@ namespace ShaPrint.App
 
         private void CmbChannel_SelectedIndexChanged(object? sender, EventArgs e)
         {
-            var selected = cmbChannel.SelectedIndex == 1 ? UpdateChannel.Beta : UpdateChannel.Production;
+            var selected = cmbChannel.SelectedIndex == 1 ? UpdateChannel.Beta : UpdateChannel.Stable;
             if (AppSettings.Current.Channel != selected)
             {
                 AppSettings.Current.Channel = selected;
                 AppSettings.Save();
                 lblStatus.Text = $"Auto-update channel changed to {selected}.";
+                _ = LoadReleasesAsync();
             }
         }
 

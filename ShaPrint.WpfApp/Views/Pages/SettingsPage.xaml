@@ -1,0 +1,102 @@
+<Page x:Class="ShaPrint.WpfApp.Views.Pages.SettingsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="Settings"
+      ScrollViewer.VerticalScrollBarVisibility="Disabled">
+
+    <ScrollViewer x:Name="RootScrollViewer" 
+                  VerticalScrollBarVisibility="Auto" 
+                  HorizontalScrollBarVisibility="Disabled"
+                  CanContentScroll="False"
+                  PanningMode="VerticalOnly"
+                  PreviewMouseWheel="RootScrollViewer_PreviewMouseWheel">
+        <StackPanel Margin="24,20,24,24" MaxWidth="700">
+            
+            <!-- Header -->
+            <TextBlock Text="Settings" FontSize="28" FontWeight="SemiBold"/>
+            <TextBlock Text="Configure application behavior and updates." 
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,24"/>
+
+            <!-- General Section -->
+            <TextBlock Text="GENERAL" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,10" 
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            
+            <!-- Startup Setting -->
+            <ui:CardControl Margin="0,0,0,8" Icon="{ui:SymbolIcon Play24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="System Startup" FontSize="14" FontWeight="Medium"/>
+                        <TextBlock Text="Run automatically when Windows starts" FontSize="12" 
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:ToggleSwitch IsChecked="{Binding ViewModel.RunOnStartup}" />
+            </ui:CardControl>
+
+            <!-- Switch Mode Action -->
+            <ui:CardAction Command="{Binding ViewModel.ResetModeCommand}" Icon="{ui:SymbolIcon ArrowSwap24}" Margin="0,0,0,28">
+                <StackPanel>
+                    <TextBlock Text="Switch Application Mode" FontSize="14" FontWeight="Medium"/>
+                    <TextBlock Text="Return to the Welcome Screen to choose a different mode." FontSize="12" 
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+            </ui:CardAction>
+
+            <!-- Updates Section -->
+            <TextBlock Text="UPDATES" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,10" 
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+            <!-- Auto Update Setting -->
+            <ui:CardControl Margin="0,0,0,8" Icon="{ui:SymbolIcon ArrowSync24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Auto-Update" FontSize="14" FontWeight="Medium"/>
+                        <TextBlock Text="Check and prompt for updates on startup" FontSize="12" 
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:ToggleSwitch IsChecked="{Binding ViewModel.AutoUpdateEnabled}" />
+            </ui:CardControl>
+
+            <!-- Release Channel Setting -->
+            <ui:CardControl Margin="0,0,0,8" Icon="{ui:SymbolIcon Branch24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Release Channel" FontSize="14" FontWeight="Medium"/>
+                        <TextBlock Text="Choose which updates you want to receive" FontSize="12" 
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ComboBox SelectedIndex="{Binding ViewModel.ChannelIndex}" Width="180">
+                    <ComboBoxItem Content="Stable" />
+                    <ComboBoxItem Content="Beta" />
+                </ComboBox>
+            </ui:CardControl>
+
+            <TextBlock Text="{Binding ViewModel.LastCheckedText}" Margin="0,0,0,28" 
+                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" FontSize="12"/>
+
+            <!-- About Section -->
+            <TextBlock Text="ABOUT" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,10" 
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+            <!-- About Card -->
+            <ui:CardControl Margin="0,0,0,8" Icon="{ui:SymbolIcon Info24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="ShaPrint" FontSize="14" FontWeight="Medium"/>
+                        <TextBlock Text="A modern network printer sharing tool" FontSize="12" 
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="© 2026 Ardli Firman. All rights reserved." FontSize="11" 
+                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{Binding ViewModel.AppVersionText}" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                </StackPanel>
+            </ui:CardControl>
+
+        </StackPanel>
+    </ScrollViewer>
+</Page>

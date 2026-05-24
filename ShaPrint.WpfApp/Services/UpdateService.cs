@@ -1,15 +1,18 @@
+using Microsoft.Extensions.Hosting;
+using ShaPrint.Core;
+using ShaPrint.WpfApp.Models;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms;
-using System.Linq;
-using ShaPrint.Core;
+using System.Windows;
 
-namespace ShaPrint.App
+namespace ShaPrint.WpfApp.Services
 {
     public class GitHubRelease
     {
@@ -21,11 +24,23 @@ namespace ShaPrint.App
         public DateTime PublishedAt { get; set; }
     }
 
-    public static class UpdateChecker
+    public class UpdateService : IHostedService
     {
         private const string RepoUrl = "https://api.github.com/repos/ardli-firman/sha-print/releases";
 
-        public static async Task<List<GitHubRelease>> GetAvailableReleasesAsync()
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            // Run check in the background
+            _ = Task.Run(CheckForUpdatesAsync, cancellationToken);
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync(CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+
+        public async Task<List<GitHubRelease>> GetAvailableReleasesAsync()
         {
             var releases = new List<GitHubRelease>();
             try
@@ -59,11 +74,6 @@ namespace ShaPrint.App
                     {
                         tagName = tagName.Substring(0, tagName.Length - 5);
                         channel = UpdateChannel.Beta;
-                    }
-                    else
-                    {
-                        // Fallback, consider plain tags as stable
-                        channel = UpdateChannel.Stable;
                     }
 
                     if (!Version.TryParse(tagName, out Version? parsedVersion)) continue;
@@ -108,8 +118,11 @@ namespace ShaPrint.App
             return releases;
         }
 
-        public static async Task CheckForUpdatesAsync()
+        private async Task CheckForUpdatesAsync()
         {
+            // Delay to prevent slowing down app startup
+            await Task.Delay(5000);
+
             if (AppSettings.Current.LastUpdateCheck.AddHours(6) > DateTime.Now)
             {
                 return;
@@ -141,13 +154,16 @@ namespace ShaPrint.App
                     }
                     else
                     {
-                        var result = MessageBox.Show($"A new version of ShaPrint ({latestInChannel.Version} - {latestInChannel.Channel}) is available.\nWould you like to open the Update Manager?", 
-                            "Update Available", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
-                            
-                        if (result == DialogResult.Yes)
+                        Application.Current.Dispatcher.Invoke(() =>
                         {
-                            CheckForUpdatesManualAsync().GetAwaiter().GetResult();
-                        }
+                            var result = MessageBox.Show($"A new version of ShaPrint ({latestInChannel.Version} - {latestInChannel.Channel}) is available.\nWould you like to install it now?", 
+                                "Update Available", MessageBoxButton.YesNo, MessageBoxImage.Information);
+                                
+                            if (result == MessageBoxResult.Yes)
+                            {
+                                LaunchUpdaterAndExit(latestInChannel.DownloadUrl);
+                            }
+                        });
                     }
                 }
             }
@@ -157,15 +173,7 @@ namespace ShaPrint.App
             }
         }
 
-        public static async Task CheckForUpdatesManualAsync()
-        {
-            // Open the UpdateManagerForm
-            var form = new UpdateManagerForm();
-            form.ShowDialog();
-            await Task.CompletedTask;
-        }
-
-        public static void LaunchUpdaterAndExit(string downloadUrl)
+        public void LaunchUpdaterAndExit(string downloadUrl)
         {
             string updaterPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ShaPrint.Updater.exe");
             if (File.Exists(updaterPath))
@@ -180,7 +188,10 @@ namespace ShaPrint.App
             }
             else
             {
-                MessageBox.Show("Updater executable not found.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    MessageBox.Show("Updater executable not found.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                });
             }
         }
     }

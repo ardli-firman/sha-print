@@ -5,12 +5,16 @@ namespace ShaPrint.Core
     public static class AppLogger
     {
         public static event Action<string>? OnLog;
+        private static readonly object _lock = new object();
 
         public static void Log(string message)
         {
             string formattedMessage = $"[{DateTime.Now:HH:mm:ss}] {message}";
-            // Still write to console for background/service usage or debugging
-            Console.WriteLine(formattedMessage);
+            
+            lock (_lock)
+            {
+                Console.WriteLine(formattedMessage);
+            }
             
             // Fire event for UI
             OnLog?.Invoke(formattedMessage);

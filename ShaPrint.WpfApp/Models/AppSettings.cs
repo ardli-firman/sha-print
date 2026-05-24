@@ -3,7 +3,7 @@ using System.IO;
 using System.Text.Json;
 using ShaPrint.Core;
 
-namespace ShaPrint.App
+namespace ShaPrint.WpfApp.Models
 {
     public enum UpdateChannel
     {
