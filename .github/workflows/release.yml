@@ -38,20 +38,20 @@ jobs:
     - name: Validate PSK Secret
       shell: bash
       env:
-        SHA_PRINT_PSK: ${{ secrets.SHAPRINT_PSK }}
+        SHAPRINT_PSK: ${{ secrets.SHAPRINT_PSK }}
       run: |
-        if [ -z "$SHA_PRINT_PSK" ]; then
+        if [ -z "$SHAPRINT_PSK" ]; then
           echo "::error::SHAPRINT_PSK secret is empty or not set in GitHub Actions. Build cannot proceed."
           exit 1
         fi
-        if [ ${#SHA_PRINT_PSK} -lt 32 ]; then
-          echo "::error::SHAPRINT_PSK secret must be at least 32 characters long. Current length: ${#SHA_PRINT_PSK}."
+        if [ ${#SHAPRINT_PSK} -lt 32 ]; then
+          echo "::error::SHAPRINT_PSK secret must be at least 32 characters long. Current length: ${#SHAPRINT_PSK}."
           exit 1
         fi
 
     - name: Publish .NET Application
       env:
-        SHA_PRINT_PSK: ${{ secrets.SHAPRINT_PSK }}
+        SHAPRINT_PSK: ${{ secrets.SHAPRINT_PSK }}
       run: |
         dotnet publish ShaPrint.App/ShaPrint.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=${{ steps.extract_version.outputs.version }}
         dotnet publish ShaPrint.Updater/ShaPrint.Updater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=${{ steps.extract_version.outputs.version }}
