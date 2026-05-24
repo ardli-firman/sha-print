@@ -13,6 +13,9 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private readonly Windows.MainWindowViewModel _mainWindowViewModel;
         private readonly string _modeFile;
 
+        [ObservableProperty]
+        private string _channelName;
+
         public WelcomeViewModel(INavigationService navigationService, Windows.MainWindowViewModel mainWindowViewModel)
         {
             _navigationService = navigationService;
@@ -22,6 +25,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
             _modeFile = Path.Combine(dir, "AppMode.json");
             
+            _channelName = Models.AppSettings.Current.NetworkChannel;
+
             // Ensure sidebar is hidden on welcome page
             _mainWindowViewModel.WelcomeVisibility = System.Windows.Visibility.Visible;
             _mainWindowViewModel.SidebarVisibility = System.Windows.Visibility.Collapsed;
@@ -54,6 +59,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         [RelayCommand]
         private void SelectServerMode()
         {
+            SaveChannel();
             SaveMode("Server");
             _mainWindowViewModel.IsServerMode = System.Windows.Visibility.Visible;
             _mainWindowViewModel.IsClientMode = System.Windows.Visibility.Collapsed;
@@ -67,6 +73,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         [RelayCommand]
         private void SelectClientMode()
         {
+            SaveChannel();
             SaveMode("Client");
             _mainWindowViewModel.IsServerMode = System.Windows.Visibility.Collapsed;
             _mainWindowViewModel.IsClientMode = System.Windows.Visibility.Visible;
@@ -84,6 +91,18 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 File.WriteAllText(_modeFile, JsonSerializer.Serialize(mode));
             }
             catch { }
+        }
+
+        private void SaveChannel()
+        {
+            if (string.IsNullOrWhiteSpace(ChannelName))
+                ChannelName = "DefaultChannel";
+            else if (ChannelName.Contains(" "))
+                ChannelName = ChannelName.Replace(" ", "");
+            
+            Models.AppSettings.Current.NetworkChannel = ChannelName;
+            Models.AppSettings.Save();
+            ShaPrint.Core.Constants.SetNetworkChannel(ChannelName);
         }
     }
 }

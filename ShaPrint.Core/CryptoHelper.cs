@@ -33,27 +33,43 @@ namespace ShaPrint.Core
         private static readonly byte[] HmacSalt = Encoding.UTF8.GetBytes("ShaPrint-HMAC-v1");
 
         // ─────────────────────────────────────────────
-        // Key derivation (cached — derived once per process lifetime)
+        // Key derivation (cached, but can be invalidated if channel changes)
         // ─────────────────────────────────────────────
 
-        private static readonly Lazy<byte[]> _aesKey = new(
-            () =>
+        private static byte[]? _aesKeyCache;
+        private static byte[]? _hmacKeyCache;
+        private static readonly object _keyLock = new();
+
+        public static void InvalidateKeys()
+        {
+            lock (_keyLock)
             {
+                _aesKeyCache = null;
+                _hmacKeyCache = null;
+            }
+        }
+
+        private static byte[] GetAesKey()
+        {
+            lock (_keyLock)
+            {
+                if (_aesKeyCache != null) return _aesKeyCache;
                 using var derive = new Rfc2898DeriveBytes(Constants.SharedSecret, AesSalt, 100_000, HashAlgorithmName.SHA256);
-                return derive.GetBytes(AesKeySize);
-            },
-            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+                _aesKeyCache = derive.GetBytes(AesKeySize);
+                return _aesKeyCache;
+            }
+        }
 
-        private static readonly Lazy<byte[]> _hmacKey = new(
-            () =>
+        private static byte[] GetHmacKey()
+        {
+            lock (_keyLock)
             {
+                if (_hmacKeyCache != null) return _hmacKeyCache;
                 using var derive = new Rfc2898DeriveBytes(Constants.SharedSecret, HmacSalt, 100_000, HashAlgorithmName.SHA256);
-                return derive.GetBytes(HmacKeySize);
-            },
-            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
-
-        private static byte[] GetAesKey() => _aesKey.Value;
-        private static byte[] GetHmacKey() => _hmacKey.Value;
+                _hmacKeyCache = derive.GetBytes(HmacKeySize);
+                return _hmacKeyCache;
+            }
+        }
 
         // ─────────────────────────────────────────────
         // AES-256-GCM (for TCP print job payloads)

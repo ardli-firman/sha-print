@@ -25,6 +25,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             var settings = AppSettings.Current;
             _autoUpdateEnabled = settings.AutoUpdateEnabled;
             _channelIndex = settings.Channel == UpdateChannel.Beta ? 1 : 0;
+            _channelName = settings.NetworkChannel;
 
             if (settings.LastUpdateCheck > DateTime.MinValue)
             {
@@ -40,6 +41,24 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 Utils.StartupManager.SetStartup(value);
                 OnPropertyChanged(nameof(RunOnStartup));
             }
+        }
+
+        [ObservableProperty]
+        private string _channelName;
+
+        partial void OnChannelNameChanged(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            
+            if (value.Contains(" "))
+            {
+                ChannelName = value.Replace(" ", "");
+                return;
+            }
+
+            AppSettings.Current.NetworkChannel = value;
+            AppSettings.Save();
+            ShaPrint.Core.Constants.SetNetworkChannel(value);
         }
 
         [ObservableProperty]

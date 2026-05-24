@@ -70,6 +70,9 @@ namespace ShaPrint.WpfApp
             bool isStartup = e.Args.Contains("--startup");
 
             var mainWindow = GetService<MainWindow>();
+
+            // Inject dynamic network channel from AppSettings to Core
+            ShaPrint.Core.Constants.SetNetworkChannel(ShaPrint.WpfApp.Models.AppSettings.Current.NetworkChannel);
             
             // Auto-start engines in the background based on AppMode
             try

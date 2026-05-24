@@ -16,6 +16,24 @@ namespace ShaPrint.WpfApp.Models
         public bool AutoUpdateEnabled { get; set; } = true;
         public DateTime LastUpdateCheck { get; set; } = DateTime.MinValue;
         public UpdateChannel Channel { get; set; } = UpdateChannel.Stable;
+
+        public string EncryptedNetworkChannel { get; set; } = string.Empty;
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string NetworkChannel
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(EncryptedNetworkChannel))
+                    return "DefaultChannel";
+                var decrypted = ShaPrint.WpfApp.Helpers.SecretProtector.Unprotect(EncryptedNetworkChannel);
+                return string.IsNullOrEmpty(decrypted) ? "DefaultChannel" : decrypted;
+            }
+            set
+            {
+                EncryptedNetworkChannel = ShaPrint.WpfApp.Helpers.SecretProtector.Protect(value);
+            }
+        }
     }
 
     public static class AppSettings

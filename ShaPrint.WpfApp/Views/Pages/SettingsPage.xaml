@@ -22,6 +22,18 @@
             <TextBlock Text="GENERAL" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,10" 
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
             
+            <!-- Network Channel Setting -->
+            <ui:CardControl Margin="0,0,0,8" Icon="{ui:SymbolIcon ShieldKeyhole24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Network Channel" FontSize="14" FontWeight="Medium"/>
+                        <TextBlock Text="Group clients and servers (acts as security key)" FontSize="12" 
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:TextBox Text="{Binding ViewModel.ChannelName, UpdateSourceTrigger=PropertyChanged}" Width="180" />
+            </ui:CardControl>
+            
             <!-- Startup Setting -->
             <ui:CardControl Margin="0,0,0,8" Icon="{ui:SymbolIcon Play24}">
                 <ui:CardControl.Header>

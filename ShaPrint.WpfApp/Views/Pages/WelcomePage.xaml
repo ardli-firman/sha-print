@@ -20,6 +20,12 @@
                        HorizontalAlignment="Center" Margin="0,0,0,36" 
                        TextWrapping="Wrap" TextAlignment="Center"/>
 
+            <TextBlock Text="Network Channel" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8" 
+                       HorizontalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+            <ui:TextBox Text="{Binding ViewModel.ChannelName, UpdateSourceTrigger=PropertyChanged}" 
+                        PlaceholderText="Enter your room or department name..." 
+                        Margin="0,0,0,36" HorizontalAlignment="Stretch"/>
+
             <ui:Button Appearance="Primary" Content="RUN AS SERVER" 
                        Icon="{ui:SymbolIcon Server24}"
                        Command="{Binding ViewModel.SelectServerModeCommand}"
