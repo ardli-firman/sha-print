@@ -15,23 +15,23 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # Required for changelog generation
+        fetch-depth: 0
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
 
+    - name: Run Tests
+      run: dotnet test -c Release
+
     - name: Extract Version
       id: extract_version
       shell: bash
       run: |
         TAG_NAME=${GITHUB_REF#refs/tags/}
-        # Remove '-prod' suffix
         CLEAN_TAG=${TAG_NAME%-prod}
-        # Remove 'v' prefix if it exists
         VERSION=${CLEAN_TAG#v}
-        
         echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
