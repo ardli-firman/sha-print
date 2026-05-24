@@ -222,7 +222,8 @@ namespace ShaPrint.Client
                     {
                         Server = server,
                         Printer = printer,
-                        IsInstalled = isInstalled
+                        IsInstalled = isInstalled,
+                        IsVerified = !string.IsNullOrEmpty(server.HmacSignature)
                     });
                 }
             }
@@ -403,8 +404,20 @@ namespace ShaPrint.Client
                 try
                 {
                     string raw = File.ReadAllText(_configFile);
-                    string? json = CryptoHelper.UnwrapConfigWithHmac(raw) ?? raw;
-                    var saved = JsonSerializer.Deserialize<List<InstalledPrinterConfig>>(json);
+
+                    // HMAC-wrapped config (v2+): reject tampered, fall back only for legacy
+                    ConfigUnwrapResult result = CryptoHelper.UnwrapConfigWithHmac(raw, out string? json);
+                    if (result == ConfigUnwrapResult.Valid)
+                    {
+                        raw = json!;
+                    }
+                    else if (result == ConfigUnwrapResult.Tampered)
+                    {
+                        AppLogger.Error("[CLIENT] Config file HMAC verification FAILED — possible tampering. Rejecting config.");
+                        return;
+                    }
+                    // LegacyNoHmac: use raw plaintext (unwrapped)
+                    var saved = JsonSerializer.Deserialize<List<InstalledPrinterConfig>>(raw);
                     if (saved != null)
                     {
                         _installedPrinters = saved;
@@ -443,7 +456,9 @@ namespace ShaPrint.Client
             public DiscoveryResponseMessage Server { get; set; } = null!;
             public PrinterInfo Printer { get; set; } = null!;
             public bool IsInstalled { get; set; } = false;
-            public override string ToString() => $"[{Server.ServerName}] {Printer.Name} {(IsInstalled ? "(INSTALLED)" : "")}";
+            public bool IsVerified { get; set; } = false;
+            public override string ToString() =>
+                $"{(IsVerified ? "" : "[UNVERIFIED] ")}[{Server.ServerName}] {Printer.Name} {(IsInstalled ? "(INSTALLED)" : "")}";
         }
 
         public class InstalledPrinterConfig

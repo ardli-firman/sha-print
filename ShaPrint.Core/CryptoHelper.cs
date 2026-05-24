@@ -5,6 +5,19 @@ using System.Text;
 namespace ShaPrint.Core
 {
     /// <summary>
+    /// Result of <see cref="CryptoHelper.UnwrapConfigWithHmac"/>.
+    /// </summary>
+    public enum ConfigUnwrapResult
+    {
+        /// <summary>The HMAC is valid. Caller should use the extracted JSON.</summary>
+        Valid,
+        /// <summary>No HMAC marker present — legacy plaintext config. Caller may fall back to raw content.</summary>
+        LegacyNoHmac,
+        /// <summary>HMAC present but signature verification failed — content was tampered.</summary>
+        Tampered
+    }
+
+    /// <summary>
     /// Provides AES-256-GCM encryption for TCP payloads and HMAC-SHA256
     /// signing for UDP discovery responses. All keys are derived from
     /// <see cref="Constants.SharedSecret"/>.
@@ -20,20 +33,27 @@ namespace ShaPrint.Core
         private static readonly byte[] HmacSalt = Encoding.UTF8.GetBytes("ShaPrint-HMAC-v1");
 
         // ─────────────────────────────────────────────
-        // Key derivation
+        // Key derivation (cached — derived once per process lifetime)
         // ─────────────────────────────────────────────
 
-        private static byte[] GetAesKey()
-        {
-            using var derive = new Rfc2898DeriveBytes(Constants.SharedSecret, AesSalt, 100_000, HashAlgorithmName.SHA256);
-            return derive.GetBytes(AesKeySize);
-        }
+        private static readonly Lazy<byte[]> _aesKey = new(
+            () =>
+            {
+                using var derive = new Rfc2898DeriveBytes(Constants.SharedSecret, AesSalt, 100_000, HashAlgorithmName.SHA256);
+                return derive.GetBytes(AesKeySize);
+            },
+            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
 
-        private static byte[] GetHmacKey()
-        {
-            using var derive = new Rfc2898DeriveBytes(Constants.SharedSecret, HmacSalt, 100_000, HashAlgorithmName.SHA256);
-            return derive.GetBytes(HmacKeySize);
-        }
+        private static readonly Lazy<byte[]> _hmacKey = new(
+            () =>
+            {
+                using var derive = new Rfc2898DeriveBytes(Constants.SharedSecret, HmacSalt, 100_000, HashAlgorithmName.SHA256);
+                return derive.GetBytes(HmacKeySize);
+            },
+            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+
+        private static byte[] GetAesKey() => _aesKey.Value;
+        private static byte[] GetHmacKey() => _hmacKey.Value;
 
         // ─────────────────────────────────────────────
         // AES-256-GCM (for TCP print job payloads)
@@ -131,26 +151,51 @@ namespace ShaPrint.Core
 
         /// <summary>
         /// Extracts and verifies the JSON content from an HMAC-wrapped config.
-        /// Returns the JSON string on success, or null on tamper detection.
+        /// Distinguished result prevents silent fallback to tampered content.
         /// </summary>
-        public static string? UnwrapConfigWithHmac(string wrappedContent)
+        /// <param name="wrappedContent">The raw file content.</param>
+        /// <param name="json">The extracted JSON (only valid when result is <see cref="ConfigUnwrapResult.Valid"/>).</param>
+        /// <returns>
+        /// <see cref="ConfigUnwrapResult.Valid"/> — HMAC verified, <paramref name="json"/> contains the payload.
+        /// <see cref="ConfigUnwrapResult.LegacyNoHmac"/> — no HMAC marker, caller may fall back to raw content.
+        /// <see cref="ConfigUnwrapResult.Tampered"/> — HMAC present but invalid, content MUST be rejected.
+        /// </returns>
+        public static ConfigUnwrapResult UnwrapConfigWithHmac(string wrappedContent, out string? json)
         {
             int markerIdx = wrappedContent.LastIndexOf("\n<!--HMAC:");
             if (markerIdx < 0)
-                return null; // No HMAC present — legacy or tampered
+            {
+                json = null;
+                return ConfigUnwrapResult.LegacyNoHmac;
+            }
 
             int sigStart = markerIdx + "\n<!--HMAC:".Length;
             int sigEnd = wrappedContent.IndexOf("-->", sigStart);
             if (sigEnd < 0)
-                return null;
+            {
+                json = null;
+                return ConfigUnwrapResult.Tampered;
+            }
 
-            string json = wrappedContent[..markerIdx];
+            json = wrappedContent[..markerIdx];
             string expectedSig = wrappedContent[sigStart..sigEnd];
 
             if (VerifyHmac(Encoding.UTF8.GetBytes(json), expectedSig))
-                return json;
+                return ConfigUnwrapResult.Valid;
 
-            return null; // Signature mismatch
+            json = null;
+            return ConfigUnwrapResult.Tampered;
+        }
+
+        // Keep the legacy overload for backward compatibility (used by tests that expect null)
+        /// <summary>
+        /// Legacy: extracts and verifies config HMAC. Returns null on any failure.
+        /// Prefer <see cref="UnwrapConfigWithHmac(string, out string?)"/> for discriminated results.
+        /// </summary>
+        public static string? UnwrapConfigWithHmac(string wrappedContent)
+        {
+            var result = UnwrapConfigWithHmac(wrappedContent, out var json);
+            return result == ConfigUnwrapResult.Valid ? json : null;
         }
     }
 }

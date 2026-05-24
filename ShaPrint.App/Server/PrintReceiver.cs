@@ -92,6 +92,17 @@ namespace ShaPrint.Server
                         var payload = await PrintJobPayload.ReadAsync(stream);
                         AppLogger.Log($"[SERVER] Received payload. Printer: '{payload.TargetPrinterName}', Data size: {payload.SpoolData?.Length ?? 0} bytes.");
 
+                        // Defense-in-depth: re-validate printer name after decryption
+                        try
+                        {
+                            payload.TargetPrinterName = Validators.ValidatePrinterName(payload.TargetPrinterName);
+                        }
+                        catch (ArgumentException ex)
+                        {
+                            AppLogger.Error($"[SERVER] Printer name validation failed after decryption: {ex.Message}");
+                            return;
+                        }
+
                         if (!string.IsNullOrEmpty(payload.TargetPrinterName) && payload.SpoolData != null && payload.SpoolData.Length > 0)
                         {
                             string docName = "ShaPrint Job - " + DateTime.Now.ToString("yyyyMMdd_HHmmss");

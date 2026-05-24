@@ -63,8 +63,22 @@ namespace ShaPrint.Server
             return entry.Count > MaxRequestsPerSecond;
         }
 
+        /// <summary>
+        /// Removes rate-limit entries whose window has expired, preventing unbounded memory growth.
+        /// </summary>
+        private void PruneStaleRateLimits()
+        {
+            long now = Environment.TickCount64;
+            long cutoff = now - RateLimitWindowMs - 5000; // 5s grace beyond window
+            foreach (var kvp in _rateLimits)
+            {
+                if (kvp.Value.WindowStart < cutoff)
+                    _rateLimits.TryRemove(kvp.Key, out _);
+            }
+        }
         private async Task ListenLoopAsync(CancellationToken token)
         {
+            int requestCount = 0;
             while (!token.IsCancellationRequested)
             {
                 try
@@ -81,6 +95,10 @@ namespace ShaPrint.Server
                         AppLogger.Log($"[DISCOVERY] Rate limit hit from {remoteIp} — request dropped.");
                         continue;
                     }
+
+                    // Periodic cleanup of stale rate-limit entries (every ~100 valid requests)
+                    if (++requestCount % 100 == 0)
+                        PruneStaleRateLimits();
 
                     var allDetailedPrinters = SpoolerApi.GetLocalPrintersDetailed();
                     var exposedInfos = new List<PrinterInfo>();

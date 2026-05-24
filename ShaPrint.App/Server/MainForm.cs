@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows.Forms;
 using System.IO;
 using System.Text.Json;
+using ShaPrint.Core;
 
 namespace ShaPrint.Server
 {
@@ -255,10 +256,20 @@ namespace ShaPrint.Server
             {
                 string raw = File.ReadAllText(_configFile);
 
-                // Try HMAC-wrapped config first (v2+), fall back to legacy plain JSON
-                string? json = ShaPrint.Core.CryptoHelper.UnwrapConfigWithHmac(raw) ?? raw;
+                // HMAC-wrapped config (v2+): reject tampered, fall back only for legacy
+                ConfigUnwrapResult result = ShaPrint.Core.CryptoHelper.UnwrapConfigWithHmac(raw, out string? json);
+                if (result == ConfigUnwrapResult.Valid)
+                {
+                    raw = json!;
+                }
+                else if (result == ConfigUnwrapResult.Tampered)
+                {
+                    ShaPrint.Core.AppLogger.Error("[SERVER] Config file HMAC verification FAILED — possible tampering. Rejecting config.");
+                    return;
+                }
+                // LegacyNoHmac: use raw plaintext (unwrapped)
 
-                var savedPrinters = JsonSerializer.Deserialize<List<string>>(json);
+                var savedPrinters = JsonSerializer.Deserialize<List<string>>(raw);
                 if (savedPrinters != null && savedPrinters.Count > 0)
                 {
                     for (int i = 0; i < clbPrinters.Items.Count; i++)

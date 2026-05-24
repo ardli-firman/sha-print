@@ -64,9 +64,9 @@ namespace ShaPrint.Core
             AppLogger.Log(
                 "[SECURITY] No shared secret configured!\n" +
                 $"A random key has been generated for THIS MACHINE ONLY.\n" +
+                $"It is stored in: {secretFile}\n" +
                 "To share printers across machines, set the SAME key everywhere:\n" +
-                "  setx SHAPRINT_PSK \"<your-secret-key>\" /M\n\n" +
-                $"Key for this machine: {generated}");
+                "  setx SHAPRINT_PSK \"<your-secret-key>\" /M");
 
             try
             {

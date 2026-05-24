@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace ShaPrint.Core.Network
 {
@@ -10,8 +11,10 @@ namespace ShaPrint.Core.Network
 
         /// <summary>
         /// HMAC-SHA256 signature of the JSON (excl. this field).
+        /// Omitted from signed JSON via <see cref="JsonIgnoreCondition.WhenWritingNull"/>.
         /// Client MUST verify this before trusting the response.
         /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? HmacSignature { get; set; }
     }
 }

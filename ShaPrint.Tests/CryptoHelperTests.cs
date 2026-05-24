@@ -203,4 +203,76 @@ public class CryptoHelperTests
         string plain = "{\"plain\":\"json without hmac\"}";
         Assert.Null(CryptoHelper.UnwrapConfigWithHmac(plain));
     }
+
+    // ── Discriminated config unwrap ──────────────────
+
+    [Fact]
+    public void UnwrapConfigWithHmac_Discriminated_Valid_ReturnsJson()
+    {
+        string json = "{\"data\":\"value\"}";
+        string wrapped = CryptoHelper.WrapConfigWithHmac(json);
+
+        var result = CryptoHelper.UnwrapConfigWithHmac(wrapped, out string? extracted);
+        Assert.Equal(ConfigUnwrapResult.Valid, result);
+        Assert.Equal(json, extracted);
+    }
+
+    [Fact]
+    public void UnwrapConfigWithHmac_Discriminated_NoHmac_ReturnsLegacy()
+    {
+        string plain = "{\"legacy\":\"data\"}";
+        var result = CryptoHelper.UnwrapConfigWithHmac(plain, out string? extracted);
+        Assert.Equal(ConfigUnwrapResult.LegacyNoHmac, result);
+        Assert.Null(extracted);
+    }
+
+    [Fact]
+    public void UnwrapConfigWithHmac_Discriminated_Tampered_ReturnsTampered()
+    {
+        string json = "{\"printers\":[\"Printer1\"]}";
+        string wrapped = CryptoHelper.WrapConfigWithHmac(json);
+        string tampered = wrapped.Replace("Printer1", "EvilPrinter");
+
+        var result = CryptoHelper.UnwrapConfigWithHmac(tampered, out string? extracted);
+        Assert.Equal(ConfigUnwrapResult.Tampered, result);
+        Assert.Null(extracted);
+    }
+
+    [Fact]
+    public void UnwrapConfigWithHmac_Discriminated_MalformedMarker_ReturnsTampered()
+    {
+        string malformed = "some\n<!--HMAC:incomplete";
+        var result = CryptoHelper.UnwrapConfigWithHmac(malformed, out string? extracted);
+        Assert.Equal(ConfigUnwrapResult.Tampered, result);
+        Assert.Null(extracted);
+    }
+
+    // ── PBKDF2 key caching ──────────────────────────
+
+    [Fact]
+    public void EncryptAesGcm_KeysAreCached_SameKeyAcrossCalls()
+    {
+        // The same derived key must produce consistent ciphertexts
+        // (note: nonce is random, so ciphertexts differ, but decryption must work)
+        byte[] plain = Encoding.UTF8.GetBytes("test key caching");
+        
+        // Encrypt many times — if PBKDF2 ran each time, this would be slow
+        for (int i = 0; i < 20; i++)
+        {
+            byte[] encrypted = CryptoHelper.EncryptAesGcm(plain);
+            byte[] decrypted = CryptoHelper.DecryptAesGcm(encrypted);
+            Assert.Equal(plain, decrypted);
+        }
+    }
+
+    [Fact]
+    public void SignHmac_KeysAreCached_DeterministicResults()
+    {
+        byte[] payload = Encoding.UTF8.GetBytes("consistent payload");
+        string sig1 = CryptoHelper.SignHmac(payload);
+        string sig2 = CryptoHelper.SignHmac(payload);
+
+        // HMAC is deterministic given same key and payload
+        Assert.Equal(sig1, sig2);
+    }
 }

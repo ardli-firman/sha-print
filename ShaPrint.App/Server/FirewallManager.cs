@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using ShaPrint.Core;
 
@@ -47,23 +46,21 @@ namespace ShaPrint.Server
         }
 
         /// <summary>
-        /// Removes both ShaPrint firewall rules. Called when server stops.
+        /// Removes both ShaPrint firewall rules synchronously. Called when server stops.
+        /// Synchronous to ensure cleanup completes before process exit.
         /// </summary>
         public static void RemoveFirewallRules()
         {
-            Task.Run(() =>
+            try
             {
-                try
-                {
-                    RemoveRule("ShaPrint Server TCP");
-                    RemoveRule("ShaPrint Server UDP");
-                    AppLogger.Log("[FIREWALL] Removed ShaPrint firewall rules.");
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.Error("[FIREWALL] Failed to remove firewall rules: " + ex.Message);
-                }
-            });
+                RemoveRule("ShaPrint Server TCP");
+                RemoveRule("ShaPrint Server UDP");
+                AppLogger.Log("[FIREWALL] Removed ShaPrint firewall rules.");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[FIREWALL] Failed to remove firewall rules: " + ex.Message);
+            }
         }
 
         private static bool CheckRuleExists(string ruleName)
@@ -122,15 +119,21 @@ namespace ShaPrint.Server
             {
                 FileName = "netsh",
                 Arguments = $"advfirewall firewall delete rule name=\"{ruleName}\"",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                UseShellExecute = true,
+                Verb = "runas",
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
             };
 
             try
             {
                 using var process = Process.Start(psi);
                 process?.WaitForExit();
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // User declined UAC prompt — rule stays until manual cleanup
+                AppLogger.Log($"[FIREWALL] UAC declined for removing rule '{ruleName}'. Rule may persist.");
             }
             catch (Exception ex)
             {
