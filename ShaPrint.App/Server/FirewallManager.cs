@@ -19,12 +19,19 @@ namespace ShaPrint.Server
 
                     if (!tcpExists || !udpExists)
                     {
-                        var result = MessageBox.Show(
-                            "ShaPrint Server needs to open network ports (TCP 9877 & UDP 9876) in Windows Firewall to allow clients to connect.\n\nDo you want to configure this automatically now?", 
-                            "Firewall Configuration", 
-                            MessageBoxButtons.YesNo, 
-                            MessageBoxIcon.Question);
-
+                        DialogResult result = DialogResult.No;
+                        try
+                        {
+                            result = MessageBox.Show(
+                                "ShaPrint Server needs to open network ports (TCP 9877 & UDP 9876) in Windows Firewall to allow clients to connect.\n\nDo you want to configure this automatically now?", 
+                                "Firewall Configuration", 
+                                MessageBoxButtons.YesNo, 
+                                MessageBoxIcon.Question);
+                        }
+                        catch (Exception ex)
+                        {
+                            ShaPrint.Core.AppLogger.Error("Failed to show firewall configuration prompt", ex);
+                        }
                         if (result == DialogResult.Yes)
                         {
                             if (!tcpExists) AddRule("ShaPrint Server TCP", "TCP", Constants.PrintTcpPort);
@@ -35,6 +42,26 @@ namespace ShaPrint.Server
                 catch (Exception ex)
                 {
                     ShaPrint.Core.AppLogger.Error("Firewall config error: " + ex.Message);
+                }
+            });
+        }
+
+        /// <summary>
+        /// Removes both ShaPrint firewall rules. Called when server stops.
+        /// </summary>
+        public static void RemoveFirewallRules()
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    RemoveRule("ShaPrint Server TCP");
+                    RemoveRule("ShaPrint Server UDP");
+                    AppLogger.Log("[FIREWALL] Removed ShaPrint firewall rules.");
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error("[FIREWALL] Failed to remove firewall rules: " + ex.Message);
                 }
             });
         }
@@ -56,19 +83,17 @@ namespace ShaPrint.Server
             string output = process.StandardOutput.ReadToEnd();
             process.WaitForExit();
             
-            // If the rule does not exist, netsh returns "No rules match the specified criteria."
             return process.ExitCode == 0 && !output.Contains("No rules match");
         }
 
         private static void AddRule(string ruleName, string protocol, int port)
         {
-            // Requires Administrator privileges
             var psi = new ProcessStartInfo
             {
                 FileName = "netsh",
                 Arguments = $"advfirewall firewall add rule name=\"{ruleName}\" dir=in action=allow protocol={protocol} localport={port} profile=any",
-                UseShellExecute = true, // Must be true for Verb = "runas"
-                Verb = "runas",         // Request UAC elevation
+                UseShellExecute = true,
+                Verb = "runas",
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden
             };
@@ -80,8 +105,36 @@ namespace ShaPrint.Server
             }
             catch (System.ComponentModel.Win32Exception)
             {
-                // User clicked "No" on the UAC prompt
-                MessageBox.Show($"Failed to add Firewall rule for {protocol} {port}. You may need to do this manually.", "UAC Cancelled", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                try
+                {
+                    MessageBox.Show($"Failed to add Firewall rule for {protocol} {port}. You may need to do this manually.", "UAC Cancelled", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error("Failed to show UAC warning message", ex);
+                }
+            }
+        }
+
+        private static void RemoveRule(string ruleName)
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "netsh",
+                Arguments = $"advfirewall firewall delete rule name=\"{ruleName}\"",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            try
+            {
+                using var process = Process.Start(psi);
+                process?.WaitForExit();
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"[FIREWALL] netsh delete failed for '{ruleName}': {ex.Message}");
             }
         }
     }
