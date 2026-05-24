@@ -20,8 +20,8 @@ namespace ShaPrint.WpfApp.Models
 
     public static class AppSettings
     {
-        private static string _settingsFile;
-        private static AppSettingsData _current;
+        private static string _settingsFile = null!;
+        private static AppSettingsData _current = null!;
 
         static AppSettings()
         {

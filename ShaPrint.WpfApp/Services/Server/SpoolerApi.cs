@@ -10,11 +10,11 @@ namespace ShaPrint.Server
         public class DOCINFO
         {
             [MarshalAs(UnmanagedType.LPTStr)]
-            public string pDocName;
+            public string? pDocName;
             [MarshalAs(UnmanagedType.LPTStr)]
-            public string pOutputFile;
+            public string? pOutputFile;
             [MarshalAs(UnmanagedType.LPTStr)]
-            public string pDatatype;
+            public string? pDatatype;
         }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
@@ -76,7 +76,7 @@ namespace ShaPrint.Server
         public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
 
         [DllImport("winspool.drv", CharSet = CharSet.Auto, SetLastError = true)]
-        public static extern bool EnumPrinters(uint Flags, string Name, uint Level, IntPtr pPrinterEnum, uint cbBuf, out uint pcbNeeded, out uint pcReturned);
+        public static extern bool EnumPrinters(uint Flags, string? Name, uint Level, IntPtr pPrinterEnum, uint cbBuf, out uint pcbNeeded, out uint pcReturned);
 
         public const uint PRINTER_ENUM_LOCAL = 2;
         public const uint PRINTER_ENUM_CONNECTIONS = 4;

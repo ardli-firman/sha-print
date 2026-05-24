@@ -26,7 +26,7 @@
 
         <tb:TaskbarIcon
             ToolTipText="ShaPrint"
-            IconSource="/icon.ico"
+            IconSource="pack://application:,,,/icon.ico"
             LeftClickCommand="{Binding ViewModel.ShowApplicationCommand}">
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu>
