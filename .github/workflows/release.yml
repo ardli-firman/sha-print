@@ -3,7 +3,8 @@ name: Release Workflow
 on:
   push:
     tags:
-      - '*-prod' # Only trigger on tags ending with -prod (e.g., v1.0.0-prod)
+      - '*-prod' # e.g., v1.0.0-prod
+      - '*-beta' # e.g., v1.0.0-beta
 
 jobs:
   build-and-release:
@@ -32,9 +33,15 @@ jobs:
       run: |
         TAG_NAME=${GITHUB_REF#refs/tags/}
         CLEAN_TAG=${TAG_NAME%-prod}
+        CLEAN_TAG=${CLEAN_TAG%-beta}
         VERSION=${CLEAN_TAG#v}
         echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
         echo "version=$VERSION" >> $GITHUB_OUTPUT
+        if [[ "$TAG_NAME" == *"-beta" ]]; then
+          echo "is_prerelease=true" >> $GITHUB_OUTPUT
+        else
+          echo "is_prerelease=false" >> $GITHUB_OUTPUT
+        fi
 
     - name: Validate PSK Secret
       shell: bash
@@ -67,5 +74,6 @@ jobs:
         files: Output/ShaPrint_Setup_v${{ steps.extract_version.outputs.version }}.exe
         generate_release_notes: true
         name: Release v${{ steps.extract_version.outputs.version }}
+        prerelease: ${{ steps.extract_version.outputs.is_prerelease == 'true' }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
