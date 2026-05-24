@@ -70,6 +70,7 @@ namespace ShaPrint.Client
                     }
                 }
                 catch (ObjectDisposedException) { /* udpClient closed, normal */ }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.OperationAborted || ex.ErrorCode == 995) { /* udpClient closed, normal */ }
                 catch (Exception ex) { AppLogger.Error("Discovery receive error", ex); }
             });
 

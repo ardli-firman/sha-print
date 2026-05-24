@@ -5,13 +5,15 @@ using System.Text.Json;
 using System.Windows.Forms;
 using ShaPrint.Server;
 using ShaPrint.Client;
+using MaterialSkin;
+using MaterialSkin.Controls;
 
 namespace ShaPrint.App
 {
-    public class LauncherForm : Form
+    public class LauncherForm : MaterialForm
     {
-        private Button btnServer;
-        private Button btnClient;
+        private MaterialButton btnServer;
+        private MaterialButton btnClient;
         private string _modeFile;
         private bool _isStartup;
         public bool HasLaunchedMode { get; private set; } = false;
@@ -28,32 +30,77 @@ namespace ShaPrint.App
             _isStartup = isStartup;
             _modeFile = GetConfigPath("AppMode.json");
             this.Text = "ShaPrint - Choose Mode";
-            this.Size = new Size(350, 250);
+            this.Size = new Size(400, 320);
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            Label lblInfo = new Label();
-            lblInfo.Text = "Welcome to ShaPrint!\n\nDo you want this PC to act as a Server (Host Printer) or a Client (Send Print Jobs)?";
-            lblInfo.Location = new Point(20, 20);
-            lblInfo.Size = new Size(300, 60);
-            lblInfo.TextAlign = ContentAlignment.MiddleCenter;
-            this.Controls.Add(lblInfo);
+            var materialSkinManager = MaterialSkinManager.Instance;
+            materialSkinManager.AddFormToManage(this);
+            materialSkinManager.Theme = MaterialSkinManager.Themes.LIGHT;
+            materialSkinManager.ColorScheme = new ColorScheme(
+                Primary.Blue600, Primary.Blue700,
+                Primary.Blue200, Accent.LightBlue200,
+                TextShade.WHITE
+            );
 
-            btnServer = new Button();
-            btnServer.Text = "Run as Server";
-            btnServer.Location = new Point(40, 100);
-            btnServer.Size = new Size(120, 50);
+            var mainLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                RowCount = 3,
+                ColumnCount = 1,
+                Padding = new Padding(20),
+                BackColor = Color.Transparent
+            };
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+
+            MaterialLabel lblInfo = new MaterialLabel
+            {
+                Text = "Welcome to ShaPrint!\n\nDo you want this PC to act as a Server (Host Printer) or a Client (Send Print Jobs)?",
+                FontType = MaterialSkinManager.fontType.Subtitle1,
+                AutoSize = true,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Anchor = AnchorStyles.None,
+                Margin = new Padding(0, 0, 0, 20)
+            };
+            mainLayout.Controls.Add(lblInfo, 0, 0);
+
+            var buttonLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                RowCount = 1,
+                ColumnCount = 2,
+                AutoSize = true
+            };
+            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+
+            btnServer = new MaterialButton
+            {
+                Text = "Run as Server",
+                AutoSize = false,
+                Size = new Size(130, 45),
+                Anchor = AnchorStyles.None,
+                Type = MaterialButton.MaterialButtonType.Contained,
+                UseAccentColor = false
+            };
             btnServer.Click += (s, e) => LaunchMode("Server");
-            this.Controls.Add(btnServer);
+            buttonLayout.Controls.Add(btnServer, 0, 0);
 
-            btnClient = new Button();
-            btnClient.Text = "Run as Client";
-            btnClient.Location = new Point(170, 100);
-            btnClient.Size = new Size(120, 50);
+            btnClient = new MaterialButton
+            {
+                Text = "Run as Client",
+                AutoSize = false,
+                Size = new Size(130, 45),
+                Anchor = AnchorStyles.None,
+                Type = MaterialButton.MaterialButtonType.Contained,
+                UseAccentColor = true
+            };
             btnClient.Click += (s, e) => LaunchMode("Client");
-            this.Controls.Add(btnClient);
+            buttonLayout.Controls.Add(btnClient, 1, 0);
+
+            mainLayout.Controls.Add(buttonLayout, 0, 1);
+            this.Controls.Add(mainLayout);
         }
 
         private void LaunchMode(string mode)

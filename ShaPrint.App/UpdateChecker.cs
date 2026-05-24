@@ -55,10 +55,14 @@ namespace ShaPrint.App
                 if (tagName.StartsWith("v", StringComparison.OrdinalIgnoreCase))
                     tagName = tagName.Substring(1);
 
+                // Strip '-prod' suffix if present
+                if (tagName.EndsWith("-prod", StringComparison.OrdinalIgnoreCase))
+                    tagName = tagName.Substring(0, tagName.Length - 5);
+
                 Version latestVersion;
                 if (!Version.TryParse(tagName, out latestVersion)) return;
 
-                Version currentVersion = new Version(Application.ProductVersion);
+                Version currentVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
 
                 if (latestVersion > currentVersion)
                 {
