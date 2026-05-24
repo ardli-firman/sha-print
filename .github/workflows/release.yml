@@ -36,6 +36,8 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
     - name: Publish .NET Application
+      env:
+        SHA_PRINT_PSK: ${{ secrets.SHAPRINT_PSK }}
       run: |
         dotnet publish ShaPrint.App/ShaPrint.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=${{ steps.extract_version.outputs.version }}
 
