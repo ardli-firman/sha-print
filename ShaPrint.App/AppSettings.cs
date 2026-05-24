@@ -5,10 +5,17 @@ using ShaPrint.Core;
 
 namespace ShaPrint.App
 {
+    public enum UpdateChannel
+    {
+        Production,
+        Beta
+    }
+
     public class AppSettingsData
     {
         public bool AutoUpdateEnabled { get; set; } = true;
         public DateTime LastUpdateCheck { get; set; } = DateTime.MinValue;
+        public UpdateChannel Channel { get; set; } = UpdateChannel.Production;
     }
 
     public static class AppSettings
