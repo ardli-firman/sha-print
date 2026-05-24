@@ -17,7 +17,7 @@ By utilizing a **Virtual Printer Driver (Named Pipes)** architecture and raw TCP
 - 💎 **Native Driver Quality:** Unlike traditional workarounds that degrade quality to *Generic/Text* or PDF rendering, ShaPrint uses the actual printer driver (e.g., Epson L3210) on the Client side. What you see is exactly what you print—perfect margins, perfect colors.
 - 🌍 **Cross-VLAN Support:** Network segmented? No problem. Use the *Specific Server IP* feature to bypass router boundaries and connect a Client to a Server sitting in a completely different subnet or VLAN.
 - ⚡ **Seamless Auto-Updater:** ShaPrint comes bundled with a dedicated background updater. It checks for new releases on GitHub at startup and updates itself seamlessly on-the-fly without interrupting your active print jobs.
-- 🧑‍💻 **In-App Realtime Logging:** A built-in "hacker-style" terminal log panel lets you monitor the data flow and debug network issues directly from the UI.
+- 🧑‍💻 **In-App Realtime Logging:** A clean, readable built-in terminal log panel lets you monitor the data flow and debug network issues easily directly from the UI.
 - 👻 **Stealth Background Service:** Minimize the app to the System Tray and let it serve your print jobs silently in the background. Starts automatically with Windows!
 
 ---
