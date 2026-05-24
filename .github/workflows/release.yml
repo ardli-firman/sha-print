@@ -40,6 +40,7 @@ jobs:
         SHA_PRINT_PSK: ${{ secrets.SHAPRINT_PSK }}
       run: |
         dotnet publish ShaPrint.App/ShaPrint.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=${{ steps.extract_version.outputs.version }}
+        dotnet publish ShaPrint.Updater/ShaPrint.Updater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=${{ steps.extract_version.outputs.version }}
 
     - name: Build Installer (Inno Setup)
       run: |
