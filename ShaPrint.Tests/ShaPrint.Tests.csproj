@@ -22,7 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ShaPrint.Core\ShaPrint.Core.csproj" />
-    <ProjectReference Include="..\ShaPrint.App\ShaPrint.App.csproj" />
+    <ProjectReference Include="..\ShaPrint.WpfApp\ShaPrint.WpfApp.csproj" />
   </ItemGroup>
 
 </Project>
