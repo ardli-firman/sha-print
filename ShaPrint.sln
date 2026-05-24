@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Core", "ShaPrint.C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.App", "ShaPrint.App\ShaPrint.App.csproj", "{94900A12-A66E-4AEF-8DF6-5849F07C490E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Tests", "ShaPrint.Tests\ShaPrint.Tests.csproj", "{139B89E9-8D20-43C3-B027-CA4885E360EF}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -24,5 +26,9 @@ Global
 		{94900A12-A66E-4AEF-8DF6-5849F07C490E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{94900A12-A66E-4AEF-8DF6-5849F07C490E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{94900A12-A66E-4AEF-8DF6-5849F07C490E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{139B89E9-8D20-43C3-B027-CA4885E360EF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{139B89E9-8D20-43C3-B027-CA4885E360EF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{139B89E9-8D20-43C3-B027-CA4885E360EF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{139B89E9-8D20-43C3-B027-CA4885E360EF}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
