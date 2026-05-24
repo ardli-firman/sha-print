@@ -8,22 +8,25 @@ using System.Windows.Forms;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
 using ShaPrint.App;
+using MaterialSkin;
+using MaterialSkin.Controls;
+using FontAwesome.Sharp;
 
 namespace ShaPrint.Client
 {
-    public class ClientForm : Form
+    public class ClientForm : MaterialForm
     {
-        private Button btnScan;
+        private MaterialButton btnScan;
         private ListBox lbServers;
-        private Button btnInstall;
-        private Button btnDelete;
-        private Label lblStatus;
-        private Label lblIp;
-        private TextBox txtServerIp;
-        private CheckBox chkRunOnStartup;
-        private CheckBox chkAutoUpdate;
-        private Button btnAbout;
-        private Button btnCheckUpdate;
+        private MaterialButton btnInstall;
+        private MaterialButton btnDelete;
+        private MaterialLabel lblStatus;
+        private MaterialLabel lblIp;
+        private MaterialTextBox2 txtServerIp;
+        private MaterialCheckbox chkRunOnStartup;
+        private MaterialCheckbox chkAutoUpdate;
+        private MaterialButton btnSettings;
+        private TextBox txtLog;
 
         private NotifyIcon trayIcon;
         private ContextMenuStrip trayMenu;
@@ -49,6 +52,15 @@ namespace ShaPrint.Client
             _startHidden = startHidden;
             _configFile = GetConfigPath("ClientConfig.json");
             _discoveryClient = new DiscoveryClient();
+
+            var materialSkinManager = MaterialSkinManager.Instance;
+            materialSkinManager.AddFormToManage(this);
+            materialSkinManager.Theme = MaterialSkinManager.Themes.LIGHT;
+            materialSkinManager.ColorScheme = new ColorScheme(
+                Primary.Blue600, Primary.Blue700,
+                Primary.Blue200, Accent.LightBlue200,
+                TextShade.WHITE);
+
             InitializeComponent();
             LoadConfiguration();
         }
@@ -56,130 +68,220 @@ namespace ShaPrint.Client
         private void InitializeComponent()
         {
             this.Text = "ShaPrint Client";
-            this.Size = new Size(520, 450);
+            this.Size = new Size(550, 650);
+            this.MinimumSize = new Size(550, 650);
             this.StartPosition = FormStartPosition.CenterScreen;
-            try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            try { this.Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            var grpNetwork = new GroupBox();
-            grpNetwork.Text = "Network Discovery";
-            grpNetwork.Location = new Point(10, 10);
-            grpNetwork.Size = new Size(480, 80);
-            this.Controls.Add(grpNetwork);
+            var mainPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(20),
+                RowCount = 7,
+                ColumnCount = 1,
+                BackColor = Color.White
+            };
+            mainPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            mainPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // 0: Network Discovery
+            mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); // 1: Server ListBox
+            mainPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // 2: Install/Delete Buttons
+            mainPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // 3: Status
+            mainPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // 4: Checkboxes & Actions
+            mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 120F)); // 5: Logs
+            
+            var tabControl = new MaterialTabControl
+            {
+                Dock = DockStyle.Fill,
+                ImageList = CreateIcons()
+            };
+            this.Controls.Add(tabControl);
+            this.DrawerTabControl = tabControl;
+            this.DrawerShowIconsWhenHidden = true;
+            this.DrawerUseColors = true;
+            this.DrawerHighlightWithAccent = true;
 
-            var lblHint = new Label();
-            lblHint.Text = "Hint: If Server is on a different Wi-Fi/VLAN, auto-scan won't work. Enter Server IP explicitly.";
-            lblHint.Location = new Point(10, 20);
-            lblHint.AutoSize = true;
-            lblHint.ForeColor = Color.DarkSlateGray;
-            grpNetwork.Controls.Add(lblHint);
+            var tabHome = new TabPage("Home") { ImageKey = "home", BackColor = Color.White };
+            var tabSettings = new TabPage("Settings") { ImageKey = "settings", BackColor = Color.White };
+            var tabAbout = new TabPage("About") { ImageKey = "about", BackColor = Color.White };
 
-            lblIp = new Label();
-            lblIp.Text = "Specific Server IP :";
-            lblIp.Location = new Point(10, 47);
-            lblIp.AutoSize = true;
-            grpNetwork.Controls.Add(lblIp);
+            tabControl.TabPages.Add(tabHome);
+            tabControl.TabPages.Add(tabSettings);
+            tabControl.TabPages.Add(tabAbout);
+            
+            tabHome.Controls.Add(mainPanel);
 
-            txtServerIp = new TextBox();
-            txtServerIp.Location = new Point(125, 45);
-            txtServerIp.Size = new Size(130, 20);
-            grpNetwork.Controls.Add(txtServerIp);
+            var grpNetwork = new GroupBox
+            {
+                Text = "Network Discovery",
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 15),
+                Padding = new Padding(10),
+                Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold)
+            };
+            mainPanel.Controls.Add(grpNetwork, 0, 0);
+
+            var grpLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                RowCount = 2,
+                ColumnCount = 3
+            };
+            grpLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            grpLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            grpLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            grpNetwork.Controls.Add(grpLayout);
+
+            var lblHint = new MaterialLabel
+            {
+                Text = "Hint: If Server is on a different Wi-Fi/VLAN,\nauto-scan won't work. Enter Server IP explicitly.",
+                FontType = MaterialSkinManager.fontType.Body2,
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 10)
+            };
+            grpLayout.Controls.Add(lblHint, 0, 0);
+            grpLayout.SetColumnSpan(lblHint, 3);
+
+            lblIp = new MaterialLabel
+            {
+                Text = "Specific Server IP:",
+                AutoSize = true,
+                Anchor = AnchorStyles.Left | AnchorStyles.Top,
+                Margin = new Padding(0, 12, 5, 0)
+            };
+            grpLayout.Controls.Add(lblIp, 0, 1);
+
+            txtServerIp = new MaterialTextBox2
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 0, 10, 0),
+                UseSystemPasswordChar = false
+            };
+            grpLayout.Controls.Add(txtServerIp, 1, 1);
 
             var toolTip = new ToolTip();
             toolTip.SetToolTip(txtServerIp, "Example: 192.168.1.50\nLeave blank for auto-discovery on the same local network.");
 
-            btnScan = new Button();
-            btnScan.Text = "Scan LAN / Connect";
-            btnScan.Location = new Point(270, 43);
-            btnScan.Size = new Size(150, 25);
+            btnScan = new MaterialButton
+            {
+                Text = "Scan LAN",
+                AutoSize = false,
+                Size = new Size(140, 36),
+                Type = MaterialButton.MaterialButtonType.Contained,
+                UseAccentColor = false
+            };
             btnScan.Click += BtnScan_Click;
-            grpNetwork.Controls.Add(btnScan);
+            grpLayout.Controls.Add(btnScan, 2, 1);
 
-            lbServers = new ListBox();
-            lbServers.Location = new Point(10, 100);
-            lbServers.Size = new Size(480, 240);
-            this.Controls.Add(lbServers);
+            lbServers = new ListBox
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 0, 0, 15),
+                Font = new Font("Segoe UI", 9.5F),
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            mainPanel.Controls.Add(lbServers, 0, 1);
 
-            btnInstall = new Button();
-            btnInstall.Text = "Install Selected Printer";
-            btnInstall.Location = new Point(10, 350);
-            btnInstall.Size = new Size(150, 30);
-            btnInstall.Enabled = false;
+            var actionPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                RowCount = 1,
+                ColumnCount = 3,
+                Margin = new Padding(0, 0, 0, 10)
+            };
+            actionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
+            actionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
+            actionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34F));
+            mainPanel.Controls.Add(actionPanel, 0, 2);
+
+            btnInstall = new MaterialButton
+            {
+                Text = "Install Selected",
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                Type = MaterialButton.MaterialButtonType.Contained,
+                UseAccentColor = true,
+                Enabled = false,
+                Margin = new Padding(0, 0, 5, 0)
+            };
             btnInstall.Click += BtnInstall_Click;
-            this.Controls.Add(btnInstall);
+            actionPanel.Controls.Add(btnInstall, 0, 0);
 
-            btnDelete = new Button();
-            btnDelete.Text = "Delete Selected Printer";
-            btnDelete.Location = new Point(170, 350);
-            btnDelete.Size = new Size(150, 30);
-            btnDelete.Enabled = false;
+            btnDelete = new MaterialButton
+            {
+                Text = "Delete Selected",
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                Type = MaterialButton.MaterialButtonType.Outlined,
+                UseAccentColor = false,
+                Enabled = false,
+                Margin = new Padding(5, 0, 5, 0)
+            };
             btnDelete.Click += BtnDelete_Click;
-            this.Controls.Add(btnDelete);
+            actionPanel.Controls.Add(btnDelete, 1, 0);
 
-            Button btnSwitchMode = new Button();
-            btnSwitchMode.Text = "Switch to Server Mode";
-            btnSwitchMode.Location = new Point(340, 350);
-            btnSwitchMode.Size = new Size(150, 30);
+            MaterialButton btnSwitchMode = new MaterialButton
+            {
+                Text = "Switch Mode",
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                Type = MaterialButton.MaterialButtonType.Text,
+                UseAccentColor = false,
+                Margin = new Padding(5, 0, 0, 0)
+            };
             btnSwitchMode.Click += (s, e) => SwitchMode();
-            this.Controls.Add(btnSwitchMode);
+            actionPanel.Controls.Add(btnSwitchMode, 2, 0);
 
-            lblStatus = new Label();
-            lblStatus.Text = "Ready";
-            lblStatus.Location = new Point(10, 390);
-            lblStatus.AutoSize = true;
-            this.Controls.Add(lblStatus);
+            lblStatus = new MaterialLabel
+            {
+                Text = "Ready",
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 10)
+            };
+            mainPanel.Controls.Add(lblStatus, 0, 3);
 
-            chkRunOnStartup = new CheckBox();
-            chkRunOnStartup.Text = "Run Automatically on Windows Startup";
-            chkRunOnStartup.Location = new Point(10, 420);
-            chkRunOnStartup.AutoSize = true;
-            chkRunOnStartup.Checked = ShaPrint.App.StartupManager.IsStartupEnabled();
+            var settingsLayout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20), RowCount = 4, ColumnCount = 1 };
+            settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            
+            var lblSetTitle = new MaterialLabel { Text = "Configuration", FontType = MaterialSkinManager.fontType.H5, AutoSize = true, Margin = new Padding(0,0,0,20) };
+            settingsLayout.Controls.Add(lblSetTitle, 0, 0);
+
+            chkRunOnStartup = new MaterialCheckbox { Text = "Run Automatically on Windows Startup", AutoSize = true, Checked = ShaPrint.App.StartupManager.IsStartupEnabled() };
             chkRunOnStartup.CheckedChanged += (s, e) => ShaPrint.App.StartupManager.SetStartup(chkRunOnStartup.Checked);
-            this.Controls.Add(chkRunOnStartup);
+            settingsLayout.Controls.Add(chkRunOnStartup, 0, 1);
 
-            chkAutoUpdate = new CheckBox();
-            chkAutoUpdate.Text = "Enable Auto-Update on Startup";
-            chkAutoUpdate.Location = new Point(10, 440);
-            chkAutoUpdate.AutoSize = true;
-            chkAutoUpdate.Checked = AppSettings.Current.AutoUpdateEnabled;
-            chkAutoUpdate.CheckedChanged += (s, e) => {
-                AppSettings.Current.AutoUpdateEnabled = chkAutoUpdate.Checked;
-                AppSettings.Save();
+            chkAutoUpdate = new MaterialCheckbox { Text = "Enable Auto-Update on Startup", AutoSize = true, Checked = AppSettings.Current.AutoUpdateEnabled };
+            chkAutoUpdate.CheckedChanged += (s, e) => { AppSettings.Current.AutoUpdateEnabled = chkAutoUpdate.Checked; AppSettings.Save(); };
+            settingsLayout.Controls.Add(chkAutoUpdate, 0, 2);
+
+            var btnCheckUpdate = new MaterialButton { Text = "Check for Updates", AutoSize = false, Size = new Size(200, 36), Type = MaterialButton.MaterialButtonType.Contained, Margin = new Padding(0, 20, 0, 0) };
+            btnCheckUpdate.Click += async (s, e) => { await UpdateChecker.CheckForUpdatesManualAsync(); };
+            settingsLayout.Controls.Add(btnCheckUpdate, 0, 3);
+            
+            tabSettings.Controls.Add(settingsLayout);
+
+            var aboutLayout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, Padding = new Padding(20), BackColor = Color.White };
+            aboutLayout.Controls.Add(new MaterialLabel { Text = "ShaPrint", FontType = MaterialSkinManager.fontType.H4, AutoSize = true }, 0, 0);
+            aboutLayout.Controls.Add(new MaterialLabel { Text = $"Version {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}", FontType = MaterialSkinManager.fontType.Subtitle1, AutoSize = true, Margin = new Padding(0, 5, 0, 10) }, 0, 1);
+            aboutLayout.Controls.Add(new MaterialLabel { Text = "Author: ardli-firman", FontType = MaterialSkinManager.fontType.Body1, AutoSize = true }, 0, 2);
+            aboutLayout.Controls.Add(new MaterialLabel { Text = "A Virtual Printer and Print Server\nsolution for Windows networks.", FontType = MaterialSkinManager.fontType.Body2, AutoSize = true, Margin = new Padding(0, 10, 0, 0) }, 0, 3);
+            tabAbout.Controls.Add(aboutLayout);
+
+            txtLog = new TextBox
+            {
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(240, 240, 240),
+                ForeColor = Color.DarkSlateGray,
+                Font = new Font("Consolas", 9.5F),
+                BorderStyle = BorderStyle.FixedSingle,
+                Margin = new Padding(0)
             };
-            this.Controls.Add(chkAutoUpdate);
-
-            btnAbout = new Button();
-            btnAbout.Text = "About";
-            btnAbout.Location = new Point(440, 435);
-            btnAbout.Size = new Size(50, 25);
-            btnAbout.Click += (s, e) => new AboutForm().ShowDialog();
-            this.Controls.Add(btnAbout);
-
-            btnCheckUpdate = new Button();
-            btnCheckUpdate.Text = "Check Update";
-            btnCheckUpdate.Location = new Point(340, 435);
-            btnCheckUpdate.Size = new Size(95, 25);
-            btnCheckUpdate.Click += async (s, e) => {
-                btnCheckUpdate.Enabled = false;
-                btnCheckUpdate.Text = "Checking...";
-                await UpdateChecker.CheckForUpdatesManualAsync();
-                btnCheckUpdate.Enabled = true;
-                btnCheckUpdate.Text = "Check Update";
-            };
-            this.Controls.Add(btnCheckUpdate);
-
-            var txtLog = new TextBox();
-            txtLog.Multiline = true;
-            txtLog.ReadOnly = true;
-            txtLog.ScrollBars = ScrollBars.Vertical;
-            txtLog.Location = new Point(10, 465);
-            txtLog.Size = new Size(480, 90);
-            txtLog.BackColor = Color.WhiteSmoke;
-            txtLog.ForeColor = Color.DarkSlateGray;
-            txtLog.Font = new Font("Consolas", 9.5F);
-            txtLog.BorderStyle = BorderStyle.FixedSingle;
-            this.Controls.Add(txtLog);
-
-            this.Size = new Size(520, 610);
+            mainPanel.Controls.Add(txtLog, 0, 5);
 
             ShaPrint.Core.AppLogger.OnLog += (msg) =>
             {
@@ -211,7 +313,7 @@ namespace ShaPrint.Client
 
             trayIcon = new NotifyIcon();
             trayIcon.Text = "ShaPrint Client";
-            try { trayIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { trayIcon.Icon = SystemIcons.Application; }
+            try { trayIcon.Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { trayIcon.Icon = SystemIcons.Application; }
             trayIcon.ContextMenuStrip = trayMenu;
             trayIcon.Visible = true;
             trayIcon.DoubleClick += (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; };
@@ -266,6 +368,26 @@ namespace ShaPrint.Client
 
             lblStatus.Text = $"Found {_discoveredServers.Count} server(s).";
             btnScan.Enabled = true;
+        }
+
+        private void TxtServerIp_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                BtnScan_Click(sender, e);
+            }
+        }
+
+        private ImageList CreateIcons()
+        {
+            var il = new ImageList { ImageSize = new Size(24, 24), ColorDepth = ColorDepth.Depth32Bit };
+            
+            il.Images.Add("home", IconChar.Home.ToBitmap(Color.DimGray, 24));
+            il.Images.Add("settings", IconChar.Cogs.ToBitmap(Color.DimGray, 24));
+            il.Images.Add("about", IconChar.InfoCircle.ToBitmap(Color.DimGray, 24));
+
+            return il;
         }
 
         private async void BtnInstall_Click(object? sender, EventArgs e)
