@@ -1,85 +1,100 @@
-# ShaPrint - LAN & Cross-VLAN Virtual Printer Sharing
-
-**ShaPrint** adalah solusi modern berbasis .NET 8 untuk melakukan *sharing printer* di jaringan lokal (LAN) maupun lintas-VLAN (Subnet). Aplikasi ini menjadi solusi jitu ketika Anda tidak bisa menggunakan fitur bawaan Windows SMB (Shared Folder/Printer), sering terkendala masalah *password/credential* jaringan, atau terhalang oleh aturan sekuritas Windows 10/11.
-
-Sistem ini menggunakan arsitektur **Virtual Printer Driver (Named Pipes)** dan protokol TCP/UDP murni, dengan kualitas hasil cetak dokumen 100% sempurna (*Native Driver Approach*).
-
----
-
-## ✨ Fitur Utama
-
-- **Unified Application:** Hanya butuh 1 aplikasi `.exe` yang sama. Anda dapat memilih bertindak sebagai **Server** (tuan rumah printer fisik) atau **Client** (pengirim dokumen).
-- **Native Driver Quality:** Menggunakan driver printer asli (misal: Epson L3210) di sisi Client, sehingga kualitas hasil cetak dokumen (kertas, warna, margin) akan 100% sama dengan aslinya (bukan kualitas *Generic/Text* atau cetak PDF terdegradasi).
-- **Cross-VLAN Support:** Dilengkapi fitur *Specific Server IP* untuk menerobos blokade router jika PC Client dan PC Server berada di subnet / VLAN IP yang berbeda.
-- **In-App Realtime Logging:** Dilengkapi panel Terminal Log "ala Hacker" langsung di dalam aplikasi (UI) untuk proses *debugging* aliran data.
-- **Background Service:** Aplikasi dapat di-minimize ke *System Tray* dan berjalan diam-diam melayani pekerjaan cetak (*print jobs*).
+<div align="center">
+  <h1>🖨️ ShaPrint</h1>
+  <p><b>A modern, lightning-fast LAN & Cross-VLAN Virtual Printer Sharing Solution for Windows</b></p>
+</div>
 
 ---
 
-## 🏗 Arsitektur Sistem
+**ShaPrint** is a modern .NET 8-based solution for sharing physical printers across local networks (LAN) and across subnets/VLANs. It serves as the perfect workaround when native Windows SMB (Shared Folder/Printer) fails you, when you are haunted by network credential issues, or blocked by strict Windows 10/11 security policies.
+
+By utilizing a **Virtual Printer Driver (Named Pipes)** architecture and raw TCP/UDP protocols, ShaPrint guarantees that your documents are printed with **100% fidelity** and native quality.
+
+---
+
+## ✨ Key Features
+
+- 🎭 **Unified Application:** One executable rules them all. Choose to run it as a **Server** (hosting the physical printer) or a **Client** (sending the documents) from the exact same `.exe`.
+- 💎 **Native Driver Quality:** Unlike traditional workarounds that degrade quality to *Generic/Text* or PDF rendering, ShaPrint uses the actual printer driver (e.g., Epson L3210) on the Client side. What you see is exactly what you print—perfect margins, perfect colors.
+- 🌍 **Cross-VLAN Support:** Network segmented? No problem. Use the *Specific Server IP* feature to bypass router boundaries and connect a Client to a Server sitting in a completely different subnet or VLAN.
+- ⚡ **Seamless Auto-Updater:** ShaPrint comes bundled with a dedicated background updater. It checks for new releases on GitHub at startup and updates itself seamlessly on-the-fly without interrupting your active print jobs.
+- 🧑‍💻 **In-App Realtime Logging:** A built-in "hacker-style" terminal log panel lets you monitor the data flow and debug network issues directly from the UI.
+- 👻 **Stealth Background Service:** Minimize the app to the System Tray and let it serve your print jobs silently in the background. Starts automatically with Windows!
+
+---
+
+## 🏗 System Architecture
 
 1. **Server Mode**
-   Aplikasi berjalan di komputer yang terhubung langsung ke printer fisik (via kabel USB). Server membaca daftar printer lokal, dan bersiap menerima data cetak mentah (*raw spool data*) dari jaringan via **TCP Port 9877**. Server juga memancarkan sinyal pendeteksian di **UDP Port 9876**.
+   The application runs on the computer directly connected to the physical printer via USB. It scans for local printers and listens for raw print spool data from the network on **TCP Port 9877**. It also broadcasts its presence on **UDP Port 9876** for auto-discovery.
    
 2. **Client Mode**
-   Aplikasi membuat *Virtual Printer Port* di Windows. Semua proses cetak dari Microsoft Word / PDF / Web Browser ke printer ini akan ditangkap oleh aplikasi Client dan dialirkan langsung menuju Server melalui jaringan, tanpa delay BIDI (*Bidirectional*).
+   The application creates a *Virtual Printer Port* in Windows. Any document printed from Microsoft Word, PDF readers, or Web Browsers to this virtual printer is instantly intercepted by the Client and streamed directly to the Server over the network, completely eliminating Bidirectional (BIDI) delay issues.
 
 ---
 
-## 💻 Cara Instalasi
+## 🚀 Installation
 
-Anda tidak perlu menginstal .NET Framework. Aplikasi ini sudah dikemas utuh dalam sebuah Installer (*Standalone Setup*).
+You don't need to install the .NET Framework beforehand. ShaPrint comes packaged as a fully self-contained Standalone Setup!
 
-1. Buka folder `Output` (jika Anda mem-build sendiri) atau minta file Installer dari administrator Anda.
-2. Jalankan `ShaPrint_Setup_v1.0.exe`.
-3. Aplikasi akan otomatis membuat *shortcut* di Desktop dan Start Menu Anda.
-
----
-
-## 🛠 Panduan Penggunaan
-
-**Syarat Mutlak (Native Driver):** Agar dokumen tidak rusak saat melintasi jaringan, pastikan Anda **menginstal Driver Resmi Printer tersebut** di PC Client (misal: install *Driver Epson L3210* di PC Client, meskipun printernya tidak dicolok fisik ke PC Client).
-
-### 1. Di Komputer Server (Yang dicolok USB Printer)
-- Buka ShaPrint dari Desktop Anda.
-- Saat pertama kali muncul dialog, pilih **"Run as Server"**.
-- Centang printer fisik yang ingin dibagikan ke jaringan.
-- Klik **"Start Server"**.
-- Selesai! Anda bisa me-*minimize* aplikasi ini ke sudut bawah layar (*System Tray*).
-
-### 2. Di Komputer Client (Yang ingin numpang nge-print)
-- Buka ShaPrint dari Desktop Anda (**Wajib Run as Administrator** jika ini pertama kali, karena Windows butuh akses admin untuk mendaftarkan printer baru).
-- Saat ditanya mode, pilih **"Run as Client"**.
-- Jika Anda 1 WiFi / 1 Switch dengan Server: Klik **"Scan LAN for Printers"**.
-- Jika Anda berbeda VLAN / Gedung dengan Server: Ketik IP Server di kotak "Specific Server IP" lalu tekan Enter/Scan.
-- Pilih printer yang muncul di daftar, lalu klik **"Install Selected Printer"**.
-- Buka Microsoft Word, tekan `Ctrl + P`, pilih printer `ShaPrint - [Nama Printer]`, dan **Print!**
+1. Download `ShaPrint_Setup_vX.Y.Z.exe` from the GitHub Releases page (or get it from the `Output` folder if you built it yourself).
+2. Run the installer.
+3. The application will automatically create shortcuts on your Desktop and Start Menu.
 
 ---
 
-## ⚙️ Build ke Production (Developer)
+## 📖 How to Use
 
-Jika Anda ingin membungkus (*compile*) kode sumber dan membuat Installer sendiri:
+> [!IMPORTANT]  
+> **Native Driver Requirement:** To ensure 100% print fidelity, you **must install the official driver for the printer on the Client PC** (e.g., install the Epson L3210 driver on the Client, even though the printer is physically plugged into the Server).
 
-### 1. Compile Aplikasi (Single File)
-Buka Terminal di folder proyek `shaprint` dan ketikkan:
+### 1. On the Server PC (Plugged into the Printer)
+- Open ShaPrint from your Desktop.
+- On the first launch, select **"Run as Server"**.
+- Check the boxes next to the physical printers you want to expose to the network.
+- Click **"Start Server"**.
+- You're done! You can minimize the app to the System Tray.
+
+### 2. On the Client PC (Sending the Print Jobs)
+- **Run ShaPrint as Administrator** (Windows requires admin privileges to register the virtual printer port).
+- Select **"Run as Client"**.
+- If you are on the same Wi-Fi / Switch as the Server: Click **"Scan LAN / Connect"**.
+- If you are on a different VLAN / Building: Type the Server's IP address into the "Specific Server IP" box and click Scan.
+- Select your target printer from the list and click **"Install Selected Printer"**.
+- Open Microsoft Word (or any app), press `Ctrl + P`, select `ShaPrint - [Printer Name]`, and **Print!**
+
+---
+
+## ⚙️ Building from Source
+
+If you want to compile the source code and generate the installer yourself:
+
+### 1. Compile the Application
+Open a terminal in the `shaprint` root directory and run:
 ```bash
 dotnet publish ShaPrint.App/ShaPrint.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+
+# Do the same for the Updater
+dotnet publish ShaPrint.Updater/ShaPrint.Updater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 ```
 
-### 2. Buat Installer Windows
-Aplikasi ini sudah dikonfigurasi untuk dibungkus menggunakan **Inno Setup 6**.
-Jika Anda sudah menginstal Inno Setup, buka *PowerShell* dan ketik:
+### 2. Build the Windows Installer
+The application is configured to be packaged using **Inno Setup 6**. Open PowerShell and compile the `.iss` script:
 ```powershell
 & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer.iss
 ```
-File Installer `ShaPrint_Setup_v1.0.exe` akan muncul di dalam folder `Output\`.
+Your compiled installer `ShaPrint_Setup_v1.0.0.exe` will be generated inside the `Output\` folder.
 
 ---
 
-## ⚠ Pemecahan Masalah (Troubleshooting)
+## 🛠 Troubleshooting
 
-- **Failed to install printer (Client):** Pastikan Anda menekan klik kanan -> *Run as Administrator* saat membuka ShaPrint. Windows butuh *permission* untuk menanamkan virtual printer.
-- **Word nge-hang / Connecting to Printer lama sekali:** Ini biasanya karena fitur BIDI (*Bidirectional Support*) Windows aktif. ShaPrint sudah otomatis mematikan BIDI saat instalasi, namun jika masih terjadi, buka Control Panel -> Devices & Printers -> Klik Kanan Printer ShaPrint -> Printer Properties -> tab *Ports* -> Hapus centang pada *Enable bidirectional support*.
-- **Client tidak bisa menemukan Server (Scan kosong):** Matikan Windows Firewall di PC Server, atau gunakan kolom "Specific Server IP" jika Client & Server berada di segmen IP yang berbeda (Beda VLAN).
-- **Hasil Print Error / Keluar Huruf Acak:** Ini terjadi karena Driver Printer di PC Client tidak sama dengan PC Server. Pastikan menginstal Driver Resmi yang sama di kedua belah pihak.
+- **Failed to install printer (Client):** Ensure you opened ShaPrint via Right-Click -> *Run as Administrator*. The application needs elevated permissions to inject the virtual printer into the Windows spooler.
+- **Word freezes / "Connecting to Printer" takes forever:** This happens if Windows Bidirectional Support (BIDI) is enabled. ShaPrint disables this during installation, but if it persists: go to Control Panel -> Devices & Printers -> Right-click the ShaPrint Printer -> Printer Properties -> *Ports* tab -> Uncheck *Enable bidirectional support*.
+- **Client cannot find the Server (Empty scan list):** Disable the Windows Firewall on the Server PC or ensure ports 9876/UDP and 9877/TCP are open. If you are on a different subnet, auto-discovery won't work—use the "Specific Server IP" box instead.
+- **Printed output is gibberish/error codes:** This occurs when the Printer Driver on the Client PC does not match the Server PC. Make sure you install the exact same Official Driver on both machines.
+
+---
+
+<div align="center">
+  <b>Built with ❤️ by ardli-firman</b>
+</div>

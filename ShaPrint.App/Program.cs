@@ -27,6 +27,9 @@ namespace ShaPrint.App
             Application.SetCompatibleTextRenderingDefault(false);
             
             bool isStartup = args.Length > 0 && args[0] == "--startup";
+
+            // Check for updates before launching modes
+            UpdateChecker.CheckForUpdatesAsync().GetAwaiter().GetResult();
             
             var launcher = new LauncherForm(isStartup);
             launcher.CheckSavedModeAndLaunch();
