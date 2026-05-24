@@ -173,9 +173,10 @@ namespace ShaPrint.Client
             txtLog.ScrollBars = ScrollBars.Vertical;
             txtLog.Location = new Point(10, 465);
             txtLog.Size = new Size(480, 90);
-            txtLog.BackColor = Color.Black;
-            txtLog.ForeColor = Color.Lime;
-            txtLog.Font = new Font("Consolas", 9F);
+            txtLog.BackColor = Color.WhiteSmoke;
+            txtLog.ForeColor = Color.DarkSlateGray;
+            txtLog.Font = new Font("Consolas", 9.5F);
+            txtLog.BorderStyle = BorderStyle.FixedSingle;
             this.Controls.Add(txtLog);
 
             this.Size = new Size(520, 610);
