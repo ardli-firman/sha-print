@@ -25,6 +25,7 @@
         </ui:TitleBar>
 
         <tb:TaskbarIcon
+            x:Name="TrayIcon"
             ToolTipText="ShaPrint"
             IconSource="pack://application:,,,/icon.ico"
             LeftClickCommand="{Binding ViewModel.ShowApplicationCommand}">

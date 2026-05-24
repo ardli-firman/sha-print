@@ -27,6 +27,9 @@ namespace ShaPrint.WpfApp.Views.Windows
             // Intercept closing to hide instead of exit, creating the system tray stealth mode
             e.Cancel = true;
             this.Hide();
+            
+            TrayIcon.ShowBalloonTip("ShaPrint", "Aplikasi disembunyikan ke System Tray dan tetap berjalan di latar belakang.", Hardcodet.Wpf.TaskbarNotification.BalloonIcon.Info);
+            
             base.OnClosing(e);
         }
     }
