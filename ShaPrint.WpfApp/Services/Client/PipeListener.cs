@@ -42,10 +42,10 @@ namespace ShaPrint.Client
                 try
                 {
                     // Allow SYSTEM and Standard Users to write to this pipe (crucial since we run as Admin!)
-                    var pipeSecurity = new System.Security.AccessControl.PipeSecurity();
-                    pipeSecurity.AddAccessRule(new System.Security.AccessControl.PipeAccessRule(
+                    var pipeSecurity = new System.IO.Pipes.PipeSecurity();
+                    pipeSecurity.AddAccessRule(new System.IO.Pipes.PipeAccessRule(
                         new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.WorldSid, null),
-                        System.Security.AccessControl.PipeAccessRights.FullControl,
+                        System.IO.Pipes.PipeAccessRights.FullControl,
                         System.Security.AccessControl.AccessControlType.Allow));
 
                     using var pipeServer = System.IO.Pipes.NamedPipeServerStreamAcl.Create(
