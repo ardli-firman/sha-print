@@ -31,6 +31,7 @@ namespace ShaPrint.Core
 
         private static readonly byte[] AesSalt = Encoding.UTF8.GetBytes("ShaPrint-AES-v1");
         private static readonly byte[] HmacSalt = Encoding.UTF8.GetBytes("ShaPrint-HMAC-v1");
+        private static readonly byte[] LocalConfigSalt = Encoding.UTF8.GetBytes("ShaPrint-LocalConfig-HMAC-v1");
 
         // ─────────────────────────────────────────────
         // Key derivation (cached, but can be invalidated if channel changes)
@@ -152,8 +153,31 @@ namespace ShaPrint.Core
         }
 
         // ─────────────────────────────────────────────
-        // Config file integrity
+        // Config file integrity (Uses a separate, static key so channel changes don't break local configs)
         // ─────────────────────────────────────────────
+
+        private static readonly Lazy<byte[]> _localConfigHmacKey = new(
+            () =>
+            {
+                using var derive = new Rfc2898DeriveBytes("ShaPrint-Static-Local-Secret-Key", LocalConfigSalt, 100_000, HashAlgorithmName.SHA256);
+                return derive.GetBytes(HmacKeySize);
+            },
+            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+
+        private static string SignLocalConfigHmac(byte[] payload)
+        {
+            using var hmac = new HMACSHA256(_localConfigHmacKey.Value);
+            byte[] hash = hmac.ComputeHash(payload);
+            return Convert.ToBase64String(hash);
+        }
+
+        private static bool VerifyLocalConfigHmac(byte[] payload, string expectedSignature)
+        {
+            string actual = SignLocalConfigHmac(payload);
+            return CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(actual),
+                Encoding.UTF8.GetBytes(expectedSignature));
+        }
 
         /// <summary>
         /// Wraps JSON content for storage with an HMAC integrity check.
@@ -161,7 +185,7 @@ namespace ShaPrint.Core
         /// </summary>
         public static string WrapConfigWithHmac(string jsonContent)
         {
-            string sig = SignHmac(Encoding.UTF8.GetBytes(jsonContent));
+            string sig = SignLocalConfigHmac(Encoding.UTF8.GetBytes(jsonContent));
             return jsonContent + "\n<!--HMAC:" + sig + "-->";
         }
 
@@ -196,7 +220,7 @@ namespace ShaPrint.Core
             json = wrappedContent[..markerIdx];
             string expectedSig = wrappedContent[sigStart..sigEnd];
 
-            if (VerifyHmac(Encoding.UTF8.GetBytes(json), expectedSig))
+            if (VerifyLocalConfigHmac(Encoding.UTF8.GetBytes(json), expectedSig))
                 return ConfigUnwrapResult.Valid;
 
             json = null;
