@@ -41,7 +41,7 @@ namespace ShaPrint.Client
                         string err = addPrinterResult.ErrorMessage;
                         if (err.Contains("The specified driver does not exist", StringComparison.OrdinalIgnoreCase) || err.Contains("was not found", StringComparison.OrdinalIgnoreCase))
                         {
-                            return (false, $"Driver '{driverName}' belum terinstall di komputer ini. Silakan install driver printer tersebut terlebih dahulu.");
+                            return (false, $"Driver '{driverName}' is not installed on this computer. Please install the printer driver first.");
                         }
 
                         // If it failed for another reason, get the error message and suggest Admin
