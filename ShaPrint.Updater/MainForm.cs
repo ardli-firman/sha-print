@@ -107,18 +107,20 @@ namespace ShaPrint.Updater
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
                     FileName = tempFile,
-                    Arguments = "/VERYSILENT /SUPPRESSMSGBOXES",
+                    // Use /CLOSEAPPLICATIONS so Inno Setup kills anything still lingering.
+                    // Also pass a custom parameter to tell Inno Setup to launch the app after silent install.
+                    Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /FORCECLOSEAPPLICATIONS /LAUNCHAFTER",
                     UseShellExecute = true
                 };
                 Process.Start(psi);
 
-                // Exit updater
-                Application.Exit();
+                // Exit updater immediately so it releases its own file lock
+                Environment.Exit(0);
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Failed to download or install update: {ex.Message}", "Updater Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Application.Exit();
+                Environment.Exit(1);
             }
         }
     }

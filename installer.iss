@@ -34,4 +34,4 @@ Name: "{group}\Uninstall ShaPrint"; Filename: "{uninstallexe}"
 Name: "{commondesktop}\ShaPrint"; Filename: "{app}\ShaPrint.WpfApp.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\ShaPrint.WpfApp.exe"; Description: "Launch ShaPrint"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\ShaPrint.WpfApp.exe"; Description: "Launch ShaPrint"; Flags: nowait postinstall
