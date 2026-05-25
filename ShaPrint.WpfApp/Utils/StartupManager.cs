@@ -1,12 +1,12 @@
 using System;
-using Microsoft.Win32;
+using System.Diagnostics;
 using ShaPrint.Core;
 
 namespace ShaPrint.WpfApp.Utils
 {
     public static class StartupManager
     {
-        private const string AppName = "ShaPrint";
+        private const string TaskName = "ShaPrint_Startup";
 
         public static void SetStartup(bool enable)
         {
@@ -15,21 +15,31 @@ namespace ShaPrint.WpfApp.Utils
                 string exePath = Environment.ProcessPath ?? string.Empty;
                 if (string.IsNullOrEmpty(exePath)) return;
 
-                using (RegistryKey? key = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true))
+                if (enable)
                 {
-                    if (key != null)
+                    var psi = new ProcessStartInfo
                     {
-                        if (enable)
-                        {
-                            key.SetValue(AppName, $"\"{exePath}\" --startup");
-                            AppLogger.Log("[SYSTEM] Enabled Run on Windows Startup.");
-                        }
-                        else
-                        {
-                            key.DeleteValue(AppName, false);
-                            AppLogger.Log("[SYSTEM] Disabled Run on Windows Startup.");
-                        }
-                    }
+                        FileName = "schtasks.exe",
+                        Arguments = $"/create /tn \"{TaskName}\" /tr \"\\\"{exePath}\\\" --startup\" /sc onlogon /rl highest /f",
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    };
+                    using var p = Process.Start(psi);
+                    p?.WaitForExit();
+                    AppLogger.Log("[SYSTEM] Enabled Run on Windows Startup via Task Scheduler (Highest Privileges).");
+                }
+                else
+                {
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = "schtasks.exe",
+                        Arguments = $"/delete /tn \"{TaskName}\" /f",
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    };
+                    using var p = Process.Start(psi);
+                    p?.WaitForExit();
+                    AppLogger.Log("[SYSTEM] Disabled Run on Windows Startup via Task Scheduler.");
                 }
             }
             catch (Exception ex)
@@ -42,20 +52,19 @@ namespace ShaPrint.WpfApp.Utils
         {
             try
             {
-                using (RegistryKey? key = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false))
+                var psi = new ProcessStartInfo
                 {
-                    var val = key?.GetValue(AppName)?.ToString();
-                    if (val != null)
-                    {
-                        if (!val.Contains("--startup"))
-                        {
-                            // Trigger migration in the background
-                            System.Threading.Tasks.Task.Run(() => SetStartup(true));
-                        }
-                        return true;
-                    }
-                    return false;
-                }
+                    FileName = "schtasks.exe",
+                    Arguments = $"/query /tn \"{TaskName}\"",
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                using var p = Process.Start(psi);
+                if (p == null) return false;
+                p.WaitForExit();
+                return p.ExitCode == 0;
             }
             catch
             {

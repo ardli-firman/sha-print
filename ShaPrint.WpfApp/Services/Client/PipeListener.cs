@@ -41,7 +41,23 @@ namespace ShaPrint.Client
             {
                 try
                 {
-                    using var pipeServer = new NamedPipeServerStream(pipeNameOnly, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                    // Allow SYSTEM and Standard Users to write to this pipe (crucial since we run as Admin!)
+                    var pipeSecurity = new System.Security.AccessControl.PipeSecurity();
+                    pipeSecurity.AddAccessRule(new System.Security.AccessControl.PipeAccessRule(
+                        new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.WorldSid, null),
+                        System.Security.AccessControl.PipeAccessRights.FullControl,
+                        System.Security.AccessControl.AccessControlType.Allow));
+
+                    using var pipeServer = System.IO.Pipes.NamedPipeServerStreamAcl.Create(
+                        pipeNameOnly,
+                        PipeDirection.In,
+                        1,
+                        PipeTransmissionMode.Byte,
+                        PipeOptions.Asynchronous,
+                        0,
+                        0,
+                        pipeSecurity);
+
                     await pipeServer.WaitForConnectionAsync(token);
 
                     ShaPrint.Core.AppLogger.Log($"[CLIENT] Caught new print job on pipe: {pipeNameOnly}");
