@@ -38,9 +38,18 @@ namespace ShaPrint.Client
                     var addPrinterResult = RunPowerShell($"Add-Printer -Name '{safePrinterName}' -DriverName '{safeDriverName}' -PortName '{safePipeName}'");
                     if (!addPrinterResult.Success)
                     {
-                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Warning: Failed to install with Native Driver '{driverName}'. Falling back to 'Generic / Text Only'.");
-                        RunPowerShell($"Add-PrinterDriver -Name 'Generic / Text Only'");
-                        addPrinterResult = RunPowerShell($"Add-Printer -Name '{safePrinterName}' -DriverName 'Generic / Text Only' -PortName '{safePipeName}'");
+                        string err = addPrinterResult.ErrorMessage;
+                        if (err.Contains("The specified driver does not exist", StringComparison.OrdinalIgnoreCase) || err.Contains("was not found", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return (false, $"Driver '{driverName}' belum terinstall di komputer ini. Silakan install driver printer tersebut terlebih dahulu.");
+                        }
+
+                        // If it failed for another reason, get the error message and suggest Admin
+                        if (err.Contains("Access denied", StringComparison.OrdinalIgnoreCase) || err.Contains("Administrator", StringComparison.OrdinalIgnoreCase))
+                        {
+                            err += " (Please ensure you run this application as Administrator)";
+                        }
+                        return (false, "Driver installation failed. Last error: " + err);
                     }
 
                     if (addPrinterResult.Success)
@@ -52,14 +61,7 @@ namespace ShaPrint.Client
                         return (true, string.Empty);
                     }
                     
-                    // If everything failed, get the error message and suggest Admin
-                    string err = addPrinterResult.ErrorMessage;
-                    if (err.Contains("Access denied") || err.Contains("Administrator"))
-                    {
-                        err += " (Please ensure you run this application as Administrator)";
-                    }
-                    
-                    return (false, "All driver installation attempts failed. Last error: " + err);
+                    return (false, "Driver installation failed.");
                 }
                 catch (Exception ex)
                 {
