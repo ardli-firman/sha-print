@@ -19,6 +19,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <ApplicationIcon>icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <NoWarn>$(NoWarn);NU1701</NoWarn>
   </PropertyGroup>
 

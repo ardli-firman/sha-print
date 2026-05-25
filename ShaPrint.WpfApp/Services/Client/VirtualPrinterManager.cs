@@ -53,19 +53,20 @@ namespace ShaPrint.Client
                     }
 
                     // 2. Try native driver first
-                    IntPtr hPrinter = AddPrinterWithDriver(virtualPrinterName, pipeName, driverName);
+                    var (hPrinter, nativeErr) = AddPrinterWithDriver(virtualPrinterName, pipeName, driverName);
 
                     // 3. Fall back to Generic / Text Only if native driver fails
                     if (hPrinter == IntPtr.Zero && !IsGenericDriver(driverName))
                     {
-                        AppLogger.Log($"[CLIENT] Warning: Failed to install with Native Driver '{driverName}'. Falling back to 'Generic / Text Only'.");
-                        hPrinter = AddPrinterWithDriver(virtualPrinterName, pipeName, "Generic / Text Only");
+                        AppLogger.Log($"[CLIENT] Warning: Failed to install with Native Driver '{driverName}' (Error: {nativeErr}). Falling back to 'Generic / Text Only'.");
+                        var fallbackResult = AddPrinterWithDriver(virtualPrinterName, pipeName, "Generic / Text Only");
+                        hPrinter = fallbackResult.hPrinter;
+                        nativeErr = fallbackResult.err;
                     }
 
                     if (hPrinter == IntPtr.Zero)
                     {
-                        int err = Marshal.GetLastWin32Error();
-                        return (false, $"AddPrinter failed with Win32 error {err}. Ensure you have the correct driver installed.");
+                        return (false, $"AddPrinter failed with Win32 error {nativeErr}. Ensure you have the correct driver installed AND run as Administrator.");
                     }
 
                     SpoolerApi.ClosePrinter(hPrinter);
@@ -200,7 +201,7 @@ namespace ShaPrint.Client
         // Printer management
         // -----------------------------------------------------------------
 
-        private static IntPtr AddPrinterWithDriver(string printerName, string portName, string driverName)
+        private static (IntPtr hPrinter, int err) AddPrinterWithDriver(string printerName, string portName, string driverName)
         {
             var pi2 = new SpoolerApi.PRINTER_INFO_2
             {
@@ -218,12 +219,13 @@ namespace ShaPrint.Client
             {
                 Marshal.StructureToPtr(pi2, ptr, false);
                 IntPtr hPrinter = AddPrinter(null, 2, ptr);
+                int err = hPrinter == IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
+                
                 if (hPrinter == IntPtr.Zero)
                 {
-                    int err = Marshal.GetLastWin32Error();
                     AppLogger.Log($"[CLIENT] AddPrinter '{printerName}' with driver '{driverName}' failed: {err}");
                 }
-                return hPrinter;
+                return (hPrinter, err);
             }
             finally
             {
