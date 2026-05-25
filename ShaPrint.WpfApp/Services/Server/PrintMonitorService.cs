@@ -1,0 +1,111 @@
+using System;
+using System.Printing;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using ShaPrint.Core;
+using Wpf.Ui;
+using ShaPrint.WpfApp.Models;
+
+namespace ShaPrint.WpfApp.Services.Server
+{
+    public class PrintMonitorService
+    {
+        private CancellationTokenSource? _cts;
+        private readonly ISnackbarService _snackbarService;
+
+        public PrintMonitorService(ISnackbarService snackbarService)
+        {
+            _snackbarService = snackbarService;
+        }
+
+        public void Start()
+        {
+            if (_cts != null) return;
+            _cts = new CancellationTokenSource();
+            Task.Run(() => MonitorLoopAsync(_cts.Token));
+        }
+
+        public void Stop()
+        {
+            if (_cts == null) return;
+            _cts.Cancel();
+            _cts = null;
+        }
+
+        private async Task MonitorLoopAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    if (AppSettings.Current.AutoPurgeEnabled)
+                    {
+                        CheckPrintQueues();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error("[MONITOR] Error checking print queues", ex);
+                }
+
+                await Task.Delay(5000, token); // poll every 5 seconds
+            }
+        }
+
+        private void CheckPrintQueues()
+        {
+            using var server = new LocalPrintServer();
+            var queues = server.GetPrintQueues();
+
+            foreach (var queue in queues)
+            {
+                queue.Refresh();
+                
+                if (queue.NumberOfJobs > 0)
+                {
+                    var jobs = queue.GetPrintJobInfoCollection();
+                    foreach (var job in jobs)
+                    {
+                        if (IsJobInErrorState(job.JobStatus))
+                        {
+                            AppLogger.Error($"[MONITOR] Auto-Purging job {job.JobIdentifier} ({job.Name}) on {queue.Name} due to status {job.JobStatus}.");
+                            
+                            try
+                            {
+                                job.Cancel();
+                                ShowAlert(queue.Name, job.Name);
+                            }
+                            catch (Exception ex)
+                            {
+                                AppLogger.Error($"[MONITOR] Failed to cancel job {job.JobIdentifier}.", ex);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        public static bool IsJobInErrorState(PrintJobStatus status)
+        {
+            return status.HasFlag(PrintJobStatus.Error) || 
+                   status.HasFlag(PrintJobStatus.PaperOut) || 
+                   status.HasFlag(PrintJobStatus.Blocked) || 
+                   status.HasFlag(PrintJobStatus.Offline);
+        }
+
+        private void ShowAlert(string printerName, string jobName)
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            {
+                _snackbarService.Show(
+                    "Print Job Failed",
+                    $"Cetak gagal pada '{printerName}'. Job otomatis dibatalkan. Mohon cek printer secara fisik (paper jam / kertas habis).",
+                    Wpf.Ui.Controls.ControlAppearance.Danger,
+                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
+                    TimeSpan.FromSeconds(10)
+                );
+            });
+        }
+    }
+}

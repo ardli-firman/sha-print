@@ -24,6 +24,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             // Read settings
             var settings = AppSettings.Current;
             _autoUpdateEnabled = settings.AutoUpdateEnabled;
+            _autoPurgeEnabled = settings.AutoPurgeEnabled;
             _channelIndex = settings.Channel == UpdateChannel.Beta ? 1 : 0;
             _channelName = settings.NetworkChannel;
 
@@ -67,6 +68,15 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         partial void OnAutoUpdateEnabledChanged(bool value)
         {
             AppSettings.Current.AutoUpdateEnabled = value;
+            AppSettings.Save();
+        }
+
+        [ObservableProperty]
+        private bool _autoPurgeEnabled;
+
+        partial void OnAutoPurgeEnabledChanged(bool value)
+        {
+            AppSettings.Current.AutoPurgeEnabled = value;
             AppSettings.Save();
         }
 

@@ -14,6 +14,7 @@ namespace ShaPrint.WpfApp.Models
     public class AppSettingsData
     {
         public bool AutoUpdateEnabled { get; set; } = true;
+        public bool AutoPurgeEnabled { get; set; } = true;
         public DateTime LastUpdateCheck { get; set; } = DateTime.MinValue;
         public UpdateChannel Channel { get; set; } = UpdateChannel.Stable;
 

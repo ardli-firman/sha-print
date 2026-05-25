@@ -46,6 +46,18 @@
                 <ui:ToggleSwitch IsChecked="{Binding ViewModel.RunOnStartup}" />
             </ui:CardControl>
 
+            <!-- Auto Purge Setting -->
+            <ui:CardControl Margin="0,0,0,8" Icon="{ui:SymbolIcon Delete24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Auto-Purge &amp; Alerting" FontSize="14" FontWeight="Medium"/>
+                        <TextBlock Text="Cancel stuck jobs and alert operator on paper jam (Server mode)" FontSize="12" 
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:ToggleSwitch IsChecked="{Binding ViewModel.AutoPurgeEnabled}" />
+            </ui:CardControl>
+
             <!-- Switch Mode Action -->
             <ui:CardAction Command="{Binding ViewModel.ResetModeCommand}" Icon="{ui:SymbolIcon ArrowSwap24}" Margin="0,0,0,28">
                 <StackPanel>

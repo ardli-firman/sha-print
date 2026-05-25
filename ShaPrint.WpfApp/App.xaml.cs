@@ -46,6 +46,7 @@ namespace ShaPrint.WpfApp
                 // Background Services
                 services.AddSingleton<UpdateService>();
                 services.AddHostedService(provider => provider.GetRequiredService<UpdateService>());
+                services.AddSingleton<ShaPrint.WpfApp.Services.Server.PrintMonitorService>();
             }).Build();
 
         public static T? GetService<T>() where T : class

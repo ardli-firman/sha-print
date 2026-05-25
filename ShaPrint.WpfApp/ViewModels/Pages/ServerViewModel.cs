@@ -33,6 +33,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
     {
         private readonly DiscoveryServer _discoveryServer;
         private readonly PrintReceiver _printReceiver;
+        private readonly ShaPrint.WpfApp.Services.Server.PrintMonitorService _printMonitorService;
         private readonly INavigationService _navigationService;
         private readonly ISnackbarService _snackbarService;
         private readonly string _configFile;
@@ -46,10 +47,11 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public ObservableCollection<PrinterItem> Printers { get; } = new();
         public ObservableCollection<string> Logs { get; } = new();
 
-        public ServerViewModel(INavigationService navigationService, ISnackbarService snackbarService)
+        public ServerViewModel(INavigationService navigationService, ISnackbarService snackbarService, ShaPrint.WpfApp.Services.Server.PrintMonitorService printMonitorService)
         {
             _navigationService = navigationService;
             _snackbarService = snackbarService;
+            _printMonitorService = printMonitorService;
             _discoveryServer = new DiscoveryServer();
             _printReceiver = new PrintReceiver();
             
@@ -124,6 +126,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _discoveryServer.SetExposedPrinters(selectedPrinters);
             _discoveryServer.Start();
             _printReceiver.Start();
+            _printMonitorService.Start();
 
             // Ensure firewall rules are applied and logged whenever server starts
             FirewallManager.CheckAndAddFirewallRules();
@@ -141,6 +144,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
             _discoveryServer.Stop();
             _printReceiver.Stop();
+            _printMonitorService.Stop();
 
             IsRunning = false;
             StatusText = "Status: Stopped";
