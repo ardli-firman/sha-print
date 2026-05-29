@@ -106,7 +106,7 @@ namespace ShaPrint.Server
                         if (!string.IsNullOrEmpty(payload.TargetPrinterName) && payload.SpoolData != null && payload.SpoolData.Length > 0)
                         {
                             string docName = "ShaPrint Job - " + DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                            AppLogger.Log($"[SERVER] Injecting {payload.SpoolData.Length} bytes into Windows Spooler for '{payload.TargetPrinterName}'...");
+                            AppLogger.Log($"[SERVER] Injecting {payload.SpoolData.Length} bytes into Windows Spooler for '{payload.TargetPrinterName}'");
                             bool printed = SpoolerApi.PrintRawData(payload.TargetPrinterName, payload.SpoolData, docName);
                             
                             if (printed)

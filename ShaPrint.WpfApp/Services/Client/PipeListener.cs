@@ -86,10 +86,10 @@ namespace ShaPrint.Client
         {
             try
             {
-                ShaPrint.Core.AppLogger.Log($"[CLIENT] Connecting to Server at {_serverIp}:{Constants.PrintTcpPort}...");
+                ShaPrint.Core.AppLogger.Log($"[CLIENT] Connecting to Server at {_serverIp}:{Constants.PrintTcpPort}");
                 using var tcpClient = new TcpClient();
                 await tcpClient.ConnectAsync(_serverIp, Constants.PrintTcpPort);
-                ShaPrint.Core.AppLogger.Log($"[CLIENT] Connected. Sending payload...");
+                ShaPrint.Core.AppLogger.Log($"[CLIENT] Connected. Sending payload");
                 using var stream = tcpClient.GetStream();
 
                 var payload = new PrintJobPayload

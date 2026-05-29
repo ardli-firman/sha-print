@@ -116,7 +116,7 @@ namespace ShaPrint.Client
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script}\"",
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script} 2>&1 | Out-String -Width 4096\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -127,8 +127,10 @@ namespace ShaPrint.Client
             if (process == null) return (false, "Failed to start powershell.");
             
             process.WaitForExit();
-            string errors = process.StandardError.ReadToEnd();
-            return (process.ExitCode == 0, errors);
+            // Because of 2>&1, both normal output and errors are merged into StandardOutput without truncation
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            
+            return (process.ExitCode == 0, output);
         }
     }
 }

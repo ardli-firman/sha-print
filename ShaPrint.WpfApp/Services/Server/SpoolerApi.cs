@@ -166,7 +166,7 @@ namespace ShaPrint.Server
                 ShaPrint.Core.AppLogger.Log($"[SPOOLER] Attempting to open printer: '{printerName}'");
                 if (OpenPrinter(printerName.Normalize(), out hPrinter, IntPtr.Zero))
                 {
-                    ShaPrint.Core.AppLogger.Log($"[SPOOLER] Printer opened successfully. Starting document '{documentName}'...");
+                    ShaPrint.Core.AppLogger.Log($"[SPOOLER] Printer opened successfully. Starting document '{documentName}'");
                     DOCINFO di = new DOCINFO
                     {
                         pDocName = documentName,
