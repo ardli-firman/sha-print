@@ -348,13 +348,16 @@ namespace ShaPrint.Client
             lbServers.Items.Clear();
 
             _discoveredServers = await _discoveryClient.DiscoverServersAsync(targetIp);
+            var localPrinters = ShaPrint.Server.SpoolerApi.GetLocalPrinters();
 
             foreach (var server in _discoveredServers)
             {
                 foreach (var printer in server.ExposedPrinters)
                 {
-                    string virtualPrinterName = $"ShaPrint - {printer.Name}";
-                    bool isInstalled = _installedPrinters.Any(p => p.VirtualPrinterName == virtualPrinterName);
+                    string virtualPrinterName = $"ShaPrint [{server.ServerName}] - {printer.Name}";
+                    bool isInstalledConfig = _installedPrinters.Any(p => p.VirtualPrinterName.Equals(virtualPrinterName, StringComparison.OrdinalIgnoreCase));
+                    bool isInstalledOs = localPrinters.Contains(virtualPrinterName, StringComparer.OrdinalIgnoreCase);
+                    bool isInstalled = isInstalledConfig || isInstalledOs;
 
                     lbServers.Items.Add(new PrinterDisplayItem
                     {
@@ -404,7 +407,7 @@ namespace ShaPrint.Client
                     !string.IsNullOrEmpty(item.Printer.DriverName) ? item.Printer.DriverName : "Generic / Text Only");
                 string serverIp = Validators.ValidateIpAddress(item.Server.IpAddress);
 
-                string virtualPrinterName = $"ShaPrint - {printerName}";
+                string virtualPrinterName = $"ShaPrint [{serverName}] - {printerName}";
 
                 if (_installedPrinters.Any(p => p.VirtualPrinterName == virtualPrinterName))
                 {
@@ -468,34 +471,32 @@ namespace ShaPrint.Client
         {
             if (lbServers.SelectedItem is PrinterDisplayItem item)
             {
-                string virtualPrinterName = $"ShaPrint - {item.Printer.Name}";
-                var config = _installedPrinters.FirstOrDefault(p => p.VirtualPrinterName == virtualPrinterName);
-
-                if (config == null)
-                {
-                    MessageBox.Show("This printer is not installed yet.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
+                string virtualPrinterName = $"ShaPrint [{item.Server.ServerName}] - {item.Printer.Name}";
+                var config = _installedPrinters.FirstOrDefault(p => p.VirtualPrinterName.Equals(virtualPrinterName, StringComparison.OrdinalIgnoreCase));
 
                 btnDelete.Enabled = false;
                 lblStatus.Text = "Deleting...";
 
-                bool removed = await VirtualPrinterManager.RemovePrinterAsync(config.VirtualPrinterName, config.PipeName);
+                string pipeName = config?.PipeName ?? string.Empty;
+                bool removed = await VirtualPrinterManager.RemovePrinterAsync(virtualPrinterName, pipeName);
 
                 if (removed)
                 {
-                    _installedPrinters.Remove(config);
-                    SaveConfiguration();
+                    if (config != null)
+                    {
+                        _installedPrinters.Remove(config);
+                        SaveConfiguration();
+
+                        var listener = _activeListeners.FirstOrDefault(l => l.PipeName == config.PipeName);
+                        if (listener != null)
+                        {
+                            listener.Stop();
+                            _activeListeners.Remove(listener);
+                        }
+                    }
 
                     item.IsInstalled = false;
                     lbServers.Items[lbServers.SelectedIndex] = item;
-
-                    var listener = _activeListeners.FirstOrDefault(l => l.PipeName == config.PipeName);
-                    if (listener != null)
-                    {
-                        listener.Stop();
-                        _activeListeners.Remove(listener);
-                    }
 
                     lblStatus.Text = "Deleted successfully.";
                     MessageBox.Show($"Printer '{virtualPrinterName}' has been removed.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);

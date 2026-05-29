@@ -38,5 +38,42 @@ namespace ShaPrint.Tests
             // Assert
             Assert.Equal(expected, result);
         }
+
+        [Fact]
+        public void SetMonitoredPrinters_ShouldUpdateInternalList()
+        {
+            // Arrange
+            var service = new PrintMonitorService(null!);
+            var printers = new System.Collections.Generic.List<string> { "PrinterA", "PrinterB" };
+
+            // Act
+            service.SetMonitoredPrinters(printers);
+
+            // Assert
+            var field = typeof(PrintMonitorService).GetField("_monitoredPrinters", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var monitored = field!.GetValue(service) as System.Collections.Generic.List<string>;
+
+            Assert.NotNull(monitored);
+            Assert.Equal(2, monitored.Count);
+            Assert.Contains("PrinterA", monitored);
+            Assert.Contains("PrinterB", monitored);
+        }
+
+        [Fact]
+        public void SetMonitoredPrinters_WithNull_ShouldInitializeEmptyList()
+        {
+            // Arrange
+            var service = new PrintMonitorService(null!);
+
+            // Act
+            service.SetMonitoredPrinters(null!);
+
+            // Assert
+            var field = typeof(PrintMonitorService).GetField("_monitoredPrinters", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var monitored = field!.GetValue(service) as System.Collections.Generic.List<string>;
+
+            Assert.NotNull(monitored);
+            Assert.Empty(monitored);
+        }
     }
 }

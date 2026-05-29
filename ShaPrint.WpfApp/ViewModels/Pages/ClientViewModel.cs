@@ -117,14 +117,17 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             StatusText = "Scanning...";
             DiscoveredPrinters.Clear();
 
+            var localPrinters = ShaPrint.Server.SpoolerApi.GetLocalPrinters();
             var discoveredServers = await _discoveryClient.DiscoverServersAsync(targetIp);
 
             foreach (var server in discoveredServers)
             {
                 foreach (var printer in server.ExposedPrinters)
                 {
-                    string virtualPrinterName = $"ShaPrint - {printer.Name}";
-                    bool isInstalled = _installedPrinters.Any(p => p.VirtualPrinterName == virtualPrinterName);
+                    string virtualPrinterName = $"ShaPrint [{server.ServerName}] - {printer.Name}";
+                    bool isInstalledConfig = _installedPrinters.Any(p => p.VirtualPrinterName.Equals(virtualPrinterName, StringComparison.OrdinalIgnoreCase));
+                    bool isInstalledOs = localPrinters.Contains(virtualPrinterName, StringComparer.OrdinalIgnoreCase);
+                    bool isInstalled = isInstalledConfig || isInstalledOs;
 
                     DiscoveredPrinters.Add(new PrinterDisplayItem(
                         server,
@@ -153,7 +156,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     !string.IsNullOrEmpty(item.Printer.DriverName) ? item.Printer.DriverName : "Generic / Text Only");
                 string serverIp = Validators.ValidateIpAddress(item.Server.IpAddress);
 
-                string virtualPrinterName = $"ShaPrint - {printerName}";
+                string virtualPrinterName = $"ShaPrint [{serverName}] - {printerName}";
 
                 if (_installedPrinters.Any(p => p.VirtualPrinterName == virtualPrinterName))
                 {
@@ -209,28 +212,30 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             if (SelectedPrinter == null || !SelectedPrinter.IsInstalled) return;
             var item = SelectedPrinter;
 
-            string virtualPrinterName = $"ShaPrint - {item.Printer.Name}";
-            var config = _installedPrinters.FirstOrDefault(p => p.VirtualPrinterName == virtualPrinterName);
-
-            if (config == null) return;
+            string virtualPrinterName = $"ShaPrint [{item.Server.ServerName}] - {item.Printer.Name}";
+            var config = _installedPrinters.FirstOrDefault(p => p.VirtualPrinterName.Equals(virtualPrinterName, StringComparison.OrdinalIgnoreCase));
 
             StatusText = "Deleting...";
 
-            bool removed = await VirtualPrinterManager.RemovePrinterAsync(config.VirtualPrinterName, config.PipeName);
+            string pipeName = config?.PipeName ?? string.Empty;
+            bool removed = await VirtualPrinterManager.RemovePrinterAsync(virtualPrinterName, pipeName);
 
             if (removed)
             {
-                _installedPrinters.Remove(config);
-                SaveConfiguration();
+                if (config != null)
+                {
+                    _installedPrinters.Remove(config);
+                    SaveConfiguration();
+
+                    var listener = _activeListeners.FirstOrDefault(l => l.PipeName == config.PipeName);
+                    if (listener != null)
+                    {
+                        listener.Stop();
+                        _activeListeners.Remove(listener);
+                    }
+                }
 
                 item.IsInstalled = false;
-
-                var listener = _activeListeners.FirstOrDefault(l => l.PipeName == config.PipeName);
-                if (listener != null)
-                {
-                    listener.Stop();
-                    _activeListeners.Remove(listener);
-                }
 
                 StatusText = "Deleted successfully.";
                 _snackbarService.Show("Printer Removed", $"'{virtualPrinterName}' has been removed.", ControlAppearance.Info, new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Delete24), TimeSpan.FromSeconds(3));
