@@ -12,7 +12,7 @@ AppVersion={#MyAppVersion}
 AppPublisher=ShaPrint Open Source
 DefaultDirName={autopf}\ShaPrint
 DefaultGroupName=ShaPrint
-UninstallDisplayIcon={app}\ShaPrint.WpfApp.exe
+UninstallDisplayIcon={app}\ShaPrint.exe
 SetupIconFile=ShaPrint.WpfApp\icon.ico
 Compression=lzma2
 SolidCompression=yes
@@ -29,9 +29,9 @@ Source: "ShaPrint.WpfApp\bin\Release\net8.0-windows\win-x64\publish\*"; DestDir:
 Source: "ShaPrint.Updater\bin\Release\net8.0-windows\win-x64\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\ShaPrint"; Filename: "{app}\ShaPrint.WpfApp.exe"
+Name: "{group}\ShaPrint"; Filename: "{app}\ShaPrint.exe"
 Name: "{group}\Uninstall ShaPrint"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\ShaPrint"; Filename: "{app}\ShaPrint.WpfApp.exe"; Tasks: desktopicon
+Name: "{commondesktop}\ShaPrint"; Filename: "{app}\ShaPrint.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\ShaPrint.WpfApp.exe"; Description: "Launch ShaPrint"; Flags: nowait postinstall shellexec
+Filename: "{app}\ShaPrint.exe"; Description: "Launch ShaPrint"; Flags: nowait postinstall shellexec

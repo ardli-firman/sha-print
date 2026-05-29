@@ -129,6 +129,18 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     string virtualPrinterName = $"ShaPrint [{server.ServerName}] - {printer.Name}";
                     bool isInstalledConfig = _installedPrinters.Any(p => p.VirtualPrinterName.Equals(virtualPrinterName, StringComparison.OrdinalIgnoreCase));
                     bool isInstalledOs = localPrinters.Contains(virtualPrinterName, StringComparer.OrdinalIgnoreCase);
+
+                    // Fallback backward compatibility check for old format: "ShaPrint - {PrinterName}"
+                    if (!isInstalledConfig && !isInstalledOs)
+                    {
+                        isInstalledConfig = _installedPrinters.Any(p => 
+                            p.TargetPrinterName.Equals(printer.Name, StringComparison.OrdinalIgnoreCase) && 
+                            p.ServerIp.Equals(server.IpAddress));
+                            
+                        string oldName = $"ShaPrint - {printer.Name}";
+                        isInstalledOs = localPrinters.Contains(oldName, StringComparer.OrdinalIgnoreCase);
+                    }
+
                     bool isInstalled = isInstalledConfig || isInstalledOs;
 
                     DiscoveredPrinters.Add(new PrinterDisplayItem(

@@ -96,7 +96,7 @@ namespace ShaPrint.Updater
                 _progressBar.Style = ProgressBarStyle.Marquee;
 
                 // Close the main application to avoid file locks
-                Process[] processes = Process.GetProcessesByName("ShaPrint.WpfApp");
+                Process[] processes = Process.GetProcessesByName("ShaPrint");
                 foreach (var p in processes)
                 {
                     p.Kill();
