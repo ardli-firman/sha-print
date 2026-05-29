@@ -5,8 +5,6 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Core", "ShaPrint.Core\ShaPrint.Core.csproj", "{8EA124B5-A02B-4E9C-A0CC-D46CF4225267}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.App", "ShaPrint.App\ShaPrint.App.csproj", "{94900A12-A66E-4AEF-8DF6-5849F07C490E}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Tests", "ShaPrint.Tests\ShaPrint.Tests.csproj", "{139B89E9-8D20-43C3-B027-CA4885E360EF}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Updater", "ShaPrint.Updater\ShaPrint.Updater.csproj", "{CCCDFD1C-90F4-4F4F-AF69-B76ADF556C89}"
@@ -26,10 +24,6 @@ Global
 		{8EA124B5-A02B-4E9C-A0CC-D46CF4225267}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8EA124B5-A02B-4E9C-A0CC-D46CF4225267}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8EA124B5-A02B-4E9C-A0CC-D46CF4225267}.Release|Any CPU.Build.0 = Release|Any CPU
-		{94900A12-A66E-4AEF-8DF6-5849F07C490E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{94900A12-A66E-4AEF-8DF6-5849F07C490E}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{94900A12-A66E-4AEF-8DF6-5849F07C490E}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{94900A12-A66E-4AEF-8DF6-5849F07C490E}.Release|Any CPU.Build.0 = Release|Any CPU
 		{139B89E9-8D20-43C3-B027-CA4885E360EF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{139B89E9-8D20-43C3-B027-CA4885E360EF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{139B89E9-8D20-43C3-B027-CA4885E360EF}.Release|Any CPU.ActiveCfg = Release|Any CPU
