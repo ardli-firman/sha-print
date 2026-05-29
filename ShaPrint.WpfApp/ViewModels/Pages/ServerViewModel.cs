@@ -124,6 +124,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             }
 
             _discoveryServer.SetExposedPrinters(selectedPrinters);
+            _printMonitorService.SetMonitoredPrinters(selectedPrinters);
             _discoveryServer.Start();
             _printReceiver.Start();
             _printMonitorService.Start();

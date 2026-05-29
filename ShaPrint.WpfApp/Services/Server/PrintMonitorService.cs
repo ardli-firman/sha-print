@@ -13,10 +13,16 @@ namespace ShaPrint.WpfApp.Services.Server
     {
         private CancellationTokenSource? _cts;
         private readonly ISnackbarService _snackbarService;
+        private List<string> _monitoredPrinters = new List<string>();
 
         public PrintMonitorService(ISnackbarService snackbarService)
         {
             _snackbarService = snackbarService;
+        }
+
+        public void SetMonitoredPrinters(List<string> printers)
+        {
+            _monitoredPrinters = printers ?? new List<string>();
         }
 
         public void Start()
@@ -60,6 +66,9 @@ namespace ShaPrint.WpfApp.Services.Server
 
             foreach (var queue in queues)
             {
+                if (!_monitoredPrinters.Contains(queue.Name))
+                    continue;
+
                 queue.Refresh();
                 
                 if (queue.NumberOfJobs > 0)
