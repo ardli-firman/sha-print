@@ -22,6 +22,22 @@ By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TC
 
 ---
 
+## 📸 Screenshots
+
+<div align="center">
+<table>
+  <tr>
+    <td align="center" colspan="4"><b>Switch Mode</b><br><img src="img/1.png" width="400"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Server Mode</b><br><img src="img/2.png" width="220"></td>
+    <td align="center"><b>Client Mode</b><br><img src="img/3.png" width="220"></td>
+    <td align="center"><b>Settings</b><br><img src="img/4.png" width="220"></td>
+    <td align="center"><b>Update Manager</b><br><img src="img/5.png" width="220"></td>
+  </tr>
+</table>
+</div>
+
 ## 🏗 System Architecture
 
 1. **Server Mode**
