@@ -3,10 +3,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.NetworkInformation;
-<<<<<<< HEAD
 using System.Linq;
-=======
->>>>>>> 9ed7fbffc45e84b1ddf99e5a1119f9f9eac5c4eb
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -26,80 +23,55 @@ namespace ShaPrint.Client
             IPAddress ip = string.IsNullOrWhiteSpace(targetIp) ? IPAddress.Broadcast : IPAddress.Parse(targetIp);
             byte[] requestData = Encoding.UTF8.GetBytes(Constants.DiscoveryRequestMessage);
             
-<<<<<<< HEAD
-            if (string.IsNullOrWhiteSpace(targetIp))
-            {
-                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces().Where(n => n.OperationalStatus == OperationalStatus.Up && n.Supports(NetworkInterfaceComponent.IPv4)))
-                {
-                    foreach (var addr in ni.GetIPProperties().UnicastAddresses.Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork))
-                    {
-                        var mask = addr.IPv4Mask;
-                        var ipBytes = addr.Address.GetAddressBytes();
-                        var maskBytes = mask.GetAddressBytes();
-                        var broadcastBytes = new byte[4];
-                        for (int i = 0; i < 4; i++) broadcastBytes[i] = (byte)(ipBytes[i] | ~maskBytes[i]);
-
-                        var broadcastIp = new IPAddress(broadcastBytes);
-                        await udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(broadcastIp, Constants.DiscoveryUdpPort));
-                        
-                        uint ipInt = (uint)ipBytes[0] << 24 | (uint)ipBytes[1] << 16 | (uint)ipBytes[2] << 8 | (uint)ipBytes[3];
-                        uint maskInt = (uint)maskBytes[0] << 24 | (uint)maskBytes[1] << 16 | (uint)maskBytes[2] << 8 | (uint)maskBytes[3];
-                        uint networkInt = ipInt & maskInt;
-                        uint broadcastInt = networkInt | ~maskInt;
-                        
-                        uint hostCount = ~maskInt;
-                        if (hostCount > 0 && hostCount <= 1024)
-                        {
-                            for (uint i = networkInt + 1; i < broadcastInt; i++)
-                            {
-                                byte[] targetIpBytes = new byte[] { (byte)(i >> 24), (byte)(i >> 16), (byte)(i >> 8), (byte)i };
-                                var targetEp = new IPEndPoint(new IPAddress(targetIpBytes), Constants.DiscoveryUdpPort);
-                                _ = udpClient.SendAsync(requestData, requestData.Length, targetEp);
-=======
-            if (ip.Equals(IPAddress.Broadcast))
+            if (string.IsNullOrWhiteSpace(targetIp) || ip.Equals(IPAddress.Broadcast))
             {
                 // Send standard 255.255.255.255 broadcast
                 await udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(IPAddress.Broadcast, Constants.DiscoveryUdpPort));
                 
-                // Send to all specific subnet broadcast addresses to ensure it goes out on the physical LAN, 
-                // bypassing Windows routing issues with multiple adapters (like WSL, VirtualBox, VPNs)
                 try
                 {
-                    foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                    foreach (var ni in NetworkInterface.GetAllNetworkInterfaces().Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType != NetworkInterfaceType.Loopback))
                     {
-                        if (ni.OperationalStatus == OperationalStatus.Up && 
-                            ni.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                        foreach (var uipi in ni.GetIPProperties().UnicastAddresses.Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork))
                         {
-                            foreach (var uipi in ni.GetIPProperties().UnicastAddresses)
+                            var mask = uipi.IPv4Mask;
+                            if (mask != null && !mask.Equals(IPAddress.Any))
                             {
-                                if (uipi.Address.AddressFamily == AddressFamily.InterNetwork)
+                                byte[] ipBytes = uipi.Address.GetAddressBytes();
+                                byte[] maskBytes = mask.GetAddressBytes();
+                                
+                                // 1. Subnet Directed Broadcast (e.g. 192.168.1.255)
+                                byte[] broadcastBytes = new byte[ipBytes.Length];
+                                for (int i = 0; i < broadcastBytes.Length; i++)
                                 {
-                                    var mask = uipi.IPv4Mask;
-                                    if (mask != null && !mask.Equals(IPAddress.Any))
+                                    broadcastBytes[i] = (byte)(ipBytes[i] | (maskBytes[i] ^ 255));
+                                }
+                                var broadcastIp = new IPAddress(broadcastBytes);
+                                await udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(broadcastIp, Constants.DiscoveryUdpPort));
+
+                                // 2. Unicast Sweep for AP Isolation bypass
+                                uint ipInt = (uint)ipBytes[0] << 24 | (uint)ipBytes[1] << 16 | (uint)ipBytes[2] << 8 | (uint)ipBytes[3];
+                                uint maskInt = (uint)maskBytes[0] << 24 | (uint)maskBytes[1] << 16 | (uint)maskBytes[2] << 8 | (uint)maskBytes[3];
+                                uint networkInt = ipInt & maskInt;
+                                uint broadcastInt = networkInt | ~maskInt;
+                                
+                                uint hostCount = ~maskInt;
+                                if (hostCount > 0 && hostCount <= 1024)
+                                {
+                                    for (uint i = networkInt + 1; i < broadcastInt; i++)
                                     {
-                                        byte[] ipBytes = uipi.Address.GetAddressBytes();
-                                        byte[] maskBytes = mask.GetAddressBytes();
-                                        byte[] broadcastBytes = new byte[ipBytes.Length];
-                                        for (int i = 0; i < broadcastBytes.Length; i++)
-                                        {
-                                            broadcastBytes[i] = (byte)(ipBytes[i] | (maskBytes[i] ^ 255));
-                                        }
-                                        var broadcastIp = new IPAddress(broadcastBytes);
-                                        await udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(broadcastIp, Constants.DiscoveryUdpPort));
+                                        byte[] targetIpBytes = new byte[] { (byte)(i >> 24), (byte)(i >> 16), (byte)(i >> 8), (byte)i };
+                                        _ = udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(new IPAddress(targetIpBytes), Constants.DiscoveryUdpPort));
                                     }
                                 }
->>>>>>> 9ed7fbffc45e84b1ddf99e5a1119f9f9eac5c4eb
                             }
                         }
                     }
                 }
-<<<<<<< HEAD
-=======
                 catch (Exception ex)
                 {
                     AppLogger.Log($"[DISCOVERY] Error enumerating network interfaces: {ex.Message}");
                 }
->>>>>>> 9ed7fbffc45e84b1ddf99e5a1119f9f9eac5c4eb
             }
             else
             {
