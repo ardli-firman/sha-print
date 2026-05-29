@@ -4,17 +4,43 @@
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       Title="Server Dashboard">
 
-    <DockPanel Margin="24,20,24,16" LastChildFill="True">
+    <Grid Margin="24,20,24,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Header -->
+            <RowDefinition Height="3*"/>   <!-- Printer List -->
+            <RowDefinition Height="Auto"/> <!-- Controls bar -->
+            <RowDefinition Height="Auto"/> <!-- Splitter -->
+            <RowDefinition Height="Auto"/> <!-- Log label -->
+            <RowDefinition Height="2*"/>   <!-- Logs -->
+        </Grid.RowDefinitions>
 
         <!-- Header (top) -->
-        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
             <TextBlock Text="Server Dashboard" FontSize="28" FontWeight="SemiBold"/>
             <TextBlock Text="Select printers to expose to the network:" 
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,0"/>
         </StackPanel>
 
+        <!-- Printer List (fills remaining space, compact items) -->
+        <ListBox Grid.Row="1" ItemsSource="{Binding ViewModel.Printers}" 
+                 IsEnabled="{Binding ViewModel.IsNotRunning}"
+                 BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto" Margin="0,0,0,12">
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="Padding" Value="2,0"/>
+                    <Setter Property="MinHeight" Value="0"/>
+                </Style>
+            </ListBox.ItemContainerStyle>
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected}" Margin="2,1" Padding="4,0"/>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
         <!-- Controls bar (bottom) -->
-        <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
+        <Grid Grid.Row="2" Margin="0,10,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
@@ -41,44 +67,18 @@
         </Grid>
 
         <!-- Activity Log label (bottom) -->
-        <TextBlock DockPanel.Dock="Bottom" Text="Activity Log:" Margin="0,10,0,3" 
+        <GridSplitter Grid.Row="3" Height="5" HorizontalAlignment="Stretch" Background="Transparent" Margin="0,5"/>
+
+        <TextBlock Grid.Row="4" Text="Activity Log (Resizable &amp; Copyable):" Margin="0,0,0,3" 
                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" FontSize="12"/>
 
         <!-- Activity Log (bottom, compact) -->
-        <ListBox DockPanel.Dock="Bottom" ItemsSource="{Binding ViewModel.Logs}" 
-                 FontFamily="Consolas" FontSize="11" Height="110"
+        <TextBox Grid.Row="5" Text="{Binding ViewModel.LogsText, Mode=OneWay}" 
+                 IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                 FontFamily="Consolas" FontSize="11"
                  BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                 ScrollViewer.VerticalScrollBarVisibility="Auto">
-            <ListBox.ItemContainerStyle>
-                <Style TargetType="ListBoxItem">
-                    <Setter Property="Padding" Value="4,1"/>
-                    <Setter Property="MinHeight" Value="0"/>
-                </Style>
-            </ListBox.ItemContainerStyle>
-            <ListBox.ItemTemplate>
-                <DataTemplate>
-                    <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
-                </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
+                 VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto" />
 
-        <!-- Printer List (fills remaining space, compact items) -->
-        <ListBox ItemsSource="{Binding ViewModel.Printers}" 
-                 IsEnabled="{Binding ViewModel.IsNotRunning}"
-                 BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                 ScrollViewer.VerticalScrollBarVisibility="Auto">
-            <ListBox.ItemContainerStyle>
-                <Style TargetType="ListBoxItem">
-                    <Setter Property="Padding" Value="2,0"/>
-                    <Setter Property="MinHeight" Value="0"/>
-                </Style>
-            </ListBox.ItemContainerStyle>
-            <ListBox.ItemTemplate>
-                <DataTemplate>
-                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected}" Margin="2,1" Padding="4,0"/>
-                </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
-
-    </DockPanel>
+    </Grid>
 </Page>

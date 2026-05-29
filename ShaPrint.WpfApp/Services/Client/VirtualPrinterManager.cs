@@ -70,7 +70,7 @@ namespace ShaPrint.Client
             });
         }
 
-        public static async Task<bool> RemovePrinterAsync(string printerName, string pipeName)
+        public static async Task<(bool Success, string ErrorMessage)> RemovePrinterAsync(string printerName, string pipeName)
         {
             return await Task.Run(() =>
             {
@@ -79,13 +79,27 @@ namespace ShaPrint.Client
                     string safePrinterName = printerName.Replace("'", "''");
                     string safePipeName = pipeName.Replace("'", "''");
                     
-                    RunPowerShell($"Remove-Printer -Name '{safePrinterName}'");
-                    RunPowerShell($"Remove-PrinterPort -Name '{safePipeName}'");
-                    return true;
+                    // Clear any stuck print jobs to prevent "ghost printers" (Pending Deletion)
+                    RunPowerShell($"Get-PrintJob -PrinterName '{safePrinterName}' -ErrorAction SilentlyContinue | Remove-PrintJob -ErrorAction SilentlyContinue");
+
+                    var removeResult = RunPowerShell($"Remove-Printer -Name '{safePrinterName}'");
+                    
+                    if (!string.IsNullOrEmpty(safePipeName))
+                    {
+                        RunPowerShell($"Remove-PrinterPort -Name '{safePipeName}'");
+                    }
+
+                    // If it was already removed, we can consider it a success
+                    if (!removeResult.Success && removeResult.ErrorMessage.Contains("was not found"))
+                    {
+                        return (true, string.Empty);
+                    }
+
+                    return (removeResult.Success, removeResult.ErrorMessage);
                 }
-                catch
+                catch (Exception ex)
                 {
-                    return false;
+                    return (false, "Exception: " + ex.Message);
                 }
             });
         }

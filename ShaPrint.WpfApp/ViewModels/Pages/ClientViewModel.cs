@@ -69,6 +69,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         public ObservableCollection<PrinterDisplayItem> DiscoveredPrinters { get; } = new();
         public ObservableCollection<string> Logs { get; } = new();
+        public string LogsText => string.Join(Environment.NewLine, Logs);
 
         public ClientViewModel(INavigationService navigationService, ISnackbarService snackbarService)
         {
@@ -89,13 +90,14 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         {
             if (msg.Contains("[SERVER]", StringComparison.OrdinalIgnoreCase)) return;
 
-            Application.Current.Dispatcher.Invoke(() =>
+            Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 Logs.Insert(0, $"[{DateTime.Now:HH:mm:ss}] {msg}");
                 if (Logs.Count > 200)
                 {
                     Logs.RemoveAt(Logs.Count - 1);
                 }
+                OnPropertyChanged(nameof(LogsText));
             });
         }
 
@@ -215,12 +217,35 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             string virtualPrinterName = $"ShaPrint [{item.Server.ServerName}] - {item.Printer.Name}";
             var config = _installedPrinters.FirstOrDefault(p => p.VirtualPrinterName.Equals(virtualPrinterName, StringComparison.OrdinalIgnoreCase));
 
+            // Fallback for older configs
+            if (config == null)
+            {
+                config = _installedPrinters.FirstOrDefault(p => 
+                    p.TargetPrinterName.Equals(item.Printer.Name, StringComparison.OrdinalIgnoreCase) && 
+                    p.ServerIp.Equals(item.Server.IpAddress));
+                
+                if (config != null)
+                {
+                    virtualPrinterName = config.VirtualPrinterName;
+                }
+                else
+                {
+                    // Fallback: check if the old format OS printer exists without config
+                    string oldName = $"ShaPrint - {item.Printer.Name}";
+                    var localPrinters = ShaPrint.Server.SpoolerApi.GetLocalPrinters();
+                    if (localPrinters.Contains(oldName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        virtualPrinterName = oldName;
+                    }
+                }
+            }
+
             StatusText = "Deleting...";
 
             string pipeName = config?.PipeName ?? string.Empty;
-            bool removed = await VirtualPrinterManager.RemovePrinterAsync(virtualPrinterName, pipeName);
+            var result = await VirtualPrinterManager.RemovePrinterAsync(virtualPrinterName, pipeName);
 
-            if (removed)
+            if (result.Success)
             {
                 if (config != null)
                 {
@@ -243,7 +268,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             else
             {
                 StatusText = "Deletion failed.";
-                System.Windows.MessageBox.Show("Failed to delete printer. Please run as Administrator.", "Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+                System.Windows.MessageBox.Show($"Failed to delete printer. Please run as Administrator.\n\nDetails: {result.ErrorMessage}", "Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
             }
         }
 

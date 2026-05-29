@@ -474,6 +474,29 @@ namespace ShaPrint.Client
                 string virtualPrinterName = $"ShaPrint [{item.Server.ServerName}] - {item.Printer.Name}";
                 var config = _installedPrinters.FirstOrDefault(p => p.VirtualPrinterName.Equals(virtualPrinterName, StringComparison.OrdinalIgnoreCase));
 
+                // Fallback for older configs
+                if (config == null)
+                {
+                    config = _installedPrinters.FirstOrDefault(p => 
+                        p.TargetPrinterName.Equals(item.Printer.Name, StringComparison.OrdinalIgnoreCase) && 
+                        p.ServerIp.Equals(item.Server.IpAddress));
+                    
+                    if (config != null)
+                    {
+                        virtualPrinterName = config.VirtualPrinterName;
+                    }
+                    else
+                    {
+                        // Fallback: check if the old format OS printer exists without config
+                        string oldName = $"ShaPrint - {item.Printer.Name}";
+                        var localPrinters = ShaPrint.Server.SpoolerApi.GetLocalPrinters();
+                        if (localPrinters.Contains(oldName, StringComparer.OrdinalIgnoreCase))
+                        {
+                            virtualPrinterName = oldName;
+                        }
+                    }
+                }
+
                 btnDelete.Enabled = false;
                 lblStatus.Text = "Deleting...";
 

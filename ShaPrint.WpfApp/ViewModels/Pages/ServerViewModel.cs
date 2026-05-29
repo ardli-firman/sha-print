@@ -46,6 +46,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         public ObservableCollection<PrinterItem> Printers { get; } = new();
         public ObservableCollection<string> Logs { get; } = new();
+        public string LogsText => string.Join(Environment.NewLine, Logs);
 
         public ServerViewModel(INavigationService navigationService, ISnackbarService snackbarService, ShaPrint.WpfApp.Services.Server.PrintMonitorService printMonitorService)
         {
@@ -76,6 +77,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 {
                     Logs.RemoveAt(Logs.Count - 1);
                 }
+                OnPropertyChanged(nameof(LogsText));
             });
         }
 

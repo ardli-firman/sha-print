@@ -87,7 +87,16 @@ namespace ShaPrint.Client
                 {
                     while (!tcs.Task.IsCompleted)
                     {
-                        var result = await udpClient.ReceiveAsync();
+                        UdpReceiveResult result;
+                        try
+                        {
+                            result = await udpClient.ReceiveAsync();
+                        }
+                        catch (SocketException se) when (se.SocketErrorCode == SocketError.ConnectionReset)
+                        {
+                            continue; // Ignore ICMP Port Unreachable
+                        }
+
                         string jsonResponse = Encoding.UTF8.GetString(result.Buffer);
 
                         // Parse without signature first
@@ -120,7 +129,11 @@ namespace ShaPrint.Client
 
                         // Overwrite with the actual reachable IP address from the packet source
                         response.IpAddress = result.RemoteEndPoint.Address.ToString();
-                        servers.Add(response);
+
+                        if (!servers.Any(s => s.IpAddress == response.IpAddress))
+                        {
+                            servers.Add(response);
+                        }
                     }
                 }
                 catch (ObjectDisposedException) { /* udpClient closed, normal */ }

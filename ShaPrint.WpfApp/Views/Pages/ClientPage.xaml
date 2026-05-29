@@ -9,17 +9,26 @@
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
     </Page.Resources>
 
-    <DockPanel Margin="24,20,24,16" LastChildFill="True">
+    <Grid Margin="24,20,24,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Header -->
+            <RowDefinition Height="Auto"/> <!-- Card -->
+            <RowDefinition Height="3*"/>   <!-- Printer List -->
+            <RowDefinition Height="Auto"/> <!-- Controls bar -->
+            <RowDefinition Height="Auto"/> <!-- Splitter -->
+            <RowDefinition Height="Auto"/> <!-- Log label -->
+            <RowDefinition Height="2*"/>   <!-- Logs -->
+        </Grid.RowDefinitions>
 
         <!-- Header (top) -->
-        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
             <TextBlock Text="Client Dashboard" FontSize="28" FontWeight="SemiBold"/>
             <TextBlock Text="Discover and install network printers." 
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,0"/>
         </StackPanel>
 
         <!-- Network Discovery Card (top, compact) -->
-        <ui:Card DockPanel.Dock="Top" Margin="0,0,0,12">
+        <ui:Card Grid.Row="1" Margin="0,0,0,12">
             <StackPanel>
                 <TextBlock Text="Network Discovery" FontWeight="SemiBold" Margin="0,0,0,8" FontSize="13"/>
                 
@@ -45,8 +54,34 @@
             </StackPanel>
         </ui:Card>
 
+        <!-- Printer List (fills remaining space, compact items) -->
+        <ListBox Grid.Row="2" ItemsSource="{Binding ViewModel.DiscoveredPrinters}" 
+                 SelectedItem="{Binding ViewModel.SelectedPrinter, Mode=TwoWay}"
+                 BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto">
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="Padding" Value="4,2"/>
+                    <Setter Property="MinHeight" Value="0"/>
+                </Style>
+            </ListBox.ItemContainerStyle>
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <StackPanel Orientation="Horizontal" Margin="2,1">
+                        <ui:SymbolIcon Symbol="Print24" Margin="0,0,8,0" FontSize="14"/>
+                        <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center" FontSize="13"/>
+                        <Border Background="{DynamicResource SystemFillColorSuccessBrush}" 
+                                CornerRadius="3" Padding="4,1" Margin="8,0,0,0"
+                                Visibility="{Binding IsInstalled, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="Installed" Foreground="White" FontSize="10" FontWeight="Bold"/>
+                        </Border>
+                    </StackPanel>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
         <!-- Controls bar (bottom) -->
-        <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
+        <Grid Grid.Row="3" Margin="0,10,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
@@ -72,52 +107,18 @@
         </Grid>
 
         <!-- Activity Log label (bottom) -->
-        <TextBlock DockPanel.Dock="Bottom" Text="Activity Log:" Margin="0,10,0,3" 
+        <GridSplitter Grid.Row="4" Height="5" HorizontalAlignment="Stretch" Background="Transparent" Margin="0,5"/>
+
+        <TextBlock Grid.Row="5" Text="Activity Log (Resizable &amp; Copyable):" Margin="0,0,0,3" 
                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" FontSize="12"/>
 
         <!-- Activity Log (bottom, compact) -->
-        <ListBox DockPanel.Dock="Bottom" ItemsSource="{Binding ViewModel.Logs}" 
-                 FontFamily="Consolas" FontSize="11" Height="110"
+        <TextBox Grid.Row="6" Text="{Binding ViewModel.LogsText, Mode=OneWay}" 
+                 IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                 FontFamily="Consolas" FontSize="11"
                  BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                 ScrollViewer.VerticalScrollBarVisibility="Auto">
-            <ListBox.ItemContainerStyle>
-                <Style TargetType="ListBoxItem">
-                    <Setter Property="Padding" Value="4,1"/>
-                    <Setter Property="MinHeight" Value="0"/>
-                </Style>
-            </ListBox.ItemContainerStyle>
-            <ListBox.ItemTemplate>
-                <DataTemplate>
-                    <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
-                </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
+                 VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto" />
 
-        <!-- Printer List (fills remaining space, compact items) -->
-        <ListBox ItemsSource="{Binding ViewModel.DiscoveredPrinters}" 
-                 SelectedItem="{Binding ViewModel.SelectedPrinter, Mode=TwoWay}"
-                 BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                 ScrollViewer.VerticalScrollBarVisibility="Auto">
-            <ListBox.ItemContainerStyle>
-                <Style TargetType="ListBoxItem">
-                    <Setter Property="Padding" Value="4,2"/>
-                    <Setter Property="MinHeight" Value="0"/>
-                </Style>
-            </ListBox.ItemContainerStyle>
-            <ListBox.ItemTemplate>
-                <DataTemplate>
-                    <StackPanel Orientation="Horizontal" Margin="2,1">
-                        <ui:SymbolIcon Symbol="Print24" Margin="0,0,8,0" FontSize="14"/>
-                        <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center" FontSize="13"/>
-                        <Border Background="{DynamicResource SystemFillColorSuccessBrush}" 
-                                CornerRadius="3" Padding="4,1" Margin="8,0,0,0"
-                                Visibility="{Binding IsInstalled, Converter={StaticResource BoolToVis}}">
-                            <TextBlock Text="Installed" Foreground="White" FontSize="10" FontWeight="Bold"/>
-                        </Border>
-                    </StackPanel>
-                </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
-
-    </DockPanel>
+    </Grid>
 </Page>
