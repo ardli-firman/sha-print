@@ -3,7 +3,10 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.NetworkInformation;
+<<<<<<< HEAD
 using System.Linq;
+=======
+>>>>>>> 9ed7fbffc45e84b1ddf99e5a1119f9f9eac5c4eb
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -23,6 +26,7 @@ namespace ShaPrint.Client
             IPAddress ip = string.IsNullOrWhiteSpace(targetIp) ? IPAddress.Broadcast : IPAddress.Parse(targetIp);
             byte[] requestData = Encoding.UTF8.GetBytes(Constants.DiscoveryRequestMessage);
             
+<<<<<<< HEAD
             if (string.IsNullOrWhiteSpace(targetIp))
             {
                 foreach (var ni in NetworkInterface.GetAllNetworkInterfaces().Where(n => n.OperationalStatus == OperationalStatus.Up && n.Supports(NetworkInterfaceComponent.IPv4)))
@@ -51,10 +55,51 @@ namespace ShaPrint.Client
                                 byte[] targetIpBytes = new byte[] { (byte)(i >> 24), (byte)(i >> 16), (byte)(i >> 8), (byte)i };
                                 var targetEp = new IPEndPoint(new IPAddress(targetIpBytes), Constants.DiscoveryUdpPort);
                                 _ = udpClient.SendAsync(requestData, requestData.Length, targetEp);
+=======
+            if (ip.Equals(IPAddress.Broadcast))
+            {
+                // Send standard 255.255.255.255 broadcast
+                await udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(IPAddress.Broadcast, Constants.DiscoveryUdpPort));
+                
+                // Send to all specific subnet broadcast addresses to ensure it goes out on the physical LAN, 
+                // bypassing Windows routing issues with multiple adapters (like WSL, VirtualBox, VPNs)
+                try
+                {
+                    foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                    {
+                        if (ni.OperationalStatus == OperationalStatus.Up && 
+                            ni.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                        {
+                            foreach (var uipi in ni.GetIPProperties().UnicastAddresses)
+                            {
+                                if (uipi.Address.AddressFamily == AddressFamily.InterNetwork)
+                                {
+                                    var mask = uipi.IPv4Mask;
+                                    if (mask != null && !mask.Equals(IPAddress.Any))
+                                    {
+                                        byte[] ipBytes = uipi.Address.GetAddressBytes();
+                                        byte[] maskBytes = mask.GetAddressBytes();
+                                        byte[] broadcastBytes = new byte[ipBytes.Length];
+                                        for (int i = 0; i < broadcastBytes.Length; i++)
+                                        {
+                                            broadcastBytes[i] = (byte)(ipBytes[i] | (maskBytes[i] ^ 255));
+                                        }
+                                        var broadcastIp = new IPAddress(broadcastBytes);
+                                        await udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(broadcastIp, Constants.DiscoveryUdpPort));
+                                    }
+                                }
+>>>>>>> 9ed7fbffc45e84b1ddf99e5a1119f9f9eac5c4eb
                             }
                         }
                     }
                 }
+<<<<<<< HEAD
+=======
+                catch (Exception ex)
+                {
+                    AppLogger.Log($"[DISCOVERY] Error enumerating network interfaces: {ex.Message}");
+                }
+>>>>>>> 9ed7fbffc45e84b1ddf99e5a1119f9f9eac5c4eb
             }
             else
             {
