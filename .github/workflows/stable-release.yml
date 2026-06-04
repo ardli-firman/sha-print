@@ -95,14 +95,6 @@ jobs:
         echo "Commits analyzed:"
         echo "$COMMITS" | head -20
 
-    - name: Create and Push Tag
-      shell: bash
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a "v${{ steps.version.outputs.version }}-stable" -m "Stable release v${{ steps.version.outputs.version }}"
-        git push origin "v${{ steps.version.outputs.version }}-stable"
-
     - name: Run Tests
       run: dotnet test -c Release
 
@@ -133,6 +125,18 @@ jobs:
         MSYS_NO_PATHCONV: 1
       run: |
         "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "/DMyAppVersion=${{ steps.version.outputs.version }}" "/DMyAppOutput=ShaPrint_Setup_v${{ steps.version.outputs.version }}-stable" installer.iss
+
+    - name: Create and Push Tag
+      shell: bash
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        # Delete tag if exists (for workflow retry)
+        git tag -d "v${{ steps.version.outputs.version }}-stable" 2>/dev/null || true
+        git push origin ":refs/tags/v${{ steps.version.outputs.version }}-stable" 2>/dev/null || true
+        # Create and push new tag
+        git tag -a "v${{ steps.version.outputs.version }}-stable" -m "Stable release v${{ steps.version.outputs.version }}"
+        git push origin "v${{ steps.version.outputs.version }}-stable"
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
