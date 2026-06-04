@@ -61,22 +61,41 @@ namespace ShaPrint.WpfApp.Services
 
                     string originalTag = tagName;
                     UpdateChannel channel = UpdateChannel.Stable;
+                    int betaCounter = 0;
 
                     if (tagName.StartsWith("v", StringComparison.OrdinalIgnoreCase))
                         tagName = tagName.Substring(1);
 
+                    // Parse tag format: 1.2.3-stable, 1.2.3-beta, 1.2.3-beta.1
                     if (tagName.EndsWith("-stable", StringComparison.OrdinalIgnoreCase))
                     {
                         tagName = tagName.Substring(0, tagName.Length - 7);
                         channel = UpdateChannel.Stable;
                     }
-                    else if (tagName.EndsWith("-beta", StringComparison.OrdinalIgnoreCase))
+                    else if (tagName.Contains("-beta"))
                     {
-                        tagName = tagName.Substring(0, tagName.Length - 5);
+                        // Handle both "1.2.3-beta" and "1.2.3-beta.1"
+                        int betaIndex = tagName.IndexOf("-beta");
+                        string betaPart = tagName.Substring(betaIndex);
+                        tagName = tagName.Substring(0, betaIndex);
                         channel = UpdateChannel.Beta;
+                        
+                        // Extract beta counter if exists (e.g., "-beta.1" → 1)
+                        if (betaPart.Contains("."))
+                        {
+                            string counterStr = betaPart.Substring(betaPart.LastIndexOf(".") + 1);
+                            int.TryParse(counterStr, out betaCounter);
+                        }
                     }
 
                     if (!Version.TryParse(tagName, out Version? parsedVersion)) continue;
+                    
+                    // Create version with beta counter as 4th component for proper comparison
+                    // 1.2.3-beta.1 → 1.2.3.1, 1.2.3-beta → 1.2.3.0
+                    if (channel == UpdateChannel.Beta)
+                    {
+                        parsedVersion = new Version(parsedVersion.Major, parsedVersion.Minor, parsedVersion.Build, betaCounter);
+                    }
 
                     string downloadUrl = "";
                     if (element.TryGetProperty("assets", out var assets))
