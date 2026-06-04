@@ -41,11 +41,9 @@ jobs:
       id: version
       shell: bash
       run: |
-        # Ambil stable version terakhir
         LATEST_STABLE=$(git tag -l "*-stable" | sort -V | tail -n1)
         
         if [ -z "$LATEST_STABLE" ]; then
-          # Jika belum ada stable, mulai dari 1.0.0
           BASE_VERSION="1.0.0"
         else
           # Extract base version dari stable tag (v1.2.3-stable → 1.2.3)
@@ -53,14 +51,11 @@ jobs:
           BASE_VERSION=${BASE_VERSION%-stable}
         fi
         
-        # Ambil beta counter terakhir untuk base version ini
         LATEST_BETA=$(git tag -l "v${BASE_VERSION}-beta.*" | sort -V | tail -n1)
         
         if [ -z "$LATEST_BETA" ]; then
-          # Jika belum ada beta untuk version ini, mulai dari 1
           BETA_COUNTER=1
         else
-          # Extract beta counter (v1.2.3-beta.5 → 5)
           BETA_COUNTER=${LATEST_BETA##*-beta.}
           BETA_COUNTER=$((BETA_COUNTER + 1))
         fi
@@ -100,8 +95,11 @@ jobs:
       env:
         SHAPRINT_PSK: ${{ secrets.SHAPRINT_PSK }}
       run: |
-        dotnet publish ShaPrint.WpfApp/ShaPrint.WpfApp.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=${{ steps.version.outputs.base_version }}
-        dotnet publish ShaPrint.Updater/ShaPrint.Updater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=${{ steps.version.outputs.base_version }}
+        # Encode beta counter as revision number for assembly version
+        # e.g., 1.4.6-beta.1 → 1.4.6.1
+        ASSEMBLY_VERSION="${{ steps.version.outputs.base_version }}.${{ steps.version.outputs.beta_counter }}"
+        dotnet publish ShaPrint.WpfApp/ShaPrint.WpfApp.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$ASSEMBLY_VERSION
+        dotnet publish ShaPrint.Updater/ShaPrint.Updater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$ASSEMBLY_VERSION
 
     - name: Build Installer (Inno Setup)
       shell: bash
