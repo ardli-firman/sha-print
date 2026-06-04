@@ -105,6 +105,8 @@ jobs:
 
     - name: Build Installer (Inno Setup)
       shell: bash
+      env:
+        MSYS_NO_PATHCONV: 1
       run: |
         "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "/DMyAppVersion=${{ steps.version.outputs.base_version }}" "/DMyAppOutput=ShaPrint_Setup_v${{ steps.version.outputs.version }}" installer.iss
 
