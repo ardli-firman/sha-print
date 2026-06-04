@@ -29,4 +29,8 @@
     <Resource Include="icon.ico" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="ShaPrint.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -1,10 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using ShaPrint.WpfApp.Helpers;
 using ShaPrint.WpfApp.ViewModels.Pages;
 using ShaPrint.WpfApp.ViewModels.Windows;
 using ShaPrint.WpfApp.Views.Pages;
 using ShaPrint.WpfApp.Views.Windows;
 using ShaPrint.WpfApp.Services;
+using System.IO;
 using System.Windows;
 using Wpf.Ui;
 using Wpf.Ui.Abstractions;
@@ -13,6 +15,8 @@ namespace ShaPrint.WpfApp
 {
     public partial class App : Application
     {
+        private static SingleInstanceEnforcer? _singleInstanceEnforcer;
+
         private static readonly IHost _host = Host
             .CreateDefaultBuilder()
             .ConfigureServices((context, services) =>
@@ -56,14 +60,27 @@ namespace ShaPrint.WpfApp
 
         private async void OnStartup(object sender, StartupEventArgs e)
         {
+            // ── Single-instance enforcement ──────────────────────────────
+            _singleInstanceEnforcer = new SingleInstanceEnforcer(OnActivateRequested);
+            if (!_singleInstanceEnforcer.TryAcquire())
+            {
+                // Another instance is already running — it was signalled to
+                // bring its window to front. Exit this instance immediately.
+                _singleInstanceEnforcer.Dispose();
+                _singleInstanceEnforcer = null;
+                Shutdown();
+                return;
+            }
+
+            // ── Original startup logic ───────────────────────────────────
             this.DispatcherUnhandledException += (s, ex) =>
             {
-                System.IO.File.AppendAllText("crash.log", $"[{System.DateTime.Now}] Dispatcher Exception: {ex.Exception}\n");
-                ex.Handled = true; // prevent immediate close if possible, or just log
+                File.AppendAllText("crash.log", $"[{System.DateTime.Now}] Dispatcher Exception: {ex.Exception}\n");
+                ex.Handled = true;
             };
             System.AppDomain.CurrentDomain.UnhandledException += (s, ex) =>
             {
-                System.IO.File.AppendAllText("crash.log", $"[{System.DateTime.Now}] Unhandled Exception: {ex.ExceptionObject}\n");
+                File.AppendAllText("crash.log", $"[{System.DateTime.Now}] Unhandled Exception: {ex.ExceptionObject}\n");
             };
 
             await _host.StartAsync();
@@ -74,17 +91,17 @@ namespace ShaPrint.WpfApp
 
             // Inject dynamic network channel from AppSettings to Core
             ShaPrint.Core.Constants.SetNetworkChannel(ShaPrint.WpfApp.Models.AppSettings.Current.NetworkChannel);
-            
+
             // Auto-start engines in the background based on AppMode
             try
             {
-                string dir = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
-                string modeFile = System.IO.Path.Combine(dir, "AppMode.json");
-                if (System.IO.File.Exists(modeFile))
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
+                string modeFile = Path.Combine(dir, "AppMode.json");
+                if (File.Exists(modeFile))
                 {
-                    string json = System.IO.File.ReadAllText(modeFile);
+                    string json = File.ReadAllText(modeFile);
                     string? mode = System.Text.Json.JsonSerializer.Deserialize<string>(json);
-                    
+
                     if (mode == "Server")
                     {
                         GetService<ServerViewModel>(); // Initiates constructor and starts broadcasting
@@ -95,9 +112,9 @@ namespace ShaPrint.WpfApp
                     }
                 }
             }
-            catch (System.Exception ex) 
-            { 
-                System.IO.File.AppendAllText("crash.log", $"[{System.DateTime.Now}] Background startup failed: {ex.Message}\n"); 
+            catch (Exception ex)
+            {
+                File.AppendAllText("crash.log", $"[{System.DateTime.Now}] Background startup failed: {ex.Message}\n");
             }
 
             if (!isStartup)
@@ -108,8 +125,35 @@ namespace ShaPrint.WpfApp
 
         private async void OnExit(object sender, ExitEventArgs e)
         {
+            _singleInstanceEnforcer?.Dispose();
+            _singleInstanceEnforcer = null;
+
             await _host.StopAsync();
             _host.Dispose();
+        }
+
+        /// <summary>
+        /// Called on the listener thread when a second-instance activation
+        /// signal is received. Brings the main window to the foreground.
+        /// </summary>
+        private void OnActivateRequested()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var window = Current?.MainWindow;
+                if (window == null) return;
+
+                // If window was hidden to tray, show it first
+                window.Show();
+
+                if (window.WindowState == WindowState.Minimized)
+                    window.WindowState = WindowState.Normal;
+
+                window.Activate();
+                window.Topmost = true;
+                window.Topmost = false;
+                window.Focus();
+            });
         }
     }
 }
