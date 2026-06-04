@@ -52,7 +52,7 @@ namespace ShaPrint.WpfApp.Services.Server
                 }
                 catch (Exception ex)
                 {
-                    AppLogger.Error("[MONITOR] Error checking print queues", ex);
+                    AppLogger.Error("[MONITOR] Failed to check print queues", ex);
                 }
 
                 await Task.Delay(5000, token); // poll every 5 seconds
@@ -78,7 +78,7 @@ namespace ShaPrint.WpfApp.Services.Server
                     {
                         if (IsJobInErrorState(job.JobStatus))
                         {
-                            AppLogger.Error($"[MONITOR] Auto-Purging job {job.JobIdentifier} ({job.Name}) on {queue.Name} due to status {job.JobStatus}.");
+                            AppLogger.Error($"[MONITOR] Auto-purging job {job.JobIdentifier} ({job.Name}) on {queue.Name} due to status {job.JobStatus}.");
                             
                             try
                             {
@@ -109,7 +109,7 @@ namespace ShaPrint.WpfApp.Services.Server
             {
                 _snackbarService.Show(
                     "Print Job Failed",
-                    $"Cetak gagal pada '{printerName}'. Job otomatis dibatalkan. Mohon cek printer secara fisik (paper jam / kertas habis).",
+                    $"Printing failed on '{printerName}'. The job was automatically cancelled. Please check the printer physically (paper jam / out of paper).",
                     Wpf.Ui.Controls.ControlAppearance.Danger,
                     new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
                     TimeSpan.FromSeconds(10)
