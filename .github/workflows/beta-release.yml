@@ -66,14 +66,6 @@ jobs:
         echo "beta_counter=$BETA_COUNTER" >> $GITHUB_OUTPUT
         echo "New beta version: $NEW_VERSION"
 
-    - name: Create and Push Tag
-      shell: bash
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a "v${{ steps.version.outputs.version }}" -m "Beta release v${{ steps.version.outputs.version }}"
-        git push origin "v${{ steps.version.outputs.version }}"
-
     - name: Run Tests
       run: dotnet test -c Release
 
@@ -95,11 +87,8 @@ jobs:
       env:
         SHAPRINT_PSK: ${{ secrets.SHAPRINT_PSK }}
       run: |
-        # Encode beta counter as revision number for assembly version
-        # e.g., 1.4.6-beta.1 → 1.4.6.1
-        ASSEMBLY_VERSION="${{ steps.version.outputs.base_version }}.${{ steps.version.outputs.beta_counter }}"
-        dotnet publish ShaPrint.WpfApp/ShaPrint.WpfApp.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$ASSEMBLY_VERSION
-        dotnet publish ShaPrint.Updater/ShaPrint.Updater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$ASSEMBLY_VERSION
+        dotnet publish ShaPrint.WpfApp/ShaPrint.WpfApp.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=${{ steps.version.outputs.base_version }}.${{ steps.version.outputs.beta_counter }}
+        dotnet publish ShaPrint.Updater/ShaPrint.Updater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=${{ steps.version.outputs.base_version }}.${{ steps.version.outputs.beta_counter }}
 
     - name: Build Installer (Inno Setup)
       shell: bash
@@ -107,6 +96,18 @@ jobs:
         MSYS_NO_PATHCONV: 1
       run: |
         "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "/DMyAppVersion=${{ steps.version.outputs.base_version }}" "/DMyAppOutput=ShaPrint_Setup_v${{ steps.version.outputs.version }}" installer.iss
+
+    - name: Create and Push Tag
+      shell: bash
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        # Delete tag if exists (for workflow retry)
+        git tag -d "v${{ steps.version.outputs.version }}" 2>/dev/null || true
+        git push origin ":refs/tags/v${{ steps.version.outputs.version }}" 2>/dev/null || true
+        # Create and push new tag
+        git tag -a "v${{ steps.version.outputs.version }}" -m "Beta release v${{ steps.version.outputs.version }}"
+        git push origin "v${{ steps.version.outputs.version }}"
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
