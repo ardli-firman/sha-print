@@ -109,7 +109,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             {
                 if (!System.Net.IPAddress.TryParse(TargetIp.Trim(), out _))
                 {
-                    System.Windows.MessageBox.Show("Format IP Address tidak valid!", "Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+                    System.Windows.MessageBox.Show("Invalid IP Address format!", "Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
                     return;
                 }
                 targetIp = TargetIp.Trim();

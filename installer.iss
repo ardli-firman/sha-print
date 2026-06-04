@@ -6,6 +6,9 @@
   #define MyAppOutput "ShaPrint_Setup_v1.0.0"
 #endif
 
+; ShaPrint Installer Configuration
+; Built by GitHub Actions CI/CD
+
 [Setup]
 AppName=ShaPrint
 AppVersion={#MyAppVersion}
