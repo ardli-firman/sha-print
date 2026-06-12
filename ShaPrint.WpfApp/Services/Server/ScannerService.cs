@@ -242,10 +242,11 @@ namespace ShaPrint.Server
         /// Wraps raw JPEG bytes into a minimal compliant PDF/1.1 file structure.
         /// Avoids any external dependencies.
         /// </summary>
-        private static byte[] WrapJpegInPdf(byte[] jpegBytes)
+        public static byte[] WrapJpegInPdf(byte[] jpegBytes)
         {
             int width = 612; // default letter width in points
             int height = 792; // default letter height in points
+            string colorSpace = "DeviceRGB";
 
             try
             {
@@ -262,12 +263,25 @@ namespace ShaPrint.Server
                         // Convert pixels to PDF points (1 inch = 72 points, assuming 96 DPI screen default or raw size)
                         width = (int)Math.Round(frame.PixelWidth * 72.0 / 96.0);
                         height = (int)Math.Round(frame.PixelHeight * 72.0 / 96.0);
+
+                        var format = frame.Format;
+                        if (format == System.Windows.Media.PixelFormats.Gray8 ||
+                            format == System.Windows.Media.PixelFormats.BlackWhite ||
+                            format == System.Windows.Media.PixelFormats.Gray2 ||
+                            format == System.Windows.Media.PixelFormats.Gray4 ||
+                            format == System.Windows.Media.PixelFormats.Indexed1 ||
+                            format == System.Windows.Media.PixelFormats.Indexed2 ||
+                            format == System.Windows.Media.PixelFormats.Indexed4 ||
+                            format == System.Windows.Media.PixelFormats.Indexed8)
+                        {
+                            colorSpace = "DeviceGray";
+                        }
                     }
                 }
             }
             catch (Exception ex)
             {
-                AppLogger.Log($"[SCANNER] Warning: Could not parse image bounds for PDF, defaulting to letter size. {ex.Message}");
+                AppLogger.Log($"[SCANNER] Warning: Could not parse image bounds/color space for PDF, defaulting to letter size RGB. {ex.Message}");
             }
 
             using (var ms = new MemoryStream())
@@ -282,17 +296,17 @@ namespace ShaPrint.Server
                 long catalogOffset = ms.Position;
                 sw.Write("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
                 sw.Flush();
-
+ 
                 long pagesOffset = ms.Position;
                 sw.Write("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
                 sw.Flush();
-
+ 
                 long pageOffset = ms.Position;
                 sw.Write($"3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R /MediaBox [0 0 {width} {height}] >>\nendobj\n");
                 sw.Flush();
-
+ 
                 long imageOffset = ms.Position;
-                sw.Write($"4 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {jpegBytes.Length} >>\nstream\n");
+                sw.Write($"4 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /{colorSpace} /BitsPerComponent 8 /Filter /DCTDecode /Length {jpegBytes.Length} >>\nstream\n");
                 sw.Flush();
                 
                 // Write binary image stream
@@ -301,12 +315,12 @@ namespace ShaPrint.Server
                 
                 sw.Write("\nendstream\nendobj\n");
                 sw.Flush();
-
+ 
                 long contentOffset = ms.Position;
                 string contentStream = $"q\n{width} 0 0 {height} 0 0 cm\n/Im1 Do\nQ\n";
                 sw.Write($"5 0 obj\n<< /Length {contentStream.Length} >>\nstream\n{contentStream}endstream\nendobj\n");
                 sw.Flush();
-
+ 
                 long xrefOffset = ms.Position;
                 sw.Write("xref\n0 6\n");
                 sw.Write("0000000000 65535 f \n");
@@ -316,10 +330,10 @@ namespace ShaPrint.Server
                 sw.Write($"{imageOffset:D10} 00000 n \n");
                 sw.Write($"{contentOffset:D10} 00000 n \n");
                 sw.Flush();
-
+ 
                 sw.Write($"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xrefOffset}\n%%EOF\n");
                 sw.Flush();
-
+ 
                 return ms.ToArray();
             }
         }

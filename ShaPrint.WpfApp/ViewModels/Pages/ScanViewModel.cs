@@ -89,7 +89,6 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(ImagePreviewVisibility))]
-        [NotifyPropertyChangedFor(nameof(PdfPlaceholderVisibility))]
         private BitmapImage? _previewImage;
 
         [ObservableProperty]
@@ -106,8 +105,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public ObservableCollection<string> Logs { get; } = new();
         public string LogsText => string.Join(Environment.NewLine, Logs);
 
-        public Visibility ImagePreviewVisibility => (PreviewImage != null && SelectedFormat != "PDF") ? Visibility.Visible : Visibility.Collapsed;
-        public Visibility PdfPlaceholderVisibility => (HasScannedFile && SelectedFormat == "PDF") ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility ImagePreviewVisibility => (PreviewImage != null) ? Visibility.Visible : Visibility.Collapsed;
         public Visibility EmptyStateVisibility => (!HasScannedFile && !IsPerformingScan) ? Visibility.Visible : Visibility.Collapsed;
         public Visibility LoadingStateVisibility => IsPerformingScan ? Visibility.Visible : Visibility.Collapsed;
 
@@ -218,13 +216,19 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     HasScannedFile = true;
                     StatusText = $"Scan successful! Received {response.FileBytes.Length} bytes.";
 
-                    if (SelectedFormat != "PDF")
+                    byte[] previewBytes = _scannedFileBytes;
+                    if (SelectedFormat.Equals("PDF", StringComparison.OrdinalIgnoreCase))
+                    {
+                        previewBytes = ExtractJpegFromPdf(_scannedFileBytes);
+                    }
+
+                    if (previewBytes != null && previewBytes.Length > 0)
                     {
                         try
                         {
                             // Create preview from bytes
                             var image = new BitmapImage();
-                            using (var ms = new MemoryStream(_scannedFileBytes))
+                            using (var ms = new MemoryStream(previewBytes))
                             {
                                 image.BeginInit();
                                 image.CacheOption = BitmapCacheOption.OnLoad;
@@ -298,10 +302,23 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 {
                     byte[] bytesToSave = _scannedFileBytes;
 
-                    if (SelectedFormat != "PDF" && RotationAngle != 0)
+                    if (RotationAngle != 0)
                     {
-                        AppLogger.Log($"[CLIENT] Rotating saved image file by {RotationAngle} degrees...");
-                        bytesToSave = RotateImageBytes(_scannedFileBytes, SelectedFormat, RotationAngle);
+                        if (SelectedFormat.Equals("PDF", StringComparison.OrdinalIgnoreCase))
+                        {
+                            AppLogger.Log($"[CLIENT] Rotating embedded PDF image by {RotationAngle} degrees...");
+                            byte[] extractedJpeg = ExtractJpegFromPdf(_scannedFileBytes);
+                            if (extractedJpeg.Length > 0)
+                            {
+                                byte[] rotatedJpeg = RotateImageBytes(extractedJpeg, "JPEG", RotationAngle);
+                                bytesToSave = ShaPrint.Server.ScannerService.WrapJpegInPdf(rotatedJpeg);
+                            }
+                        }
+                        else
+                        {
+                            AppLogger.Log($"[CLIENT] Rotating saved image file by {RotationAngle} degrees...");
+                            bytesToSave = RotateImageBytes(_scannedFileBytes, SelectedFormat, RotationAngle);
+                        }
                     }
 
                     File.WriteAllBytes(saveFileDialog.FileName, bytesToSave);
@@ -318,6 +335,56 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     System.Windows.MessageBox.Show($"Failed to save file. Details: {ex.Message}", "Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
                 }
             }
+        }
+
+        private static byte[] ExtractJpegFromPdf(byte[] pdfBytes)
+        {
+            if (pdfBytes == null || pdfBytes.Length == 0)
+                return Array.Empty<byte>();
+
+            try
+            {
+                byte[] streamMarker = System.Text.Encoding.ASCII.GetBytes("stream\n");
+                byte[] endMarker = System.Text.Encoding.ASCII.GetBytes("\nendstream");
+
+                int startIdx = FindBytes(pdfBytes, streamMarker);
+                if (startIdx == -1) return Array.Empty<byte>();
+
+                startIdx += streamMarker.Length;
+
+                int endIdx = FindBytes(pdfBytes, endMarker, startIdx);
+                if (endIdx == -1) return Array.Empty<byte>();
+
+                int length = endIdx - startIdx;
+                if (length <= 0) return Array.Empty<byte>();
+
+                byte[] jpegBytes = new byte[length];
+                Buffer.BlockCopy(pdfBytes, startIdx, jpegBytes, 0, length);
+                return jpegBytes;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"[CLIENT] Failed to extract JPEG from PDF: {ex.Message}");
+                return Array.Empty<byte>();
+            }
+        }
+
+        private static int FindBytes(byte[] src, byte[] find, int startSearch = 0)
+        {
+            for (int i = startSearch; i <= src.Length - find.Length; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < find.Length; j++)
+                {
+                    if (src[i + j] != find[j])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) return i;
+            }
+            return -1;
         }
 
         [RelayCommand]

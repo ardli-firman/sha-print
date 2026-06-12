@@ -226,14 +226,6 @@
                                 </Image.LayoutTransform>
                             </Image>
                         </ScrollViewer>
-
-                        <!-- PDF Placeholder -->
-                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20"
-                                    Visibility="{Binding ViewModel.PdfPlaceholderVisibility}">
-                            <ui:SymbolIcon Symbol="Document24" FontSize="48" Foreground="{DynamicResource SystemFillColorDangerBrush}" Margin="0,0,0,10"/>
-                            <TextBlock Text="PDF Document Scanned Successfully" FontWeight="SemiBold" Margin="0,0,0,4" HorizontalAlignment="Center"/>
-                            <TextBlock Text="Ready for saving" Foreground="{DynamicResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center"/>
-                        </StackPanel>
                     </Grid>
                 </Border>
                 
