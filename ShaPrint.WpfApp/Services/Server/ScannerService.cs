@@ -139,17 +139,44 @@ namespace ShaPrint.Server
                     // Item 1 represents the scan bed / sensor
                     dynamic item = device.Items[1];
 
-                    // Set scanning properties
-                    // 4101: WIA_IPS_DOCUMENT_HANDLING_SELECT (1 = Flatbed)
-                    SetWiaProperty(item.Properties, 4101, 1);
-                    // 4103: WIA_IPS_XRESOLUTION
-                    SetWiaProperty(item.Properties, 4103, dpi);
-                    // 4104: WIA_IPS_YRESOLUTION
-                    SetWiaProperty(item.Properties, 4104, dpi);
-                    // 4102: WIA_IPA_DATATYPE (0 = B&W, 1 = Grayscale, 2 = Color)
-                    SetWiaProperty(item.Properties, 4102, colorMode);
+                    // Set scanning properties on the device level
+                    // 3088: WIA_DPS_DOCUMENT_HANDLING_SELECT (1 = Flatbed)
+                    SetWiaProperty(device.Properties, 3088, 1);
 
-                    AppLogger.Log($"[SCANNER] Initiating scan: DPI={dpi}, ColorMode={colorMode}, Format={format}");
+                    // Map UI colorMode (0 = B&W, 1 = Grayscale, 2 = Color) to standard WIA values
+                    // 6146: WIA_IPS_CUR_INTENT (1 = Color, 2 = Grayscale, 4 = Text/B&W)
+                    int wiaIntent = colorMode switch
+                    {
+                        0 => 4, // WIA_INTENT_IMAGE_TEXT_COLOR
+                        1 => 2, // WIA_INTENT_IMAGE_GRAYSCALE
+                        _ => 1  // WIA_INTENT_IMAGE_COLOR
+                    };
+                    SetWiaProperty(item.Properties, 6146, wiaIntent);
+
+                    // 4103: WIA_IPA_DATATYPE (0 = Threshold/B&W, 2 = Grayscale, 3 = Color/RGB)
+                    int wiaDataType = colorMode switch
+                    {
+                        0 => 0, // WIA_DATA_THRESHOLD
+                        1 => 2, // WIA_DATA_GRAYSCALE
+                        _ => 3  // WIA_DATA_COLOR
+                    };
+                    SetWiaProperty(item.Properties, 4103, wiaDataType);
+
+                    // 4104: WIA_IPA_DEPTH (1 = B&W, 8 = Grayscale, 24 = Color)
+                    int wiaDepth = colorMode switch
+                    {
+                        0 => 1,
+                        1 => 8,
+                        _ => 24
+                    };
+                    SetWiaProperty(item.Properties, 4104, wiaDepth);
+
+                    // 6147: WIA_IPS_XRESOLUTION
+                    SetWiaProperty(item.Properties, 6147, dpi);
+                    // 6148: WIA_IPS_YRESOLUTION
+                    SetWiaProperty(item.Properties, 6148, dpi);
+
+                    AppLogger.Log($"[SCANNER] Initiating scan: DPI={dpi}, ColorMode={colorMode} (WiaIntent={wiaIntent}, WiaDataType={wiaDataType}, WiaDepth={wiaDepth}), Format={format}");
                     dynamic commonDialog = Activator.CreateInstance(Type.GetTypeFromProgID("WIA.CommonDialog")!)!;
                     
                     // ShowTransfer triggers the scan (CancelError = false)
