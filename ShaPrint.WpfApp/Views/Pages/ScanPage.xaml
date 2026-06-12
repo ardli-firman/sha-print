@@ -187,6 +187,7 @@
                     <TextBlock Text="{Binding ViewModel.ZoomPercentText}" FontSize="11" VerticalAlignment="Center" Margin="4,0" Width="40" TextAlignment="Center"/>
                     <ui:Button Content="+" Command="{Binding ViewModel.ZoomInCommand}" CommandParameter="{Binding ElementName=PreviewScrollViewer}" Padding="8,2" Margin="4,0,0,0" FontSize="10" FontWeight="Bold"/>
                     <ui:Button Content="Fit" Command="{Binding ViewModel.ZoomFitCommand}" Padding="10,2" Margin="8,0,0,0" FontSize="10" Appearance="Secondary"/>
+                    <ui:Button Content="Rotate" Command="{Binding ViewModel.RotateCommand}" Padding="10,2" Margin="8,0,0,0" FontSize="10" Appearance="Secondary" Icon="{ui:SymbolIcon ArrowClockwise24}"/>
                 </StackPanel>
             </Grid>
             
@@ -196,9 +197,17 @@
                     <Grid>
                         <!-- Empty State -->
                         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20"
-                                    Visibility="{Binding ViewModel.HasScannedFile, Converter={StaticResource BoolToVis}, ConverterParameter=Invert}">
+                                    Visibility="{Binding ViewModel.EmptyStateVisibility}">
                             <ui:SymbolIcon Symbol="Document24" FontSize="48" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,0,10"/>
                             <TextBlock Text="No document scanned yet." Foreground="{DynamicResource TextFillColorTertiaryBrush}" HorizontalAlignment="Center"/>
+                        </StackPanel>
+
+                        <!-- Loading State -->
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20"
+                                    Visibility="{Binding ViewModel.LoadingStateVisibility}">
+                            <ui:ProgressRing IsIndeterminate="True" Width="48" Height="48" Margin="0,0,0,16"/>
+                            <TextBlock Text="Scanning Document..." FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                            <TextBlock Text="Acquiring page from remote scanner..." Foreground="{DynamicResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center"/>
                         </StackPanel>
 
                         <!-- Image Preview -->
@@ -210,7 +219,10 @@
                             <Image Source="{Binding ViewModel.PreviewImage}" Margin="8" Stretch="Uniform"
                                    HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <Image.LayoutTransform>
-                                    <ScaleTransform ScaleX="{Binding ViewModel.CurrentScale}" ScaleY="{Binding ViewModel.CurrentScale}"/>
+                                    <TransformGroup>
+                                        <ScaleTransform ScaleX="{Binding ViewModel.CurrentScale}" ScaleY="{Binding ViewModel.CurrentScale}"/>
+                                        <RotateTransform Angle="{Binding ViewModel.RotationAngle}"/>
+                                    </TransformGroup>
                                 </Image.LayoutTransform>
                             </Image>
                         </ScrollViewer>

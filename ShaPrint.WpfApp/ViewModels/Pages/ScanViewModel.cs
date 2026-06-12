@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Controls;
 using Wpf.Ui;
@@ -44,6 +45,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private bool _isScanning; // discovery status
 
         [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(EmptyStateVisibility))]
+        [NotifyPropertyChangedFor(nameof(LoadingStateVisibility))]
         private bool _isPerformingScan; // execution status
 
         [ObservableProperty]
@@ -73,6 +76,10 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         [NotifyPropertyChangedFor(nameof(ScrollBarVisibilitySetting))]
         private bool _isFitMode = true;
 
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(CurrentScale))]
+        private double _rotationAngle = 0;
+
         public string ZoomPercentText => IsFitMode ? "Fit" : $"{Math.Round(ZoomLevel * 100)}%";
 
         public double CurrentScale => IsFitMode ? 1.0 : ZoomLevel;
@@ -86,6 +93,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private BitmapImage? _previewImage;
 
         [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(EmptyStateVisibility))]
         private bool _hasScannedFile;
 
         private byte[] _scannedFileBytes = Array.Empty<byte>();
@@ -100,6 +108,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         public Visibility ImagePreviewVisibility => (PreviewImage != null && SelectedFormat != "PDF") ? Visibility.Visible : Visibility.Collapsed;
         public Visibility PdfPlaceholderVisibility => (HasScannedFile && SelectedFormat == "PDF") ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility EmptyStateVisibility => (!HasScannedFile && !IsPerformingScan) ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility LoadingStateVisibility => IsPerformingScan ? Visibility.Visible : Visibility.Collapsed;
 
         public ScanViewModel(ISnackbarService snackbarService)
         {
@@ -183,6 +193,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             PreviewImage = null;
             HasScannedFile = false;
             _scannedFileBytes = Array.Empty<byte>();
+            RotationAngle = 0; // Reset rotation on new scan
 
             var scanner = SelectedScanner;
             string serverIp = scanner.Server.IpAddress;
@@ -285,7 +296,15 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             {
                 try
                 {
-                    File.WriteAllBytes(saveFileDialog.FileName, _scannedFileBytes);
+                    byte[] bytesToSave = _scannedFileBytes;
+
+                    if (SelectedFormat != "PDF" && RotationAngle != 0)
+                    {
+                        AppLogger.Log($"[CLIENT] Rotating saved image file by {RotationAngle} degrees...");
+                        bytesToSave = RotateImageBytes(_scannedFileBytes, SelectedFormat, RotationAngle);
+                    }
+
+                    File.WriteAllBytes(saveFileDialog.FileName, bytesToSave);
                     _snackbarService.Show(
                         "File Saved", 
                         "Scanned document saved successfully.", 
@@ -339,6 +358,60 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             IsFitMode = true;
         }
 
+        [RelayCommand]
+        private void Rotate()
+        {
+            RotationAngle = (RotationAngle + 90) % 360;
+        }
+
+        private byte[] RotateImageBytes(byte[] imageBytes, string format, double angle)
+        {
+            if (angle == 0 || angle == 360)
+                return imageBytes;
+
+            try
+            {
+                using (var ms = new MemoryStream(imageBytes))
+                {
+                    var decoder = BitmapDecoder.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                    if (decoder.Frames.Count == 0) return imageBytes;
+
+                    var bitmapSource = decoder.Frames[0];
+
+                    var rotation = angle switch
+                    {
+                        90 => Rotation.Rotate90,
+                        180 => Rotation.Rotate180,
+                        270 => Rotation.Rotate270,
+                        _ => Rotation.Rotate0
+                    };
+
+                    if (rotation == Rotation.Rotate0)
+                        return imageBytes;
+
+                    var rotatedBitmap = new TransformedBitmap(bitmapSource, new RotateTransform(angle));
+
+                    using (var outMs = new MemoryStream())
+                    {
+                        BitmapEncoder encoder = format.ToUpper() switch
+                        {
+                            "PNG" => new PngBitmapEncoder(),
+                            _ => new JpegBitmapEncoder()
+                        };
+
+                        encoder.Frames.Add(BitmapFrame.Create(rotatedBitmap));
+                        encoder.Save(outMs);
+                        return outMs.ToArray();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"[CLIENT] Failed to rotate image bytes before saving: {ex.Message}");
+                return imageBytes;
+            }
+        }
+
         private double CalculateFitScale(ScrollViewer? scrollViewer)
         {
             if (scrollViewer == null || PreviewImage == null)
@@ -363,6 +436,14 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
             if (imgWidth <= 0 || imgHeight <= 0)
                 return 0.25;
+
+            // Swap dimensions if rotated 90 or 270 degrees
+            if (Math.Abs(RotationAngle % 180) != 0)
+            {
+                double temp = imgWidth;
+                imgWidth = imgHeight;
+                imgHeight = temp;
+            }
 
             // We subtract a small margin (e.g. 16px) for scrollbar/borders
             double fitX = (viewportWidth - 16) / imgWidth;
