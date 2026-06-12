@@ -18,6 +18,8 @@ namespace ShaPrint.Server
         private UdpClient? _udpClient;
         private CancellationTokenSource? _cts;
         private List<string> _exposedPrinters = new List<string>();
+        private List<string> _exposedScanners = new List<string>();
+        private readonly ScannerService _scannerService = new ScannerService();
 
         // Rate limiting: max 5 requests per second per IP
         private readonly ConcurrentDictionary<string, RateLimitEntry> _rateLimits = new();
@@ -33,6 +35,11 @@ namespace ShaPrint.Server
         public void SetExposedPrinters(List<string> printers)
         {
             _exposedPrinters = printers;
+        }
+
+        public void SetExposedScanners(List<string> scanners)
+        {
+            _exposedScanners = scanners;
         }
 
         public void Start()
@@ -117,8 +124,30 @@ namespace ShaPrint.Server
                     {
                         ServerName = Environment.MachineName,
                         IpAddress = GetLocalIPAddress(),
-                        ExposedPrinters = exposedInfos
+                        ExposedPrinters = exposedInfos,
+                        ExposedScanners = _exposedScanners.Count > 0 ? new List<ScannerInfo>() : null
                     };
+
+                    if (response.ExposedScanners != null)
+                    {
+                        try
+                        {
+                            var allLocalScanners = _scannerService.GetLocalScanners();
+                            foreach (var s in _exposedScanners)
+                            {
+                                var found = allLocalScanners.FirstOrDefault(x => x.Name == s);
+                                response.ExposedScanners.Add(new ScannerInfo
+                                {
+                                    Name = s,
+                                    Description = found?.Description ?? "WIA Scanner"
+                                });
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLogger.Error("[DISCOVERY] Error loading exposed scanners detail", ex);
+                        }
+                    }
 
                     // Enforce response size limit
                     string jsonResponse = JsonSerializer.Serialize(response);

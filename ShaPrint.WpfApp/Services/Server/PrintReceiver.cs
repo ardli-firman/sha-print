@@ -14,6 +14,7 @@ namespace ShaPrint.Server
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
         private SemaphoreSlim? _concurrencyLimit;
+        private readonly ScannerService _scannerService = new ScannerService();
 
         public void Start()
         {
@@ -90,34 +91,58 @@ namespace ShaPrint.Server
                 {
                     try
                     {
-                        var payload = await PrintJobPayload.ReadAsync(stream);
-                        AppLogger.Log($"[SERVER] Received payload. Printer: '{payload.TargetPrinterName}', Data size: {payload.SpoolData?.Length ?? 0} bytes.");
+                        var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+                        int firstInt = reader.ReadInt32();
 
-                        // Defense-in-depth: re-validate printer name after decryption
-                        try
+                        if (firstInt == Constants.PacketTypeScan) // 0x00000002
                         {
-                            payload.TargetPrinterName = Validators.ValidatePrinterName(payload.TargetPrinterName);
-                        }
-                        catch (ArgumentException ex)
-                        {
-                            AppLogger.Error($"[SERVER] Printer name validation failed after decryption: {ex.Message}");
-                            return;
-                        }
-
-                        if (!string.IsNullOrEmpty(payload.TargetPrinterName) && payload.SpoolData != null && payload.SpoolData.Length > 0)
-                        {
-                            string docName = "ShaPrint Job - " + DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                            AppLogger.Log($"[SERVER] Injecting {payload.SpoolData.Length} bytes into Windows Spooler for '{payload.TargetPrinterName}'");
-                            bool printed = SpoolerApi.PrintRawData(payload.TargetPrinterName, payload.SpoolData, docName);
-                            
-                            if (printed)
-                                AppLogger.Log($"[SERVER] SUCCESS: Print job accepted by Windows Spooler.");
-                            else
-                                AppLogger.Error($"[SERVER] FAILED: Windows Spooler rejected the job. Check SpoolerApi logs.");
+                            await HandleScanRequestAsync(stream, remoteIp, token);
                         }
                         else
                         {
-                            AppLogger.Error($"[SERVER] ERROR: Empty payload or missing printer name.");
+                            int encryptedLength;
+                            if (firstInt == Constants.PacketTypePrint) // 0x00000001
+                            {
+                                encryptedLength = reader.ReadInt32();
+                            }
+                            else if (firstInt >= 28) // Legacy client sending print job directly
+                            {
+                                encryptedLength = firstInt;
+                            }
+                            else
+                            {
+                                throw new InvalidDataException($"Invalid packet type header received: {firstInt}");
+                            }
+
+                            var payload = PrintJobPayload.ReadInternal(reader, encryptedLength);
+                            AppLogger.Log($"[SERVER] Received payload. Printer: '{payload.TargetPrinterName}', Data size: {payload.SpoolData?.Length ?? 0} bytes.");
+
+                            // Defense-in-depth: re-validate printer name after decryption
+                            try
+                            {
+                                payload.TargetPrinterName = Validators.ValidatePrinterName(payload.TargetPrinterName);
+                            }
+                            catch (ArgumentException ex)
+                            {
+                                AppLogger.Error($"[SERVER] Printer name validation failed after decryption: {ex.Message}");
+                                return;
+                            }
+
+                            if (!string.IsNullOrEmpty(payload.TargetPrinterName) && payload.SpoolData != null && payload.SpoolData.Length > 0)
+                            {
+                                string docName = "ShaPrint Job - " + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                                AppLogger.Log($"[SERVER] Injecting {payload.SpoolData.Length} bytes into Windows Spooler for '{payload.TargetPrinterName}'");
+                                bool printed = SpoolerApi.PrintRawData(payload.TargetPrinterName, payload.SpoolData, docName);
+                                
+                                if (printed)
+                                    AppLogger.Log($"[SERVER] SUCCESS: Print job accepted by Windows Spooler.");
+                                else
+                                    AppLogger.Error($"[SERVER] FAILED: Windows Spooler rejected the job. Check SpoolerApi logs.");
+                            }
+                            else
+                            {
+                                AppLogger.Error($"[SERVER] ERROR: Empty payload or missing printer name.");
+                            }
                         }
                     }
                     catch (InvalidDataException ex)
@@ -126,9 +151,42 @@ namespace ShaPrint.Server
                     }
                     catch (Exception ex)
                     {
-                        AppLogger.Error($"[SERVER] ERROR handling print job from {remoteIp}: " + ex.Message);
+                        AppLogger.Error($"[SERVER] ERROR handling print/scan job from {remoteIp}: " + ex.Message);
                     }
                 }
+            }
+        }
+
+        private async Task HandleScanRequestAsync(NetworkStream stream, string remoteIp, CancellationToken token)
+        {
+            try
+            {
+                var request = await ScanRequestPayload.ReadAsync(stream);
+                AppLogger.Log($"[SERVER] Received scan request from {remoteIp} for scanner '{request.TargetScannerName}' (DPI={request.Dpi}, ColorMode={request.ColorMode}, Format={request.Format})");
+
+                var response = new ScanResponsePayload();
+                try
+                {
+                    string actualFormat;
+                    byte[] scannedBytes = _scannerService.PerformScan(request.TargetScannerName, request.Dpi, request.ColorMode, request.Format, out actualFormat);
+                    response.Success = true;
+                    response.FileBytes = scannedBytes;
+                    response.ErrorMessage = string.Empty;
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error($"[SERVER] Scan execution failed for {remoteIp}", ex);
+                    response.Success = false;
+                    response.ErrorMessage = ex.Message;
+                    response.FileBytes = Array.Empty<byte>();
+                }
+
+                AppLogger.Log($"[SERVER] Sending scan response to {remoteIp}. Success={response.Success}, Size={response.FileBytes.Length} bytes.");
+                await ScanResponsePayload.WriteAsync(stream, response);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"[SERVER] Error reading/writing scan payload from {remoteIp}", ex);
             }
         }
     }

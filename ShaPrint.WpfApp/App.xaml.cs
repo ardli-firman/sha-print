@@ -38,6 +38,8 @@ namespace ShaPrint.WpfApp
                 services.AddSingleton<ServerViewModel>();
                 services.AddTransient<ClientPage>();
                 services.AddSingleton<ClientViewModel>();
+                services.AddTransient<ScanPage>();
+                services.AddSingleton<ScanViewModel>();
 
                 // Settings Page
                 services.AddTransient<SettingsPage>();

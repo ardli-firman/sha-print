@@ -29,11 +29,32 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         }
     }
 
+    public partial class ScannerItem : ObservableObject
+    {
+        [ObservableProperty]
+        private string _name;
+
+        [ObservableProperty]
+        private bool _isSelected;
+
+        public ScannerItem(string name)
+        {
+            _name = name;
+        }
+    }
+
+    public class ServerSavedConfig
+    {
+        public List<string> ExposedPrinters { get; set; } = new();
+        public List<string> ExposedScanners { get; set; } = new();
+    }
+
     public partial class ServerViewModel : ObservableObject, IDisposable
     {
         private readonly DiscoveryServer _discoveryServer;
         private readonly PrintReceiver _printReceiver;
         private readonly ShaPrint.WpfApp.Services.Server.PrintMonitorService _printMonitorService;
+        private readonly ScannerService _scannerService;
         private readonly INavigationService _navigationService;
         private readonly ISnackbarService _snackbarService;
         private readonly string _configFile;
@@ -45,6 +66,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private string _statusText = "Status: Stopped";
 
         public ObservableCollection<PrinterItem> Printers { get; } = new();
+        public ObservableCollection<ScannerItem> Scanners { get; } = new();
         public ObservableCollection<string> Logs { get; } = new();
         public string LogsText => string.Join(Environment.NewLine, Logs);
 
@@ -53,6 +75,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _navigationService = navigationService;
             _snackbarService = snackbarService;
             _printMonitorService = printMonitorService;
+            _scannerService = new ScannerService();
             _discoveryServer = new DiscoveryServer();
             _printReceiver = new PrintReceiver();
             
@@ -63,6 +86,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             AppLogger.OnLog += AppLogger_OnLog;
 
             LoadPrinters();
+            LoadScanners();
             LoadConfiguration();
         }
 
@@ -102,6 +126,23 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             }
         }
 
+        private void LoadScanners()
+        {
+            try
+            {
+                var scanners = _scannerService.GetLocalScanners();
+                Scanners.Clear();
+                foreach (var s in scanners)
+                {
+                    Scanners.Add(new ScannerItem(s.Name));
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("Failed to list scanners during startup", ex);
+            }
+        }
+
         [RelayCommand]
         private void ToggleServer()
         {
@@ -118,14 +159,16 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private void StartServer()
         {
             var selectedPrinters = Printers.Where(p => p.IsSelected).Select(p => p.Name).ToList();
+            var selectedScanners = Scanners.Where(s => s.IsSelected).Select(s => s.Name).ToList();
 
-            if (selectedPrinters.Count == 0)
+            if (selectedPrinters.Count == 0 && selectedScanners.Count == 0)
             {
-                System.Windows.MessageBox.Show("Please select at least one printer to expose.", "Warning", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+                System.Windows.MessageBox.Show("Please select at least one printer or scanner to expose.", "Warning", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
                 return;
             }
 
             _discoveryServer.SetExposedPrinters(selectedPrinters);
+            _discoveryServer.SetExposedScanners(selectedScanners);
             _printMonitorService.SetMonitoredPrinters(selectedPrinters);
             _discoveryServer.Start();
             _printReceiver.Start();
@@ -137,8 +180,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             IsRunning = true;
             StatusText = "Status: Running";
 
-            SaveConfiguration(selectedPrinters);
-            _snackbarService.Show("Server Started", $"Broadcasting {selectedPrinters.Count} printers to the network.", ControlAppearance.Success, new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Play24), TimeSpan.FromSeconds(3));
+            SaveConfiguration(selectedPrinters, selectedScanners);
+            _snackbarService.Show("Server Started", $"Broadcasting {selectedPrinters.Count} printers and {selectedScanners.Count} scanners.", ControlAppearance.Success, new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Play24), TimeSpan.FromSeconds(3));
         }
 
         public void StopServer()
@@ -175,8 +218,25 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     return;
                 }
 
-                var savedPrinters = JsonSerializer.Deserialize<List<string>>(raw);
-                if (savedPrinters != null && savedPrinters.Count > 0)
+                List<string>? savedPrinters = null;
+                List<string>? savedScanners = null;
+
+                try
+                {
+                    var savedConfig = JsonSerializer.Deserialize<ServerSavedConfig>(raw);
+                    if (savedConfig != null)
+                    {
+                        savedPrinters = savedConfig.ExposedPrinters;
+                        savedScanners = savedConfig.ExposedScanners;
+                    }
+                }
+                catch
+                {
+                    // Fallback to legacy List<string> for printers
+                    savedPrinters = JsonSerializer.Deserialize<List<string>>(raw);
+                }
+
+                if (savedPrinters != null)
                 {
                     foreach (var p in Printers)
                     {
@@ -185,17 +245,37 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                             p.IsSelected = true;
                         }
                     }
+                }
+
+                if (savedScanners != null)
+                {
+                    foreach (var s in Scanners)
+                    {
+                        if (savedScanners.Contains(s.Name))
+                        {
+                            s.IsSelected = true;
+                        }
+                    }
+                }
+
+                if ((savedPrinters != null && savedPrinters.Count > 0) || (savedScanners != null && savedScanners.Count > 0))
+                {
                     StartServer();
                 }
             }
             catch (Exception ex) { AppLogger.Error("Failed to load server configuration", ex); }
         }
 
-        private void SaveConfiguration(List<string> printers)
+        private void SaveConfiguration(List<string> printers, List<string> scanners)
         {
             try
             {
-                string json = JsonSerializer.Serialize(printers);
+                var config = new ServerSavedConfig
+                {
+                    ExposedPrinters = printers,
+                    ExposedScanners = scanners
+                };
+                string json = JsonSerializer.Serialize(config);
                 string wrapped = CryptoHelper.WrapConfigWithHmac(json);
                 File.WriteAllText(_configFile, wrapped);
             }
