@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
 
@@ -216,6 +218,12 @@ namespace ShaPrint.Server
                 throw threadException;
             }
 
+            if (rawBytes.Length > 0)
+            {
+                // Apply post-processing color mode fallback in case the scanner driver ignored WIA settings
+                rawBytes = ConvertImageColorMode(rawBytes, colorMode, format.Equals("PDF", StringComparison.OrdinalIgnoreCase) ? "JPEG" : format);
+            }
+
             if (format.Equals("PDF", StringComparison.OrdinalIgnoreCase) && rawBytes.Length > 0)
             {
                 AppLogger.Log("[SCANNER] Wrapping scanned JPEG bytes into PDF format.");
@@ -223,6 +231,53 @@ namespace ShaPrint.Server
             }
 
             return rawBytes;
+        }
+
+        private static byte[] ConvertImageColorMode(byte[] rawBytes, int colorMode, string format)
+        {
+            if (colorMode == 2) // Color (default) - no conversion needed
+                return rawBytes;
+
+            try
+            {
+                using (var ms = new MemoryStream(rawBytes))
+                {
+                    var decoder = BitmapDecoder.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                    if (decoder.Frames.Count == 0) return rawBytes;
+
+                    var frame = decoder.Frames[0];
+                    PixelFormat targetFormat = colorMode switch
+                    {
+                        0 => PixelFormats.BlackWhite,  // 1-bit B&W
+                        1 => PixelFormats.Gray8,       // 8-bit Grayscale
+                        _ => frame.Format
+                    };
+
+                    // Only convert if the format is actually different
+                    if (frame.Format == targetFormat)
+                        return rawBytes;
+
+                    var converted = new FormatConvertedBitmap(frame, targetFormat, null, 0);
+
+                    using (var outMs = new MemoryStream())
+                    {
+                        BitmapEncoder encoder = format.ToUpper() switch
+                        {
+                            "PNG" => new PngBitmapEncoder(),
+                            _ => new JpegBitmapEncoder()
+                        };
+
+                        encoder.Frames.Add(BitmapFrame.Create(converted));
+                        encoder.Save(outMs);
+                        return outMs.ToArray();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Log($"[SCANNER] Warning: Failed to convert image color mode: {ex.Message}");
+                return rawBytes;
+            }
         }
 
         private static void SetWiaProperty(dynamic properties, object propIdOrName, object value)
@@ -244,8 +299,10 @@ namespace ShaPrint.Server
         /// </summary>
         public static byte[] WrapJpegInPdf(byte[] jpegBytes)
         {
-            int width = 612; // default letter width in points
-            int height = 792; // default letter height in points
+            int pixelWidth = 0;
+            int pixelHeight = 0;
+            int pointsWidth = 612; // default letter width in points
+            int pointsHeight = 792; // default letter height in points
             string colorSpace = "DeviceRGB";
 
             try
@@ -253,16 +310,19 @@ namespace ShaPrint.Server
                 // Retrieve actual pixel dimensions using WPF BitmapDecoder
                 using (var ms = new MemoryStream(jpegBytes))
                 {
-                    var decoder = System.Windows.Media.Imaging.BitmapDecoder.Create(
+                    var decoder = BitmapDecoder.Create(
                         ms,
                         System.Windows.Media.Imaging.BitmapCreateOptions.None,
                         System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
                     if (decoder.Frames.Count > 0)
                     {
                         var frame = decoder.Frames[0];
+                        pixelWidth = frame.PixelWidth;
+                        pixelHeight = frame.PixelHeight;
+
                         // Convert pixels to PDF points (1 inch = 72 points, assuming 96 DPI screen default or raw size)
-                        width = (int)Math.Round(frame.PixelWidth * 72.0 / 96.0);
-                        height = (int)Math.Round(frame.PixelHeight * 72.0 / 96.0);
+                        pointsWidth = (int)Math.Round(frame.PixelWidth * 72.0 / 96.0);
+                        pointsHeight = (int)Math.Round(frame.PixelHeight * 72.0 / 96.0);
 
                         var format = frame.Format;
                         if (format == System.Windows.Media.PixelFormats.Gray8 ||
@@ -284,6 +344,9 @@ namespace ShaPrint.Server
                 AppLogger.Log($"[SCANNER] Warning: Could not parse image bounds/color space for PDF, defaulting to letter size RGB. {ex.Message}");
             }
 
+            if (pixelWidth <= 0) pixelWidth = pointsWidth;
+            if (pixelHeight <= 0) pixelHeight = pointsHeight;
+
             using (var ms = new MemoryStream())
             using (var sw = new StreamWriter(ms, System.Text.Encoding.ASCII))
             {
@@ -302,11 +365,11 @@ namespace ShaPrint.Server
                 sw.Flush();
  
                 long pageOffset = ms.Position;
-                sw.Write($"3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R /MediaBox [0 0 {width} {height}] >>\nendobj\n");
+                sw.Write($"3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R /MediaBox [0 0 {pointsWidth} {pointsHeight}] >>\nendobj\n");
                 sw.Flush();
  
                 long imageOffset = ms.Position;
-                sw.Write($"4 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /{colorSpace} /BitsPerComponent 8 /Filter /DCTDecode /Length {jpegBytes.Length} >>\nstream\n");
+                sw.Write($"4 0 obj\n<< /Type /XObject /Subtype /Image /Width {pixelWidth} /Height {pixelHeight} /ColorSpace /{colorSpace} /BitsPerComponent 8 /Filter /DCTDecode /Length {jpegBytes.Length} >>\nstream\n");
                 sw.Flush();
                 
                 // Write binary image stream
@@ -317,7 +380,7 @@ namespace ShaPrint.Server
                 sw.Flush();
  
                 long contentOffset = ms.Position;
-                string contentStream = $"q\n{width} 0 0 {height} 0 0 cm\n/Im1 Do\nQ\n";
+                string contentStream = $"q\n{pointsWidth} 0 0 {pointsHeight} 0 0 cm\n/Im1 Do\nQ\n";
                 sw.Write($"5 0 obj\n<< /Length {contentStream.Length} >>\nstream\n{contentStream}endstream\nendobj\n");
                 sw.Flush();
  
