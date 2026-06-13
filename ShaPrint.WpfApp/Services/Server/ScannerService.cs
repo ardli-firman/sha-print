@@ -144,12 +144,28 @@ namespace ShaPrint.Server
                     // 1. Set intent to 0 (None) first to prevent the driver from resetting other properties
                     SetWiaProperty(item.Properties, 6146, 0);
  
-                    // 2. Set Resolution (DPI)
-                    // 6147: WIA_IPS_XRESOLUTION, 6148: WIA_IPS_YRESOLUTION
+                    // 2. Set DataType and Depth first, because changing them resets resolution
+                    int wiaDataType = colorMode switch
+                    {
+                        0 => 0, // WIA_DATA_THRESHOLD
+                        1 => 2, // WIA_DATA_GRAYSCALE
+                        _ => 3  // WIA_DATA_COLOR
+                    };
+                    SetWiaProperty(item.Properties, 4103, wiaDataType);
+ 
+                    int wiaDepth = colorMode switch
+                    {
+                        0 => 1,
+                        1 => 8,
+                        _ => 24
+                    };
+                    SetWiaProperty(item.Properties, 4104, wiaDepth);
+ 
+                    // 3. Set Resolution (DPI) AFTER DataType/Depth
                     SetWiaProperty(item.Properties, 6147, dpi);
                     SetWiaProperty(item.Properties, 6148, dpi);
  
-                    // 3. Set Extents (DPI-aware size)
+                    // 4. Set Extents (DPI-aware size)
                     double bedWidthInches = 8.5;  // Default Letter width
                     double bedHeightInches = 11.0; // Default Letter height
                     try
@@ -182,30 +198,25 @@ namespace ShaPrint.Server
                     SetWiaProperty(item.Properties, 6151, widthPixels);
                     SetWiaProperty(item.Properties, 6152, heightPixels);
  
-                    // 4. Set Quality Sliders (Brightness and Contrast scaled from -100..100 to -1000..1000)
+                    // 5. Set Quality Sliders (Brightness and Contrast scaled from -100..100 to -1000..1000)
                     int wiaBrightness = Math.Clamp(brightness * 10, -1000, 1000);
                     int wiaContrast = Math.Clamp(contrast * 10, -1000, 1000);
                     SetWiaProperty(item.Properties, 6154, wiaBrightness);
                     SetWiaProperty(item.Properties, 6155, wiaContrast);
- 
-                    // 5. Map UI colorMode (0 = B&W, 1 = Grayscale, 2 = Color) to standard WIA values
-                    // 4103: WIA_IPA_DATATYPE (0 = Threshold/B&W, 2 = Grayscale, 3 = Color/RGB)
-                    int wiaDataType = colorMode switch
+
+                    // 6. Diagnostic read-back logging
+                    try
                     {
-                        0 => 0, // WIA_DATA_THRESHOLD
-                        1 => 2, // WIA_DATA_GRAYSCALE
-                        _ => 3  // WIA_DATA_COLOR
-                    };
-                    SetWiaProperty(item.Properties, 4103, wiaDataType);
- 
-                    // 4104: WIA_IPA_DEPTH (1 = B&W, 8 = Grayscale, 24 = Color)
-                    int wiaDepth = colorMode switch
+                        int actualDpiX = Convert.ToInt32(item.Properties["6147"].Value);
+                        int actualDpiY = Convert.ToInt32(item.Properties["6148"].Value);
+                        int actualExtentX = Convert.ToInt32(item.Properties["6151"].Value);
+                        int actualExtentY = Convert.ToInt32(item.Properties["6152"].Value);
+                        AppLogger.Log($"[SCANNER] Applied WIA settings: DPI={actualDpiX}x{actualDpiY}, Extent={actualExtentX}x{actualExtentY}");
+                    }
+                    catch (Exception ex)
                     {
-                        0 => 1,
-                        1 => 8,
-                        _ => 24
-                    };
-                    SetWiaProperty(item.Properties, 4104, wiaDepth);
+                        AppLogger.Log($"[SCANNER] Failed to read back WIA settings: {ex.Message}");
+                    }
  
                     AppLogger.Log($"[SCANNER] Initiating scan: DPI={dpi}, Bed={bedWidthInches}x{bedHeightInches}\", Size={widthPixels}x{heightPixels}px, ColorMode={colorMode}, Brightness={wiaBrightness}, Contrast={wiaContrast}, Format={format}");
                     dynamic commonDialog = Activator.CreateInstance(Type.GetTypeFromProgID("WIA.CommonDialog")!)!;
