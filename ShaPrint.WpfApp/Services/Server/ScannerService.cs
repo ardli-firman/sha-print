@@ -62,12 +62,12 @@ namespace ShaPrint.Server
             return list;
         }
 
-        public byte[] PerformScan(string scannerName, int dpi, int colorMode, string format, out string actualFormat)
+        public byte[] PerformScan(string scannerName, int dpi, int colorMode, string format, int brightness, int contrast, out string actualFormat)
         {
             byte[] resultBytes = Array.Empty<byte>();
             string formatGuid = WiaFormatJPEG;
             string ext = "jpg";
-
+ 
             if (format.Equals("PNG", StringComparison.OrdinalIgnoreCase))
             {
                 formatGuid = WiaFormatPNG;
@@ -75,16 +75,14 @@ namespace ShaPrint.Server
             }
             else if (format.Equals("PDF", StringComparison.OrdinalIgnoreCase))
             {
-                // PDF is wrapped on client or server using JPEG source
                 formatGuid = WiaFormatJPEG;
                 ext = "pdf";
             }
-
+ 
             actualFormat = ext;
-            string outFormat = ext;
             byte[] rawBytes = Array.Empty<byte>();
             Exception? threadException = null;
-
+ 
             var thread = new Thread(() =>
             {
                 try
@@ -92,10 +90,10 @@ namespace ShaPrint.Server
                     Type? wiaType = Type.GetTypeFromProgID("WIA.DeviceManager");
                     if (wiaType == null)
                         throw new InvalidOperationException("WIA is not installed on this machine.");
-
+ 
                     dynamic deviceManager = Activator.CreateInstance(wiaType)!;
                     dynamic? targetDeviceInfo = null;
-
+ 
                     foreach (dynamic info in deviceManager.DeviceInfos)
                     {
                         if (info.Type == 1) // Scanner
@@ -103,8 +101,7 @@ namespace ShaPrint.Server
                             string friendlyName = GetScannerFriendlyName(info);
                             string deviceId = string.Empty;
                             try { deviceId = info.DeviceID?.ToString() ?? string.Empty; } catch { }
-
-                            // Extract individual raw properties for backward compatibility matching
+ 
                             string rawName = string.Empty;
                             string rawDesc = string.Empty;
                             try { rawName = info.Properties[2].Value?.ToString() ?? string.Empty; } catch { }
@@ -117,7 +114,7 @@ namespace ShaPrint.Server
                             {
                                 try { rawDesc = info.Properties["Description"].Value?.ToString() ?? string.Empty; } catch { }
                             }
-
+ 
                             if (friendlyName.Equals(scannerName, StringComparison.OrdinalIgnoreCase) || 
                                 rawName.Equals(scannerName, StringComparison.OrdinalIgnoreCase) || 
                                 rawDesc.Equals(scannerName, StringComparison.OrdinalIgnoreCase) ||
@@ -128,33 +125,71 @@ namespace ShaPrint.Server
                             }
                         }
                     }
-
+ 
                     if (targetDeviceInfo == null)
                         throw new DirectoryNotFoundException($"Scanner '{scannerName}' was not found.");
-
+ 
                     AppLogger.Log($"[SCANNER] Connecting to scanner: '{scannerName}'");
                     dynamic device = targetDeviceInfo.Connect();
-
+ 
                     if (device.Items.Count == 0)
                         throw new InvalidOperationException("Scanner has no scanning items.");
-
+ 
                     // Item 1 represents the scan bed / sensor
                     dynamic item = device.Items[1];
-
+ 
                     // Set scanning properties on the device level
                     // 3088: WIA_DPS_DOCUMENT_HANDLING_SELECT (1 = Flatbed)
                     SetWiaProperty(device.Properties, 3088, 1);
-
-                    // Map UI colorMode (0 = B&W, 1 = Grayscale, 2 = Color) to standard WIA values
-                    // 6146: WIA_IPS_CUR_INTENT (1 = Color, 2 = Grayscale, 4 = Text/B&W)
-                    int wiaIntent = colorMode switch
+ 
+                    // 1. Set intent to 0 (None) first to prevent the driver from resetting other properties
+                    SetWiaProperty(item.Properties, 6146, 0);
+ 
+                    // 2. Set Resolution (DPI)
+                    // 6147: WIA_IPS_XRESOLUTION, 6148: WIA_IPS_YRESOLUTION
+                    SetWiaProperty(item.Properties, 6147, dpi);
+                    SetWiaProperty(item.Properties, 6148, dpi);
+ 
+                    // 3. Set Extents (DPI-aware size)
+                    double bedWidthInches = 8.5;  // Default Letter width
+                    double bedHeightInches = 11.0; // Default Letter height
+                    try
                     {
-                        0 => 4, // WIA_INTENT_IMAGE_TEXT_COLOR
-                        1 => 2, // WIA_INTENT_IMAGE_GRAYSCALE
-                        _ => 1  // WIA_INTENT_IMAGE_COLOR
-                    };
-                    SetWiaProperty(item.Properties, 6146, wiaIntent);
-
+                        // 6165 is WIA_IPS_MAX_HORIZONTAL_SIZE (in thousandths of an inch)
+                        dynamic widthProp = item.Properties["6165"];
+                        int widthThousandths = Convert.ToInt32(widthProp.Value);
+                        if (widthThousandths > 0)
+                            bedWidthInches = widthThousandths / 1000.0;
+                    }
+                    catch { }
+ 
+                    try
+                    {
+                        // 6166 is WIA_IPS_MAX_VERTICAL_SIZE (in thousandths of an inch)
+                        dynamic heightProp = item.Properties["6166"];
+                        int heightThousandths = Convert.ToInt32(heightProp.Value);
+                        if (heightThousandths > 0)
+                            bedHeightInches = heightThousandths / 1000.0;
+                    }
+                    catch { }
+ 
+                    int widthPixels = (int)Math.Round(bedWidthInches * dpi);
+                    int heightPixels = (int)Math.Round(bedHeightInches * dpi);
+ 
+                    // 6149: WIA_IPS_XPOS, 6150: WIA_IPS_YPOS (start positions at 0)
+                    SetWiaProperty(item.Properties, 6149, 0);
+                    SetWiaProperty(item.Properties, 6150, 0);
+                    // 6151: WIA_IPS_XEXTENT, 6152: WIA_IPS_YEXTENT (pixel dimensions)
+                    SetWiaProperty(item.Properties, 6151, widthPixels);
+                    SetWiaProperty(item.Properties, 6152, heightPixels);
+ 
+                    // 4. Set Quality Sliders (Brightness and Contrast scaled from -100..100 to -1000..1000)
+                    int wiaBrightness = Math.Clamp(brightness * 10, -1000, 1000);
+                    int wiaContrast = Math.Clamp(contrast * 10, -1000, 1000);
+                    SetWiaProperty(item.Properties, 6154, wiaBrightness);
+                    SetWiaProperty(item.Properties, 6155, wiaContrast);
+ 
+                    // 5. Map UI colorMode (0 = B&W, 1 = Grayscale, 2 = Color) to standard WIA values
                     // 4103: WIA_IPA_DATATYPE (0 = Threshold/B&W, 2 = Grayscale, 3 = Color/RGB)
                     int wiaDataType = colorMode switch
                     {
@@ -163,7 +198,7 @@ namespace ShaPrint.Server
                         _ => 3  // WIA_DATA_COLOR
                     };
                     SetWiaProperty(item.Properties, 4103, wiaDataType);
-
+ 
                     // 4104: WIA_IPA_DEPTH (1 = B&W, 8 = Grayscale, 24 = Color)
                     int wiaDepth = colorMode switch
                     {
@@ -172,22 +207,15 @@ namespace ShaPrint.Server
                         _ => 24
                     };
                     SetWiaProperty(item.Properties, 4104, wiaDepth);
-
-                    // 6147: WIA_IPS_XRESOLUTION
-                    SetWiaProperty(item.Properties, 6147, dpi);
-                    // 6148: WIA_IPS_YRESOLUTION
-                    SetWiaProperty(item.Properties, 6148, dpi);
-
-                    AppLogger.Log($"[SCANNER] Initiating scan: DPI={dpi}, ColorMode={colorMode} (WiaIntent={wiaIntent}, WiaDataType={wiaDataType}, WiaDepth={wiaDepth}), Format={format}");
+ 
+                    AppLogger.Log($"[SCANNER] Initiating scan: DPI={dpi}, Bed={bedWidthInches}x{bedHeightInches}\", Size={widthPixels}x{heightPixels}px, ColorMode={colorMode}, Brightness={wiaBrightness}, Contrast={wiaContrast}, Format={format}");
                     dynamic commonDialog = Activator.CreateInstance(Type.GetTypeFromProgID("WIA.CommonDialog")!)!;
                     
-                    // ShowTransfer triggers the scan (CancelError = false)
                     dynamic imageFile = commonDialog.ShowTransfer(item, formatGuid, false);
-
+ 
                     if (imageFile == null)
                         throw new OperationCanceledException("Scan was cancelled or failed.");
-
-                    // Save to a temporary file
+ 
                     string tempPath = Path.Combine(Path.GetTempPath(), $"shaprint_{Guid.NewGuid():N}.tmp");
                     try
                     {
@@ -208,76 +236,29 @@ namespace ShaPrint.Server
                     threadException = ex;
                 }
             });
-
+ 
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
             thread.Join();
-
+ 
             if (threadException != null)
             {
                 throw threadException;
             }
-
+ 
             if (rawBytes.Length > 0)
             {
-                // Apply post-processing color mode fallback in case the scanner driver ignored WIA settings
-                rawBytes = ConvertImageColorMode(rawBytes, colorMode, format.Equals("PDF", StringComparison.OrdinalIgnoreCase) ? "JPEG" : format);
+                // Apply our robust Post-Processing logic to guarantee target format and color mode
+                rawBytes = ImageProcessor.ProcessImage(rawBytes, colorMode, format.Equals("PDF", StringComparison.OrdinalIgnoreCase) ? "JPEG" : format);
             }
-
+ 
             if (format.Equals("PDF", StringComparison.OrdinalIgnoreCase) && rawBytes.Length > 0)
             {
                 AppLogger.Log("[SCANNER] Wrapping scanned JPEG bytes into PDF format.");
                 return WrapJpegInPdf(rawBytes);
             }
-
+ 
             return rawBytes;
-        }
-
-        private static byte[] ConvertImageColorMode(byte[] rawBytes, int colorMode, string format)
-        {
-            if (colorMode == 2) // Color (default) - no conversion needed
-                return rawBytes;
-
-            try
-            {
-                using (var ms = new MemoryStream(rawBytes))
-                {
-                    var decoder = BitmapDecoder.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-                    if (decoder.Frames.Count == 0) return rawBytes;
-
-                    var frame = decoder.Frames[0];
-                    PixelFormat targetFormat = colorMode switch
-                    {
-                        0 => PixelFormats.BlackWhite,  // 1-bit B&W
-                        1 => PixelFormats.Gray8,       // 8-bit Grayscale
-                        _ => frame.Format
-                    };
-
-                    // Only convert if the format is actually different
-                    if (frame.Format == targetFormat)
-                        return rawBytes;
-
-                    var converted = new FormatConvertedBitmap(frame, targetFormat, null, 0);
-
-                    using (var outMs = new MemoryStream())
-                    {
-                        BitmapEncoder encoder = format.ToUpper() switch
-                        {
-                            "PNG" => new PngBitmapEncoder(),
-                            _ => new JpegBitmapEncoder()
-                        };
-
-                        encoder.Frames.Add(BitmapFrame.Create(converted));
-                        encoder.Save(outMs);
-                        return outMs.ToArray();
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Log($"[SCANNER] Warning: Failed to convert image color mode: {ex.Message}");
-                return rawBytes;
-            }
         }
 
         private static void SetWiaProperty(dynamic properties, object propIdOrName, object value)
@@ -386,12 +367,12 @@ namespace ShaPrint.Server
  
                 long xrefOffset = ms.Position;
                 sw.Write("xref\n0 6\n");
-                sw.Write("0000000000 65535 f \n");
-                sw.Write($"{catalogOffset:D10} 00000 n \n");
-                sw.Write($"{pagesOffset:D10} 00000 n \n");
-                sw.Write($"{pageOffset:D10} 00000 n \n");
-                sw.Write($"{imageOffset:D10} 00000 n \n");
-                sw.Write($"{contentOffset:D10} 00000 n \n");
+                sw.Write("0000000000 65535 f\r\n");
+                sw.Write($"{catalogOffset:D10} 00000 n\r\n");
+                sw.Write($"{pagesOffset:D10} 00000 n\r\n");
+                sw.Write($"{pageOffset:D10} 00000 n\r\n");
+                sw.Write($"{imageOffset:D10} 00000 n\r\n");
+                sw.Write($"{contentOffset:D10} 00000 n\r\n");
                 sw.Flush();
  
                 sw.Write($"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xrefOffset}\n%%EOF\n");
