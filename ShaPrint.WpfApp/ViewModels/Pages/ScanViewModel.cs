@@ -510,11 +510,17 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     var frame = decoder.Frames[0];
                     using (var outMs = new MemoryStream())
                     {
-                        BitmapEncoder encoder = format.ToUpper() switch
+                        BitmapEncoder encoder;
+                        if (format.ToUpper().Equals("PNG"))
                         {
-                            "PNG" => new PngBitmapEncoder(),
-                            _ => new JpegBitmapEncoder()
-                        };
+                            encoder = new PngBitmapEncoder();
+                        }
+                        else
+                        {
+                            var jpegEncoder = new JpegBitmapEncoder();
+                            jpegEncoder.QualityLevel = 95;
+                            encoder = jpegEncoder;
+                        }
  
                         encoder.Frames.Add(BitmapFrame.Create(frame));
                         encoder.Save(outMs);
@@ -790,11 +796,17 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
                     using (var outMs = new MemoryStream())
                     {
-                        BitmapEncoder encoder = format.ToUpper() switch
+                        BitmapEncoder encoder;
+                        if (format.ToUpper().Equals("PNG"))
                         {
-                            "PNG" => new PngBitmapEncoder(),
-                            _ => new JpegBitmapEncoder()
-                        };
+                            encoder = new PngBitmapEncoder();
+                        }
+                        else
+                        {
+                            var jpegEncoder = new JpegBitmapEncoder();
+                            jpegEncoder.QualityLevel = 95;
+                            encoder = jpegEncoder;
+                        }
 
                         encoder.Frames.Add(BitmapFrame.Create(rotatedBitmap));
                         encoder.Save(outMs);

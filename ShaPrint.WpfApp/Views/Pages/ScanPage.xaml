@@ -293,7 +293,8 @@
                                           Visibility="{Binding ViewModel.ImagePreviewVisibility}"
                                           PreviewMouseWheel="PreviewScrollViewer_PreviewMouseWheel">
                                 <Image Source="{Binding ViewModel.PreviewImage}" Margin="8" Stretch="Uniform"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center">
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       RenderOptions.BitmapScalingMode="HighQuality">
                                     <Image.LayoutTransform>
                                         <TransformGroup>
                                             <ScaleTransform ScaleX="{Binding ViewModel.CurrentScale}" ScaleY="{Binding ViewModel.CurrentScale}"/>

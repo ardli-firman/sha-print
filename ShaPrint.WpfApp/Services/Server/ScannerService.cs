@@ -12,6 +12,7 @@ namespace ShaPrint.Server
     public class ScannerService
     {
         // WIA Format GUIDs
+        private const string WiaFormatBMP = "{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}";
         private const string WiaFormatJPEG = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}";
         private const string WiaFormatPNG = "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}";
         private const string WiaFormatTIFF = "{B96B3CB1-0728-11D3-9D7B-0000F81EF32E}";
@@ -65,17 +66,15 @@ namespace ShaPrint.Server
         public byte[] PerformScan(string scannerName, int dpi, int colorMode, string format, int brightness, int contrast, out string actualFormat)
         {
             byte[] resultBytes = Array.Empty<byte>();
-            string formatGuid = WiaFormatJPEG;
+            string formatGuid = WiaFormatBMP;
             string ext = "jpg";
  
             if (format.Equals("PNG", StringComparison.OrdinalIgnoreCase))
             {
-                formatGuid = WiaFormatPNG;
                 ext = "png";
             }
             else if (format.Equals("PDF", StringComparison.OrdinalIgnoreCase))
             {
-                formatGuid = WiaFormatJPEG;
                 ext = "pdf";
             }
  

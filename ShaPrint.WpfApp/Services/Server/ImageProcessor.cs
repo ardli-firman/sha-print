@@ -65,7 +65,17 @@ namespace ShaPrint.Server
 
                     using (var outMs = new MemoryStream())
                     {
-                        BitmapEncoder encoder = isTargetPng ? new PngBitmapEncoder() : new JpegBitmapEncoder();
+                        BitmapEncoder encoder;
+                        if (isTargetPng)
+                        {
+                            encoder = new PngBitmapEncoder();
+                        }
+                        else
+                        {
+                            var jpegEncoder = new JpegBitmapEncoder();
+                            jpegEncoder.QualityLevel = 95;
+                            encoder = jpegEncoder;
+                        }
                         encoder.Frames.Add(BitmapFrame.Create(processedSource));
                         encoder.Save(outMs);
                         return outMs.ToArray();
