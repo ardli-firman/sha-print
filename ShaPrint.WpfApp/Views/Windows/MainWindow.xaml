@@ -48,8 +48,8 @@
                 
                 <ui:NavigationView.MenuItems>
                     <ui:NavigationViewItem Content="Server Dashboard" Icon="{ui:SymbolIcon Server24}" TargetPageType="{x:Type pages:ServerPage}" Visibility="{Binding ViewModel.IsServerMode}" />
-                    <ui:NavigationViewItem Content="Client Dashboard" Icon="{ui:SymbolIcon Desktop24}" TargetPageType="{x:Type pages:ClientPage}" Visibility="{Binding ViewModel.IsClientMode}" />
-                    <ui:NavigationViewItem Content="Remote Scan" Icon="{ui:SymbolIcon Scan24}" TargetPageType="{x:Type pages:ScanPage}" Visibility="{Binding ViewModel.IsClientMode}" />
+                    <ui:NavigationViewItem Content="Printer Setup" Icon="{ui:SymbolIcon Print24}" TargetPageType="{x:Type pages:ClientPage}" Visibility="{Binding ViewModel.IsClientMode}" />
+                    <ui:NavigationViewItem Content="Scan Document" Icon="{ui:SymbolIcon Scan24}" TargetPageType="{x:Type pages:ScanPage}" Visibility="{Binding ViewModel.IsClientMode}" />
                 </ui:NavigationView.MenuItems>
 
                 <ui:NavigationView.FooterMenuItems>
