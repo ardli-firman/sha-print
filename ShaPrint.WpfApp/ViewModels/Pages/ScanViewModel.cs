@@ -67,6 +67,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(EmptyStateVisibility))]
         [NotifyPropertyChangedFor(nameof(LoadingStateVisibility))]
+        [NotifyPropertyChangedFor(nameof(ImagePreviewVisibility))]
         private bool _isPerformingScan; // execution status
  
         [ObservableProperty]
@@ -140,7 +141,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public ObservableCollection<string> Logs { get; } = new();
         public string LogsText => string.Join(Environment.NewLine, Logs);
  
-        public Visibility ImagePreviewVisibility => (PreviewImage != null) ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility ImagePreviewVisibility => (PreviewImage != null && !IsPerformingScan) ? Visibility.Visible : Visibility.Collapsed;
         public Visibility EmptyStateVisibility => (!HasScannedFile && !IsPerformingScan) ? Visibility.Visible : Visibility.Collapsed;
         public Visibility LoadingStateVisibility => IsPerformingScan ? Visibility.Visible : Visibility.Collapsed;
  
