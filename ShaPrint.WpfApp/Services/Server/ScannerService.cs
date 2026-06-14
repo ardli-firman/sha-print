@@ -63,7 +63,7 @@ namespace ShaPrint.Server
             return list;
         }
 
-        public byte[] PerformScan(string scannerName, int dpi, int colorMode, string format, int brightness, int contrast, out string actualFormat)
+        public byte[] PerformScan(string scannerName, int dpi, int colorMode, string format, out string actualFormat)
         {
             byte[] resultBytes = Array.Empty<byte>();
             string ext = "jpg";
@@ -201,11 +201,7 @@ namespace ShaPrint.Server
                     SetWiaProperty(item.Properties, 6151, widthPixels);
                     SetWiaProperty(item.Properties, 6152, heightPixels);
  
-                    // 5. Set Quality Sliders (Brightness and Contrast scaled from -100..100 to -1000..1000)
-                    int wiaBrightness = Math.Clamp(brightness * 10, -1000, 1000);
-                    int wiaContrast = Math.Clamp(contrast * 10, -1000, 1000);
-                    SetWiaProperty(item.Properties, 6154, wiaBrightness);
-                    SetWiaProperty(item.Properties, 6155, wiaContrast);
+                    // 5. Brightness and Contrast parameters removed (using scanner default defaults)
  
                     // 6. Diagnostic read-back logging
                     try
@@ -221,7 +217,7 @@ namespace ShaPrint.Server
                         AppLogger.Log($"[SCANNER] Failed to read back WIA settings: {ex.Message}");
                     }
  
-                    AppLogger.Log($"[SCANNER] Initiating scan: DPI={dpi}, Bed={bedWidthInches}x{bedHeightInches}\", Size={widthPixels}x{heightPixels}px, ColorMode={colorMode}, Brightness={wiaBrightness}, Contrast={wiaContrast}, Format={format}");
+                    AppLogger.Log($"[SCANNER] Initiating scan: DPI={dpi}, Bed={bedWidthInches}x{bedHeightInches}\", Size={widthPixels}x{heightPixels}px, ColorMode={colorMode}, Format={format}");
                     
                     dynamic? imageFile = null;
                     try

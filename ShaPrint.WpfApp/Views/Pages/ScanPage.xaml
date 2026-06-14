@@ -125,27 +125,7 @@
                         <ComboBox Grid.Column="1" ItemsSource="{Binding ViewModel.FormatOptions}" SelectedItem="{Binding ViewModel.SelectedFormat}"/>
                     </Grid>
 
-                    <!-- Brightness -->
-                    <Grid Margin="0,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="100"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Brightness:" VerticalAlignment="Center" FontSize="11"/>
-                        <Slider Grid.Column="1" Minimum="-100" Maximum="100" Value="{Binding ViewModel.Brightness}" 
-                                AutoToolTipPlacement="BottomRight" TickFrequency="10" IsSnapToTickEnabled="False" />
-                    </Grid>
 
-                    <!-- Contrast -->
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="100"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Contrast:" VerticalAlignment="Center" FontSize="11"/>
-                        <Slider Grid.Column="1" Minimum="-100" Maximum="100" Value="{Binding ViewModel.Contrast}" 
-                                AutoToolTipPlacement="BottomRight" TickFrequency="10" IsSnapToTickEnabled="False" />
-                    </Grid>
 
                     <!-- Trigger Scan -->
                     <ui:Button Command="{Binding ViewModel.PerformScanCommand}"

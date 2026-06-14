@@ -173,8 +173,6 @@ namespace ShaPrint.Server
                         request.Dpi, 
                         request.ColorMode, 
                         request.Format, 
-                        request.Brightness, 
-                        request.Contrast, 
                         out actualFormat);
                     response.Success = true;
                     response.FileBytes = scannedBytes;

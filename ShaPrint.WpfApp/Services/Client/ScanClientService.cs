@@ -10,7 +10,7 @@ namespace ShaPrint.Client
 {
     public class ScanClientService
     {
-        public async Task<ScanResponsePayload> RequestScanAsync(string serverIp, string scannerName, int dpi, int colorMode, string format, int brightness, int contrast)
+        public async Task<ScanResponsePayload> RequestScanAsync(string serverIp, string scannerName, int dpi, int colorMode, string format)
         {
             try
             {
@@ -42,11 +42,11 @@ namespace ShaPrint.Client
                     Dpi = dpi,
                     ColorMode = colorMode,
                     Format = format,
-                    Brightness = brightness,
-                    Contrast = contrast
+                    Brightness = 0,
+                    Contrast = 0
                 };
  
-                AppLogger.Log($"[CLIENT] Sending scan request to {serverIp}: scanner='{scannerName}', DPI={dpi}, Mode={colorMode}, Format={format}, Brightness={brightness}, Contrast={contrast}");
+                AppLogger.Log($"[CLIENT] Sending scan request to {serverIp}: scanner='{scannerName}', DPI={dpi}, Mode={colorMode}, Format={format}");
                 await ScanRequestPayload.WriteAsync(stream, request);
 
                 // Step 3: Read Scan Response Payload

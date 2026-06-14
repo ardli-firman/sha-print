@@ -85,11 +85,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         [ObservableProperty]
         private string _selectedFormat = "JPEG";
  
-        [ObservableProperty]
-        private int _brightness = 0; // -100 to 100
- 
-        [ObservableProperty]
-        private int _contrast = 0;   // -100 to 100
+
  
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(ZoomPercentText))]
@@ -238,9 +234,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     name, 
                     SelectedDpi, 
                     SelectedColorMode, 
-                    SelectedFormat,
-                    Brightness,
-                    Contrast
+                    SelectedFormat
                 );
  
                 if (response.Success && response.FileBytes != null && response.FileBytes.Length > 0)
