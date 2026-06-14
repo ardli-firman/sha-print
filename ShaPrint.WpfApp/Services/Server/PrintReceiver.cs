@@ -168,7 +168,12 @@ namespace ShaPrint.Server
                 try
                 {
                     string actualFormat;
-                    byte[] scannedBytes = _scannerService.PerformScan(request.TargetScannerName, request.Dpi, request.ColorMode, request.Format, out actualFormat);
+                    byte[] scannedBytes = _scannerService.PerformScan(
+                        request.TargetScannerName, 
+                        request.Dpi, 
+                        request.ColorMode, 
+                        request.Format, 
+                        out actualFormat);
                     response.Success = true;
                     response.FileBytes = scannedBytes;
                     response.ErrorMessage = string.Empty;

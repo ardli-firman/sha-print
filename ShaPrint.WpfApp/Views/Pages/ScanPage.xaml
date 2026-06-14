@@ -116,7 +116,7 @@
                     </Grid>
 
                     <!-- Output Format -->
-                    <Grid Margin="0,0,0,8">
+                    <Grid Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="100"/>
                             <ColumnDefinition Width="*"/>
@@ -124,6 +124,8 @@
                         <TextBlock Grid.Column="0" Text="File Format:" VerticalAlignment="Center" FontSize="11"/>
                         <ComboBox Grid.Column="1" ItemsSource="{Binding ViewModel.FormatOptions}" SelectedItem="{Binding ViewModel.SelectedFormat}"/>
                     </Grid>
+
+
 
                     <!-- Trigger Scan -->
                     <ui:Button Command="{Binding ViewModel.PerformScanCommand}"
@@ -192,49 +194,106 @@
             </Grid>
             
             <Grid Grid.Row="1">
-                <Border BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" 
-                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4">
-                    <Grid>
-                        <!-- Empty State -->
-                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20"
-                                    Visibility="{Binding ViewModel.EmptyStateVisibility}">
-                            <ui:SymbolIcon Symbol="Document24" FontSize="48" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,0,10"/>
-                            <TextBlock Text="No document scanned yet." Foreground="{DynamicResource TextFillColorTertiaryBrush}" HorizontalAlignment="Center"/>
-                        </StackPanel>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
 
-                        <!-- Loading State -->
-                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20"
-                                    Visibility="{Binding ViewModel.LoadingStateVisibility}">
-                            <ui:ProgressRing IsIndeterminate="True" Width="48" Height="48" Margin="0,0,0,16"/>
-                            <TextBlock Text="Scanning Document..." FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                            <TextBlock Text="Acquiring page from remote scanner..." Foreground="{DynamicResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center"/>
-                        </StackPanel>
+                <!-- Thumbnail Sidebar -->
+                <Grid Grid.Column="0" Width="100" Margin="0,0,12,0" Visibility="{Binding ViewModel.HasScannedFile, Converter={StaticResource BoolToVis}}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
-                        <!-- Image Preview -->
-                        <ScrollViewer x:Name="PreviewScrollViewer"
-                                      VerticalScrollBarVisibility="{Binding ViewModel.ScrollBarVisibilitySetting}"
-                                      HorizontalScrollBarVisibility="{Binding ViewModel.ScrollBarVisibilitySetting}"
-                                      Visibility="{Binding ViewModel.ImagePreviewVisibility}"
-                                      PreviewMouseWheel="PreviewScrollViewer_PreviewMouseWheel">
-                            <Image Source="{Binding ViewModel.PreviewImage}" Margin="8" Stretch="Uniform"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <Image.LayoutTransform>
-                                    <TransformGroup>
-                                        <ScaleTransform ScaleX="{Binding ViewModel.CurrentScale}" ScaleY="{Binding ViewModel.CurrentScale}"/>
-                                        <RotateTransform Angle="{Binding ViewModel.RotationAngle}"/>
-                                    </TransformGroup>
-                                </Image.LayoutTransform>
-                            </Image>
-                        </ScrollViewer>
-                    </Grid>
-                </Border>
-                
-                <!-- Save Button (Float / Overlay in bottom-right if file exists) -->
-                <ui:Button Content="Save File As..." Appearance="Primary"
-                           Icon="{ui:SymbolIcon Save24}"
-                           Command="{Binding ViewModel.SaveAsCommand}"
-                           Visibility="{Binding ViewModel.HasScannedFile, Converter={StaticResource BoolToVis}}"
-                           HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="12"/>
+                    <ListBox Grid.Row="0" 
+                             ItemsSource="{Binding ViewModel.ScannedPages}" 
+                             SelectedItem="{Binding ViewModel.SelectedPage, Mode=TwoWay}"
+                             BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="1"/>
+                                <Setter Property="Margin" Value="0,3"/>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" CornerRadius="2" Padding="2" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+                                    <Grid>
+                                        <Image Source="{Binding PreviewSource}" Height="80" Width="60" Stretch="Uniform" />
+                                        <Border VerticalAlignment="Bottom" HorizontalAlignment="Right" Background="#CC000000" CornerRadius="2" Padding="2,1">
+                                            <TextBlock Text="{Binding Format}" Foreground="White" FontSize="7" />
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <StackPanel Grid.Row="1" Margin="0,6,0,0">
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <ui:Button Grid.Column="0" Content="▲" Padding="2" Command="{Binding ViewModel.MovePageUpCommand}" HorizontalAlignment="Stretch" FontSize="10" />
+                            <ui:Button Grid.Column="1" Content="▼" Padding="2" Command="{Binding ViewModel.MovePageDownCommand}" HorizontalAlignment="Stretch" Margin="4,0,0,0" FontSize="10" />
+                        </Grid>
+                        <ui:Button Content="Delete" Appearance="Danger" Command="{Binding ViewModel.DeletePageCommand}" HorizontalAlignment="Stretch" Margin="0,0,0,4" FontSize="10" Padding="0,4"/>
+                        <ui:Button Content="Clear" Appearance="Secondary" Command="{Binding ViewModel.ClearQueueCommand}" HorizontalAlignment="Stretch" FontSize="10" Padding="0,4"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Main Preview image -->
+                <Grid Grid.Column="1">
+                    <Border BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" 
+                            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4">
+                        <Grid>
+                            <!-- Empty State -->
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20"
+                                        Visibility="{Binding ViewModel.EmptyStateVisibility}">
+                                <ui:SymbolIcon Symbol="Document24" FontSize="48" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,0,10"/>
+                                <TextBlock Text="No document scanned yet." Foreground="{DynamicResource TextFillColorTertiaryBrush}" HorizontalAlignment="Center"/>
+                            </StackPanel>
+
+                            <!-- Loading State -->
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20"
+                                        Visibility="{Binding ViewModel.LoadingStateVisibility}">
+                                <ui:ProgressRing IsIndeterminate="True" Width="48" Height="48" Margin="0,0,0,16"/>
+                                <TextBlock Text="Scanning Document..." FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                <TextBlock Text="Acquiring page from remote scanner..." Foreground="{DynamicResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center"/>
+                            </StackPanel>
+
+                            <!-- Image Preview -->
+                            <ScrollViewer x:Name="PreviewScrollViewer"
+                                          VerticalScrollBarVisibility="{Binding ViewModel.ScrollBarVisibilitySetting}"
+                                          HorizontalScrollBarVisibility="{Binding ViewModel.ScrollBarVisibilitySetting}"
+                                          Visibility="{Binding ViewModel.ImagePreviewVisibility}"
+                                          PreviewMouseWheel="PreviewScrollViewer_PreviewMouseWheel">
+                                <Image Source="{Binding ViewModel.PreviewImage}" Margin="8" Stretch="Uniform"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       RenderOptions.BitmapScalingMode="HighQuality"
+                                       UseLayoutRounding="True"
+                                       SnapsToDevicePixels="True">
+                                    <Image.LayoutTransform>
+                                        <TransformGroup>
+                                            <ScaleTransform ScaleX="{Binding ViewModel.CurrentScale}" ScaleY="{Binding ViewModel.CurrentScale}"/>
+                                            <RotateTransform Angle="{Binding ViewModel.RotationAngle}"/>
+                                        </TransformGroup>
+                                    </Image.LayoutTransform>
+                                </Image>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+                    
+                    <!-- Save Button (Float / Overlay in bottom-right if file exists) -->
+                    <ui:Button Content="Save File As..." Appearance="Primary"
+                               Icon="{ui:SymbolIcon Save24}"
+                               Command="{Binding ViewModel.SaveAsCommand}"
+                               Visibility="{Binding ViewModel.HasScannedFile, Converter={StaticResource BoolToVis}}"
+                               HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="12"/>
+                </Grid>
             </Grid>
         </Grid>
     </Grid>

@@ -27,23 +27,25 @@ namespace ShaPrint.Client
                 }
                 
                 await connectTask; // Propagate any connection exception
-
+ 
                 using var stream = client.GetStream();
                 
                 // Step 1: Write multiplexing packet header
                 var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
                 writer.Write(Constants.PacketTypeScan); // 0x00000002
                 writer.Flush();
-
+ 
                 // Step 2: Write Scan Request Payload
                 var request = new ScanRequestPayload
                 {
                     TargetScannerName = scannerName,
                     Dpi = dpi,
                     ColorMode = colorMode,
-                    Format = format
+                    Format = format,
+                    Brightness = 0,
+                    Contrast = 0
                 };
-
+ 
                 AppLogger.Log($"[CLIENT] Sending scan request to {serverIp}: scanner='{scannerName}', DPI={dpi}, Mode={colorMode}, Format={format}");
                 await ScanRequestPayload.WriteAsync(stream, request);
 

@@ -27,10 +27,49 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _autoPurgeEnabled = settings.AutoPurgeEnabled;
             _channelIndex = settings.Channel == UpdateChannel.Beta ? 1 : 0;
             _channelName = settings.NetworkChannel;
-
+            _autoSaveScans = settings.AutoSaveScans;
+            _defaultScansFolder = string.IsNullOrEmpty(settings.DefaultScansFolder)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ShaPrint Scans")
+                : settings.DefaultScansFolder;
+ 
             if (settings.LastUpdateCheck > DateTime.MinValue)
             {
                 _lastCheckedText = $"Last checked: {settings.LastUpdateCheck:g}";
+            }
+        }
+ 
+        [ObservableProperty]
+        private bool _autoSaveScans;
+ 
+        partial void OnAutoSaveScansChanged(bool value)
+        {
+            AppSettings.Current.AutoSaveScans = value;
+            AppSettings.Save();
+        }
+ 
+        [ObservableProperty]
+        private string _defaultScansFolder = string.Empty;
+ 
+        partial void OnDefaultScansFolderChanged(string value)
+        {
+            AppSettings.Current.DefaultScansFolder = value;
+            AppSettings.Save();
+        }
+ 
+        [RelayCommand]
+        private void BrowseFolder()
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Select Default Folder to Save Scans",
+                InitialDirectory = string.IsNullOrEmpty(DefaultScansFolder)
+                    ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)
+                    : DefaultScansFolder
+            };
+ 
+            if (dialog.ShowDialog() == true)
+            {
+                DefaultScansFolder = dialog.FolderName;
             }
         }
 
