@@ -66,7 +66,6 @@ namespace ShaPrint.Server
         public byte[] PerformScan(string scannerName, int dpi, int colorMode, string format, int brightness, int contrast, out string actualFormat)
         {
             byte[] resultBytes = Array.Empty<byte>();
-            string formatGuid = WiaFormatBMP;
             string ext = "jpg";
  
             if (format.Equals("PNG", StringComparison.OrdinalIgnoreCase))
@@ -168,25 +167,29 @@ namespace ShaPrint.Server
                     // 4. Set Extents (DPI-aware size)
                     double bedWidthInches = 8.5;  // Default Letter width
                     double bedHeightInches = 11.0; // Default Letter height
-                    try
+                    object? widthVal = GetWiaPropertyValue(item.Properties, 6165);
+                    if (widthVal != null)
                     {
-                        // 6165 is WIA_IPS_MAX_HORIZONTAL_SIZE (in thousandths of an inch)
-                        dynamic widthProp = item.Properties["6165"];
-                        int widthThousandths = Convert.ToInt32(widthProp.Value);
-                        if (widthThousandths > 0)
-                            bedWidthInches = widthThousandths / 1000.0;
+                        try
+                        {
+                            int widthThousandths = Convert.ToInt32(widthVal);
+                            if (widthThousandths > 0)
+                                bedWidthInches = widthThousandths / 1000.0;
+                        }
+                        catch { }
                     }
-                    catch { }
  
-                    try
+                    object? heightVal = GetWiaPropertyValue(item.Properties, 6166);
+                    if (heightVal != null)
                     {
-                        // 6166 is WIA_IPS_MAX_VERTICAL_SIZE (in thousandths of an inch)
-                        dynamic heightProp = item.Properties["6166"];
-                        int heightThousandths = Convert.ToInt32(heightProp.Value);
-                        if (heightThousandths > 0)
-                            bedHeightInches = heightThousandths / 1000.0;
+                        try
+                        {
+                            int heightThousandths = Convert.ToInt32(heightVal);
+                            if (heightThousandths > 0)
+                                bedHeightInches = heightThousandths / 1000.0;
+                        }
+                        catch { }
                     }
-                    catch { }
  
                     int widthPixels = (int)Math.Round(bedWidthInches * dpi);
                     int heightPixels = (int)Math.Round(bedHeightInches * dpi);
@@ -203,14 +206,14 @@ namespace ShaPrint.Server
                     int wiaContrast = Math.Clamp(contrast * 10, -1000, 1000);
                     SetWiaProperty(item.Properties, 6154, wiaBrightness);
                     SetWiaProperty(item.Properties, 6155, wiaContrast);
-
+ 
                     // 6. Diagnostic read-back logging
                     try
                     {
-                        int actualDpiX = Convert.ToInt32(item.Properties["6147"].Value);
-                        int actualDpiY = Convert.ToInt32(item.Properties["6148"].Value);
-                        int actualExtentX = Convert.ToInt32(item.Properties["6151"].Value);
-                        int actualExtentY = Convert.ToInt32(item.Properties["6152"].Value);
+                        object? actualDpiX = GetWiaPropertyValue(item.Properties, 6147);
+                        object? actualDpiY = GetWiaPropertyValue(item.Properties, 6148);
+                        object? actualExtentX = GetWiaPropertyValue(item.Properties, 6151);
+                        object? actualExtentY = GetWiaPropertyValue(item.Properties, 6152);
                         AppLogger.Log($"[SCANNER] Applied WIA settings: DPI={actualDpiX}x{actualDpiY}, Extent={actualExtentX}x{actualExtentY}");
                     }
                     catch (Exception ex)
@@ -219,13 +222,39 @@ namespace ShaPrint.Server
                     }
  
                     AppLogger.Log($"[SCANNER] Initiating scan: DPI={dpi}, Bed={bedWidthInches}x{bedHeightInches}\", Size={widthPixels}x{heightPixels}px, ColorMode={colorMode}, Brightness={wiaBrightness}, Contrast={wiaContrast}, Format={format}");
-                    dynamic commonDialog = Activator.CreateInstance(Type.GetTypeFromProgID("WIA.CommonDialog")!)!;
                     
-                    dynamic imageFile = commonDialog.ShowTransfer(item, formatGuid, false);
+                    dynamic? imageFile = null;
+                    try
+                    {
+                        AppLogger.Log("[SCANNER] Attempting silent transfer using item.Transfer(TIFF).");
+                        imageFile = item.Transfer(WiaFormatTIFF);
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Log($"[SCANNER] Silent TIFF transfer failed: {ex.Message}. Trying BMP.");
+                        try
+                        {
+                            imageFile = item.Transfer(WiaFormatBMP);
+                        }
+                        catch (Exception ex2)
+                        {
+                            AppLogger.Log($"[SCANNER] Silent BMP transfer failed: {ex2.Message}. Falling back to CommonDialog.");
+                            dynamic commonDialog = Activator.CreateInstance(Type.GetTypeFromProgID("WIA.CommonDialog")!)!;
+                            try
+                            {
+                                imageFile = commonDialog.ShowTransfer(item, WiaFormatTIFF, false);
+                            }
+                            catch (Exception ex3)
+                            {
+                                AppLogger.Log($"[SCANNER] CommonDialog TIFF transfer failed: {ex3.Message}. Trying BMP.");
+                                imageFile = commonDialog.ShowTransfer(item, WiaFormatBMP, false);
+                            }
+                        }
+                    }
  
                     if (imageFile == null)
                         throw new OperationCanceledException("Scan was cancelled or failed.");
- 
+  
                     string tempPath = Path.Combine(Path.GetTempPath(), $"shaprint_{Guid.NewGuid():N}.tmp");
                     try
                     {
@@ -259,7 +288,7 @@ namespace ShaPrint.Server
             if (rawBytes.Length > 0)
             {
                 // Apply our robust Post-Processing logic to guarantee target format and color mode
-                rawBytes = ImageProcessor.ProcessImage(rawBytes, colorMode, format.Equals("PDF", StringComparison.OrdinalIgnoreCase) ? "JPEG" : format);
+                rawBytes = ImageProcessor.ProcessImage(rawBytes, colorMode, format);
             }
  
             if (format.Equals("PDF", StringComparison.OrdinalIgnoreCase) && rawBytes.Length > 0)
@@ -271,17 +300,60 @@ namespace ShaPrint.Server
             return rawBytes;
         }
 
-        private static void SetWiaProperty(dynamic properties, object propIdOrName, object value)
+        private static void SetWiaProperty(dynamic properties, int propId, object value)
         {
             try
             {
-                dynamic prop = properties[propIdOrName];
-                prop.set_Value(value);
+                dynamic? prop = null;
+                foreach (dynamic p in properties)
+                {
+                    try
+                    {
+                        if (p.PropertyID == propId)
+                        {
+                            prop = p;
+                            break;
+                        }
+                    }
+                    catch { }
+                }
+
+                if (prop != null)
+                {
+                    prop.set_Value(value);
+                }
+                else
+                {
+                    AppLogger.Log($"[SCANNER] Warning: Property with ID {propId} not found in collection.");
+                }
             }
             catch (Exception ex)
             {
-                AppLogger.Log($"[SCANNER] Warning: Failed to set property {propIdOrName}: {ex.Message}");
+                AppLogger.Log($"[SCANNER] Warning: Failed to set property with ID {propId}: {ex.Message}");
             }
+        }
+
+        private static object? GetWiaPropertyValue(dynamic properties, int propId)
+        {
+            try
+            {
+                foreach (dynamic p in properties)
+                {
+                    try
+                    {
+                        if (p.PropertyID == propId)
+                        {
+                            return p.Value;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Log($"[SCANNER] Warning: Failed to get property with ID {propId}: {ex.Message}");
+            }
+            return null;
         }
 
         /// <summary>
@@ -311,9 +383,14 @@ namespace ShaPrint.Server
                         pixelWidth = frame.PixelWidth;
                         pixelHeight = frame.PixelHeight;
 
-                        // Convert pixels to PDF points (1 inch = 72 points, assuming 96 DPI screen default or raw size)
-                        pointsWidth = (int)Math.Round(frame.PixelWidth * 72.0 / 96.0);
-                        pointsHeight = (int)Math.Round(frame.PixelHeight * 72.0 / 96.0);
+                        double dpiX = frame.DpiX;
+                        double dpiY = frame.DpiY;
+                        if (dpiX <= 10 || dpiX > 4800) dpiX = 96.0;
+                        if (dpiY <= 10 || dpiY > 4800) dpiY = 96.0;
+
+                        // Convert pixels to PDF points (1 inch = 72 points) using image DPI
+                        pointsWidth = (int)Math.Round(frame.PixelWidth * 72.0 / dpiX);
+                        pointsHeight = (int)Math.Round(frame.PixelHeight * 72.0 / dpiY);
 
                         var format = frame.Format;
                         if (format == System.Windows.Media.PixelFormats.Gray8 ||

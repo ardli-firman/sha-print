@@ -22,25 +22,28 @@ namespace ShaPrint.Server
 
                     var frame = decoder.Frames[0];
                     bool isTargetPng = format.Equals("PNG", StringComparison.OrdinalIgnoreCase);
+                    bool isTargetPdf = format.Equals("PDF", StringComparison.OrdinalIgnoreCase);
 
                     BitmapSource processedSource = frame;
 
                     if (colorMode == 2)
                     {
-                        // Color: convert to Bgr24 and sharpen
+                        // Color: convert to Bgr24
                         if (processedSource.Format != PixelFormats.Bgr24)
                         {
                             processedSource = new FormatConvertedBitmap(processedSource, PixelFormats.Bgr24, null, 0);
                         }
+                        // Apply Laplacian sharpening to color image
                         processedSource = SharpenBgr24(processedSource);
                     }
                     else if (colorMode == 1)
                     {
-                        // Grayscale: convert to Gray8 and sharpen
+                        // Grayscale: convert to Gray8
                         if (processedSource.Format != PixelFormats.Gray8)
                         {
                             processedSource = new FormatConvertedBitmap(processedSource, PixelFormats.Gray8, null, 0);
                         }
+                        // Apply Laplacian sharpening to grayscale image
                         processedSource = SharpenGray8(processedSource);
                     }
                     else // B&W
@@ -50,6 +53,7 @@ namespace ShaPrint.Server
                         {
                             processedSource = new FormatConvertedBitmap(processedSource, PixelFormats.Gray8, null, 0);
                         }
+                        // Apply sharpening to enhance text edges before binarization
                         processedSource = SharpenGray8(processedSource);
 
                         int width = processedSource.PixelWidth;
@@ -93,7 +97,7 @@ namespace ShaPrint.Server
                         else
                         {
                             var jpegEncoder = new JpegBitmapEncoder();
-                            jpegEncoder.QualityLevel = 95;
+                            jpegEncoder.QualityLevel = isTargetPdf ? 98 : 100;
                             encoder = jpegEncoder;
                         }
                         encoder.Frames.Add(BitmapFrame.Create(processedSource));

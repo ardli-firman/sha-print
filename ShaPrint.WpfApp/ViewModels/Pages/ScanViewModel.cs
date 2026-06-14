@@ -262,6 +262,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                             using (var ms = new MemoryStream(rawImageBytes))
                             {
                                 preview.BeginInit();
+                                preview.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
                                 preview.CacheOption = BitmapCacheOption.OnLoad;
                                 preview.StreamSource = ms;
                                 preview.EndInit();
@@ -518,7 +519,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         else
                         {
                             var jpegEncoder = new JpegBitmapEncoder();
-                            jpegEncoder.QualityLevel = 95;
+                            jpegEncoder.QualityLevel = 100;
                             encoder = jpegEncoder;
                         }
  
@@ -593,9 +594,14 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                                 var frame = decoder.Frames[0];
                                 pixelWidth = frame.PixelWidth;
                                 pixelHeight = frame.PixelHeight;
- 
-                                pointsWidth = (int)Math.Round(frame.PixelWidth * 72.0 / 96.0);
-                                pointsHeight = (int)Math.Round(frame.PixelHeight * 72.0 / 96.0);
+
+                                double dpiX = frame.DpiX;
+                                double dpiY = frame.DpiY;
+                                if (dpiX <= 10 || dpiX > 4800) dpiX = 96.0;
+                                if (dpiY <= 10 || dpiY > 4800) dpiY = 96.0;
+
+                                pointsWidth = (int)Math.Round(frame.PixelWidth * 72.0 / dpiX);
+                                pointsHeight = (int)Math.Round(frame.PixelHeight * 72.0 / dpiY);
  
                                 var format = frame.Format;
                                 if (format == PixelFormats.Gray8 ||
@@ -804,7 +810,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         else
                         {
                             var jpegEncoder = new JpegBitmapEncoder();
-                            jpegEncoder.QualityLevel = 95;
+                            jpegEncoder.QualityLevel = 100;
                             encoder = jpegEncoder;
                         }
 
