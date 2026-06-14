@@ -33,7 +33,8 @@ namespace ShaPrint.Server
                         {
                             processedSource = new FormatConvertedBitmap(processedSource, PixelFormats.Bgr24, null, 0);
                         }
-                        // Apply Laplacian sharpening to color image
+                        // Smooth (denoise) to remove scanner grid noise, then apply Laplacian sharpening
+                        processedSource = SmoothBgr24(processedSource);
                         processedSource = SharpenBgr24(processedSource);
                     }
                     else if (colorMode == 1)
@@ -43,17 +44,22 @@ namespace ShaPrint.Server
                         {
                             processedSource = new FormatConvertedBitmap(processedSource, PixelFormats.Gray8, null, 0);
                         }
-                        // Apply Laplacian sharpening to grayscale image
+                        // Smooth (denoise), then apply Laplacian sharpening
+                        processedSource = SmoothGray8(processedSource);
                         processedSource = SharpenGray8(processedSource);
                     }
                     else // B&W
                     {
-                        // B&W: convert to Gray8, sharpen, then threshold
+                        // B&W: convert to Gray8
                         if (processedSource.Format != PixelFormats.Gray8)
                         {
                             processedSource = new FormatConvertedBitmap(processedSource, PixelFormats.Gray8, null, 0);
                         }
-                        // Apply sharpening to enhance text edges before binarization
+                        
+                        // 1. Smooth (denoise) to remove paper noise/dust
+                        processedSource = SmoothGray8(processedSource);
+                        
+                        // 2. Sharpen (Laplacian) to make signature edges crisp
                         processedSource = SharpenGray8(processedSource);
 
                         int width = processedSource.PixelWidth;
@@ -62,10 +68,18 @@ namespace ShaPrint.Server
                         byte[] pixels = new byte[height * stride];
                         processedSource.CopyPixels(pixels, stride, 0);
 
-                        // Threshold 160 works well for capturing faint signature ink
+                        // 3. Soft Threshold (anti-aliased binarization)
+                        // Range [135, 210] cleans background, sets ink to solid black,
+                        // and leaves a smooth gray transition at edges to prevent pixelation.
                         for (int i = 0; i < pixels.Length; i++)
                         {
-                            pixels[i] = (pixels[i] < 160) ? (byte)0 : (byte)255;
+                            int val = pixels[i];
+                            if (val < 135)
+                                pixels[i] = 0;
+                            else if (val > 210)
+                                pixels[i] = 255;
+                            else
+                                pixels[i] = (byte)((val - 135) * 255 / (210 - 135));
                         }
 
                         var bwSource = BitmapSource.Create(
@@ -77,14 +91,8 @@ namespace ShaPrint.Server
                             stride
                         );
 
-                        if (isTargetPng)
-                        {
-                            processedSource = new FormatConvertedBitmap(bwSource, PixelFormats.BlackWhite, null, 0);
-                        }
-                        else
-                        {
-                            processedSource = bwSource;
-                        }
+                        // Keep as Gray8 to preserve anti-aliased smooth borders (do NOT convert to 1-bit BlackWhite)
+                        processedSource = bwSource;
                     }
 
                     using (var outMs = new MemoryStream())
@@ -109,6 +117,108 @@ namespace ShaPrint.Server
             catch (Exception)
             {
                 return rawBytes;
+            }
+        }
+
+        private static BitmapSource SmoothGray8(BitmapSource source)
+        {
+            try
+            {
+                int width = source.PixelWidth;
+                int height = source.PixelHeight;
+                int stride = width;
+                byte[] srcPixels = new byte[height * stride];
+                source.CopyPixels(srcPixels, stride, 0);
+
+                byte[] destPixels = new byte[height * stride];
+                Array.Copy(srcPixels, destPixels, srcPixels.Length);
+
+                // 3x3 Mean filter (box blur) for smoothing
+                for (int y = 1; y < height - 1; y++)
+                {
+                    int rowOffset = y * stride;
+                    for (int x = 1; x < width - 1; x++)
+                    {
+                        int sum = 0;
+                        for (int ky = -1; ky <= 1; ky++)
+                        {
+                            int kRowOffset = (y + ky) * stride;
+                            for (int kx = -1; kx <= 1; kx++)
+                            {
+                                sum += srcPixels[kRowOffset + (x + kx)];
+                            }
+                        }
+                        destPixels[rowOffset + x] = (byte)(sum / 9);
+                    }
+                }
+
+                return BitmapSource.Create(
+                    width, height,
+                    source.DpiX, source.DpiY,
+                    PixelFormats.Gray8,
+                    null,
+                    destPixels,
+                    stride
+                );
+            }
+            catch
+            {
+                return source;
+            }
+        }
+
+        private static BitmapSource SmoothBgr24(BitmapSource source)
+        {
+            try
+            {
+                int width = source.PixelWidth;
+                int height = source.PixelHeight;
+                int stride = ((width * 3 + 3) / 4) * 4;
+                byte[] srcPixels = new byte[height * stride];
+                source.CopyPixels(srcPixels, stride, 0);
+
+                byte[] destPixels = new byte[height * stride];
+                Array.Copy(srcPixels, destPixels, srcPixels.Length);
+
+                // 3x3 Mean filter (box blur) for Bgr24 smoothing
+                for (int y = 1; y < height - 1; y++)
+                {
+                    int rowOffset = y * stride;
+                    for (int x = 1; x < width - 1; x++)
+                    {
+                        int idx = rowOffset + x * 3;
+                        int sumB = 0, sumG = 0, sumR = 0;
+
+                        for (int ky = -1; ky <= 1; ky++)
+                        {
+                            int kRowOffset = (y + ky) * stride;
+                            for (int kx = -1; kx <= 1; kx++)
+                            {
+                                int kIdx = kRowOffset + (x + kx) * 3;
+                                sumB += srcPixels[kIdx];
+                                sumG += srcPixels[kIdx + 1];
+                                sumR += srcPixels[kIdx + 2];
+                            }
+                        }
+
+                        destPixels[idx] = (byte)(sumB / 9);
+                        destPixels[idx + 1] = (byte)(sumG / 9);
+                        destPixels[idx + 2] = (byte)(sumR / 9);
+                    }
+                }
+
+                return BitmapSource.Create(
+                    width, height,
+                    source.DpiX, source.DpiY,
+                    PixelFormats.Bgr24,
+                    null,
+                    destPixels,
+                    stride
+                );
+            }
+            catch
+            {
+                return source;
             }
         }
 
