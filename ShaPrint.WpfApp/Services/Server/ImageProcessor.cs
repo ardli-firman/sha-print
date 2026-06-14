@@ -35,9 +35,61 @@ namespace ShaPrint.Server
                         {
                             processedSource = new FormatConvertedBitmap(processedSource, PixelFormats.Bgr24, null, 0);
                         }
-                        // Smooth (denoise) to remove scanner grid noise, then apply Laplacian sharpening
-                        processedSource = SmoothBgr24(processedSource);
-                        processedSource = SharpenBgr24(processedSource);
+
+                        int width = processedSource.PixelWidth;
+                        int height = processedSource.PixelHeight;
+                        int strideBgr = ((width * 3 + 3) / 4) * 4;
+                        int lengthBgr = height * strideBgr;
+
+                        byte[] origBgr = ArrayPool<byte>.Shared.Rent(lengthBgr);
+                        byte[] blurredBgr = ArrayPool<byte>.Shared.Rent(lengthBgr);
+                        byte[] tempBgr = ArrayPool<byte>.Shared.Rent(lengthBgr);
+
+                        try
+                        {
+                            processedSource.CopyPixels(origBgr, strideBgr, 0);
+
+                            // 1. Gaussian Blur (3x3) Bgr24: origBgr -> blurredBgr
+                            GaussianBlur3x3Bgr24(origBgr, blurredBgr, width, height, strideBgr);
+
+                            // 2. Unsharp Masking: origBgr + 1.5 * (origBgr - blurredBgr) -> tempBgr
+                            Array.Copy(origBgr, tempBgr, lengthBgr);
+
+                            Parallel.For(1, height - 1, y =>
+                            {
+                                int rowOffset = y * strideBgr;
+                                for (int x = 1; x < width - 1; x++)
+                                {
+                                    int idx = rowOffset + x * 3;
+                                    for (int c = 0; c < 3; c++)
+                                    {
+                                        int origVal = origBgr[idx + c];
+                                        int blurVal = blurredBgr[idx + c];
+                                        int diff = origVal - blurVal;
+                                        int sharpened = origVal + (3 * diff) / 2;
+                                        tempBgr[idx + c] = (byte)Math.Clamp(sharpened, 0, 255);
+                                    }
+                                }
+                            });
+
+                            byte[] finalPixels = new byte[lengthBgr];
+                            Array.Copy(tempBgr, finalPixels, lengthBgr);
+
+                            processedSource = BitmapSource.Create(
+                                width, height,
+                                processedSource.DpiX, processedSource.DpiY,
+                                PixelFormats.Bgr24,
+                                null,
+                                finalPixels,
+                                strideBgr
+                            );
+                        }
+                        finally
+                        {
+                            ArrayPool<byte>.Shared.Return(origBgr);
+                            ArrayPool<byte>.Shared.Return(blurredBgr);
+                            ArrayPool<byte>.Shared.Return(tempBgr);
+                        }
                     }
                     else if (colorMode == 1)
                     {
@@ -46,9 +98,58 @@ namespace ShaPrint.Server
                         {
                             processedSource = new FormatConvertedBitmap(processedSource, PixelFormats.Gray8, null, 0);
                         }
-                        // Smooth (denoise), then apply Laplacian sharpening
-                        processedSource = SmoothGray8(processedSource);
-                        processedSource = SharpenGray8(processedSource);
+
+                        int width = processedSource.PixelWidth;
+                        int height = processedSource.PixelHeight;
+                        int stride = width;
+                        int length = height * stride;
+
+                        byte[] origBuffer = ArrayPool<byte>.Shared.Rent(length);
+                        byte[] blurredBuffer = ArrayPool<byte>.Shared.Rent(length);
+                        byte[] tempBuffer = ArrayPool<byte>.Shared.Rent(length);
+
+                        try
+                        {
+                            processedSource.CopyPixels(origBuffer, stride, 0);
+
+                            // 1. Gaussian Blur (3x3): origBuffer -> blurredBuffer
+                            GaussianBlur3x3(origBuffer, blurredBuffer, width, height, stride);
+
+                            // 2. Unsharp Masking: origBuffer + 1.5 * (origBuffer - blurredBuffer) -> tempBuffer
+                            Array.Copy(origBuffer, tempBuffer, length);
+
+                            Parallel.For(1, height - 1, y =>
+                            {
+                                int rowOffset = y * stride;
+                                for (int x = 1; x < width - 1; x++)
+                                {
+                                    int idx = rowOffset + x;
+                                    int origVal = origBuffer[idx];
+                                    int blurVal = blurredBuffer[idx];
+                                    int diff = origVal - blurVal;
+                                    int sharpened = origVal + (3 * diff) / 2;
+                                    tempBuffer[idx] = (byte)Math.Clamp(sharpened, 0, 255);
+                                }
+                            });
+
+                            byte[] finalPixels = new byte[length];
+                            Array.Copy(tempBuffer, finalPixels, length);
+
+                            processedSource = BitmapSource.Create(
+                                width, height,
+                                processedSource.DpiX, processedSource.DpiY,
+                                PixelFormats.Gray8,
+                                null,
+                                finalPixels,
+                                stride
+                            );
+                        }
+                        finally
+                        {
+                            ArrayPool<byte>.Shared.Return(origBuffer);
+                            ArrayPool<byte>.Shared.Return(blurredBuffer);
+                            ArrayPool<byte>.Shared.Return(tempBuffer);
+                        }
                     }
                     else // B&W
                     {
@@ -158,213 +259,37 @@ namespace ShaPrint.Server
             }
         }
 
-        private static BitmapSource SmoothGray8(BitmapSource source)
+
+
+        private static void GaussianBlur3x3Bgr24(byte[] src, byte[] dest, int width, int height, int stride)
         {
-            try
+            int length = height * stride;
+            Array.Copy(src, dest, length);
+
+            Parallel.For(1, height - 1, y =>
             {
-                int width = source.PixelWidth;
-                int height = source.PixelHeight;
-                int stride = width;
-                byte[] srcPixels = new byte[height * stride];
-                source.CopyPixels(srcPixels, stride, 0);
+                int rowOffset = y * stride;
+                int prevRowOffset = (y - 1) * stride;
+                int nextRowOffset = (y + 1) * stride;
 
-                byte[] destPixels = new byte[height * stride];
-                Array.Copy(srcPixels, destPixels, srcPixels.Length);
-
-                // 3x3 Mean filter (box blur) for smoothing
-                for (int y = 1; y < height - 1; y++)
+                for (int x = 1; x < width - 1; x++)
                 {
-                    int rowOffset = y * stride;
-                    for (int x = 1; x < width - 1; x++)
+                    int idx = rowOffset + x * 3;
+                    int prevIdx = prevRowOffset + x * 3;
+                    int nextIdx = nextRowOffset + x * 3;
+
+                    for (int c = 0; c < 3; c++)
                     {
-                        int sum = 0;
-                        for (int ky = -1; ky <= 1; ky++)
-                        {
-                            int kRowOffset = (y + ky) * stride;
-                            for (int kx = -1; kx <= 1; kx++)
-                            {
-                                sum += srcPixels[kRowOffset + (x + kx)];
-                            }
-                        }
-                        destPixels[rowOffset + x] = (byte)(sum / 9);
+                        int val = (
+                            src[prevIdx - 3 + c] + 2 * src[prevIdx + c] + src[prevIdx + 3 + c] +
+                            2 * src[idx - 3 + c] + 4 * src[idx + c] + 2 * src[idx + 3 + c] +
+                            src[nextIdx - 3 + c] + 2 * src[nextIdx + c] + src[nextIdx + 3 + c]
+                        ) >> 4;
+
+                        dest[idx + c] = (byte)val;
                     }
                 }
-
-                return BitmapSource.Create(
-                    width, height,
-                    source.DpiX, source.DpiY,
-                    PixelFormats.Gray8,
-                    null,
-                    destPixels,
-                    stride
-                );
-            }
-            catch
-            {
-                return source;
-            }
-        }
-
-        private static BitmapSource SmoothBgr24(BitmapSource source)
-        {
-            try
-            {
-                int width = source.PixelWidth;
-                int height = source.PixelHeight;
-                int stride = ((width * 3 + 3) / 4) * 4;
-                byte[] srcPixels = new byte[height * stride];
-                source.CopyPixels(srcPixels, stride, 0);
-
-                byte[] destPixels = new byte[height * stride];
-                Array.Copy(srcPixels, destPixels, srcPixels.Length);
-
-                // 3x3 Mean filter (box blur) for Bgr24 smoothing
-                for (int y = 1; y < height - 1; y++)
-                {
-                    int rowOffset = y * stride;
-                    for (int x = 1; x < width - 1; x++)
-                    {
-                        int idx = rowOffset + x * 3;
-                        int sumB = 0, sumG = 0, sumR = 0;
-
-                        for (int ky = -1; ky <= 1; ky++)
-                        {
-                            int kRowOffset = (y + ky) * stride;
-                            for (int kx = -1; kx <= 1; kx++)
-                            {
-                                int kIdx = kRowOffset + (x + kx) * 3;
-                                sumB += srcPixels[kIdx];
-                                sumG += srcPixels[kIdx + 1];
-                                sumR += srcPixels[kIdx + 2];
-                            }
-                        }
-
-                        destPixels[idx] = (byte)(sumB / 9);
-                        destPixels[idx + 1] = (byte)(sumG / 9);
-                        destPixels[idx + 2] = (byte)(sumR / 9);
-                    }
-                }
-
-                return BitmapSource.Create(
-                    width, height,
-                    source.DpiX, source.DpiY,
-                    PixelFormats.Bgr24,
-                    null,
-                    destPixels,
-                    stride
-                );
-            }
-            catch
-            {
-                return source;
-            }
-        }
-
-        private static BitmapSource SharpenGray8(BitmapSource source)
-        {
-            try
-            {
-                int width = source.PixelWidth;
-                int height = source.PixelHeight;
-                int stride = width;
-                byte[] srcPixels = new byte[height * stride];
-                source.CopyPixels(srcPixels, stride, 0);
-
-                byte[] destPixels = new byte[height * stride];
-                Array.Copy(srcPixels, destPixels, srcPixels.Length);
-
-                // Laplacian 3x3 sharpening filter:
-                // [  0, -1,  0 ]
-                // [ -1,  5, -1 ]
-                // [  0, -1,  0 ]
-                for (int y = 1; y < height - 1; y++)
-                {
-                    int rowOffset = y * stride;
-                    for (int x = 1; x < width - 1; x++)
-                    {
-                        int idx = rowOffset + x;
-                        int val = 5 * srcPixels[idx]
-                                  - srcPixels[idx - 1]
-                                  - srcPixels[idx + 1]
-                                  - srcPixels[idx - stride]
-                                  - srcPixels[idx + stride];
-
-                        destPixels[idx] = (byte)Math.Clamp(val, 0, 255);
-                    }
-                }
-
-                return BitmapSource.Create(
-                    width, height,
-                    source.DpiX, source.DpiY,
-                    PixelFormats.Gray8,
-                    null,
-                    destPixels,
-                    stride
-                );
-            }
-            catch
-            {
-                return source;
-            }
-        }
-
-        private static BitmapSource SharpenBgr24(BitmapSource source)
-        {
-            try
-            {
-                int width = source.PixelWidth;
-                int height = source.PixelHeight;
-                int stride = ((width * 3 + 3) / 4) * 4;
-                byte[] srcPixels = new byte[height * stride];
-                source.CopyPixels(srcPixels, stride, 0);
-
-                byte[] destPixels = new byte[height * stride];
-                Array.Copy(srcPixels, destPixels, srcPixels.Length);
-
-                for (int y = 1; y < height - 1; y++)
-                {
-                    int rowOffset = y * stride;
-                    for (int x = 1; x < width - 1; x++)
-                    {
-                        int idx = rowOffset + x * 3;
-
-                        int b = 5 * srcPixels[idx]
-                                - srcPixels[idx - 3]
-                                - srcPixels[idx + 3]
-                                - srcPixels[idx - stride]
-                                - srcPixels[idx + stride];
-
-                        int g = 5 * srcPixels[idx + 1]
-                                - srcPixels[idx - 2]
-                                - srcPixels[idx + 4]
-                                - srcPixels[idx + 1 - stride]
-                                - srcPixels[idx + 1 + stride];
-
-                        int r = 5 * srcPixels[idx + 2]
-                                - srcPixels[idx - 1]
-                                - srcPixels[idx + 5]
-                                - srcPixels[idx + 2 - stride]
-                                - srcPixels[idx + 2 + stride];
-
-                        destPixels[idx] = (byte)Math.Clamp(b, 0, 255);
-                        destPixels[idx + 1] = (byte)Math.Clamp(g, 0, 255);
-                        destPixels[idx + 2] = (byte)Math.Clamp(r, 0, 255);
-                    }
-                }
-
-                return BitmapSource.Create(
-                    width, height,
-                    source.DpiX, source.DpiY,
-                    PixelFormats.Bgr24,
-                    null,
-                    destPixels,
-                    stride
-                );
-            }
-            catch
-            {
-                return source;
-            }
+            });
         }
 
         private static void HorizontalBoxBlur(byte[] src, byte[] dest, int width, int height, int stride, int radius)

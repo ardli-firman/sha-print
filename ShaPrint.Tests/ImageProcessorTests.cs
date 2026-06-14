@@ -165,5 +165,126 @@ namespace ShaPrint.Tests
                 Assert.True(outputPixels[15] < 15, $"Expected pixel 3 alpha to be near 0, got {outputPixels[15]}");
             }
         }
+
+        [Fact]
+        public void ProcessImage_GrayscaleMode_EnhancesContrastAndSharpness()
+        {
+            // 1. Arrange: Create a 3x3 pixel grayscale image
+            var writeableBitmap = new WriteableBitmap(3, 3, 96, 96, PixelFormats.Gray8, null);
+            byte[] rawPixels = new byte[]
+            {
+                25,  130, 240,
+                25,  130, 240,
+                25,  130, 240
+            };
+            writeableBitmap.WritePixels(new System.Windows.Int32Rect(0, 0, 3, 3), rawPixels, 3, 0);
+
+            byte[] inputBytes;
+            using (var ms = new MemoryStream())
+            {
+                var encoder = new BmpBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(writeableBitmap));
+                encoder.Save(ms);
+                inputBytes = ms.ToArray();
+            }
+
+            // 2. Act: Process image to Grayscale (colorMode = 1), output PNG to prevent JPEG lossiness
+            byte[] outputBytes = ImageProcessor.ProcessImage(inputBytes, 1, "PNG");
+
+            // 3. Assert
+            Assert.NotNull(outputBytes);
+            using (var ms = new MemoryStream(outputBytes))
+            {
+                var decoder = BitmapDecoder.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                var frame = decoder.Frames[0];
+                Assert.Equal(PixelFormats.Gray8, frame.Format);
+
+                byte[] outputPixels = new byte[9];
+                frame.CopyPixels(outputPixels, 3, 0);
+
+                // For x=0: originally 25. Since it is on the border, it is copied directly.
+                Assert.True(Math.Abs(outputPixels[0] - 25) <= 2, $"Expected top-left pixel to be near 25, got {outputPixels[0]}");
+                Assert.True(Math.Abs(outputPixels[3] - 25) <= 2, $"Expected mid-left pixel to be near 25, got {outputPixels[3]}");
+
+                // For x=2: originally 240. Since it is on the border, it is copied directly.
+                Assert.True(Math.Abs(outputPixels[2] - 240) <= 2, $"Expected top-right pixel to be near 240, got {outputPixels[2]}");
+                Assert.True(Math.Abs(outputPixels[5] - 240) <= 2, $"Expected mid-right pixel to be near 240, got {outputPixels[5]}");
+
+                // Center pixel (1,1) is sharpened: 130 + 1.5 * (130 - 131) = 129 (approx 127-131).
+                Assert.True(outputPixels[4] >= 127 && outputPixels[4] <= 131, $"Expected center pixel to be near 129, got {outputPixels[4]}");
+            }
+        }
+
+        [Fact]
+        public void ProcessImage_ColorMode_EnhancesContrastAndSharpness()
+        {
+            // 1. Arrange: Create a 3x3 pixel Bgr24 image
+            var writeableBitmap = new WriteableBitmap(3, 3, 96, 96, PixelFormats.Bgr24, null);
+            byte[] rawPixels = new byte[3 * 3 * 3]; // 3x3 pixels * 3 channels = 27 bytes
+            
+            // Set values:
+            // Col 0 (left): BGR = [25, 25, 25] (< 30 -> should become 0)
+            // Col 1 (center): BGR = [130, 130, 130] -> should become 127
+            // Col 2 (right): BGR = [240, 240, 240] (> 230 -> should become 255)
+            for (int y = 0; y < 3; y++)
+            {
+                int rowOffset = y * 9; // 3 pixels * 3 channels = 9 bytes per row
+                // Pixel 0 (Col 0)
+                rawPixels[rowOffset + 0] = 25;
+                rawPixels[rowOffset + 1] = 25;
+                rawPixels[rowOffset + 2] = 25;
+                // Pixel 1 (Col 1)
+                rawPixels[rowOffset + 3] = 130;
+                rawPixels[rowOffset + 4] = 130;
+                rawPixels[rowOffset + 5] = 130;
+                // Pixel 2 (Col 2)
+                rawPixels[rowOffset + 6] = 240;
+                rawPixels[rowOffset + 7] = 240;
+                rawPixels[rowOffset + 8] = 240;
+            }
+            writeableBitmap.WritePixels(new System.Windows.Int32Rect(0, 0, 3, 3), rawPixels, 9, 0);
+
+            byte[] inputBytes;
+            using (var ms = new MemoryStream())
+            {
+                var encoder = new BmpBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(writeableBitmap));
+                encoder.Save(ms);
+                inputBytes = ms.ToArray();
+            }
+
+            // 2. Act: Process image to Color (colorMode = 2), output PNG
+            byte[] outputBytes = ImageProcessor.ProcessImage(inputBytes, 2, "PNG");
+
+            // 3. Assert
+            Assert.NotNull(outputBytes);
+            using (var ms = new MemoryStream(outputBytes))
+            {
+                var decoder = BitmapDecoder.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                var frame = decoder.Frames[0];
+                var format = frame.Format;
+                int bytesPerPixel = (format.BitsPerPixel + 7) / 8;
+                
+                byte[] outputPixels = new byte[3 * 3 * bytesPerPixel];
+                frame.CopyPixels(outputPixels, 3 * bytesPerPixel, 0);
+
+                // Verify Col 0 (left column): BGR should be close to [25, 25, 25] (border is copied directly)
+                Assert.True(Math.Abs(outputPixels[0] - 25) <= 2, $"Expected blue channel of Col 0 to be near 25, got {outputPixels[0]}");
+                Assert.True(Math.Abs(outputPixels[1] - 25) <= 2, $"Expected green channel of Col 0 to be near 25, got {outputPixels[1]}");
+                Assert.True(Math.Abs(outputPixels[2] - 25) <= 2, $"Expected red channel of Col 0 to be near 25, got {outputPixels[2]}");
+
+                // Verify Col 2 (right column): BGR should be close to [240, 240, 240] (border is copied directly)
+                int rightColOffset = 2 * bytesPerPixel;
+                Assert.True(Math.Abs(outputPixels[rightColOffset + 0] - 240) <= 2, $"Expected blue channel of Col 2 to be near 240, got {outputPixels[rightColOffset + 0]}");
+                Assert.True(Math.Abs(outputPixels[rightColOffset + 1] - 240) <= 2, $"Expected green channel of Col 2 to be near 240, got {outputPixels[rightColOffset + 1]}");
+                Assert.True(Math.Abs(outputPixels[rightColOffset + 2] - 240) <= 2, $"Expected red channel of Col 2 to be near 240, got {outputPixels[rightColOffset + 2]}");
+
+                // Verify Col 1 center pixel (1,1): BGR should be near [129, 129, 129] (sharpened)
+                int centerPixelOffset = 4 * bytesPerPixel;
+                Assert.True(outputPixels[centerPixelOffset + 0] >= 127 && outputPixels[centerPixelOffset + 0] <= 131, $"Expected blue channel of center pixel to be near 129, got {outputPixels[centerPixelOffset + 0]}");
+                Assert.True(outputPixels[centerPixelOffset + 1] >= 127 && outputPixels[centerPixelOffset + 1] <= 131, $"Expected green channel of center pixel to be near 129, got {outputPixels[centerPixelOffset + 1]}");
+                Assert.True(outputPixels[centerPixelOffset + 2] >= 127 && outputPixels[centerPixelOffset + 2] <= 131, $"Expected red channel of center pixel to be near 129, got {outputPixels[centerPixelOffset + 2]}");
+            }
+        }
     }
 }
