@@ -257,7 +257,19 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             string pipeName = config?.PipeName ?? string.Empty;
             var result = await VirtualPrinterManager.RemovePrinterAsync(virtualPrinterName, pipeName);
 
-            if (result.Success)
+            // Check if the printer has already been deleted manually from Windows Spooler
+            var currentLocalPrinters = ShaPrint.Server.SpoolerApi.GetLocalPrinters();
+            bool alreadyDeletedInWindows = !currentLocalPrinters.Contains(virtualPrinterName, StringComparer.OrdinalIgnoreCase);
+            if (alreadyDeletedInWindows)
+            {
+                string oldName = $"ShaPrint - {item.Printer.Name}";
+                if (currentLocalPrinters.Contains(oldName, StringComparer.OrdinalIgnoreCase))
+                {
+                    alreadyDeletedInWindows = false;
+                }
+            }
+
+            if (result.Success || alreadyDeletedInWindows)
             {
                 if (config != null)
                 {
@@ -306,18 +318,43 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 var saved = JsonSerializer.Deserialize<List<InstalledPrinterConfig>>(raw);
                 if (saved != null)
                 {
-                    _installedPrinters = saved;
-                    foreach (var config in _installedPrinters)
+                    var localPrinters = ShaPrint.Server.SpoolerApi.GetLocalPrinters();
+                    var validPrinters = new List<InstalledPrinterConfig>();
+                    bool configChanged = false;
+
+                    foreach (var config in saved)
                     {
                         if (string.IsNullOrEmpty(config.PipeName) || string.IsNullOrEmpty(config.ServerIp))
                         {
                             AppLogger.Log($"[CLIENT] Skipping invalid config entry: {config.VirtualPrinterName}");
+                            configChanged = true;
                             continue;
                         }
+
+                        // Auto-clean config if the printer was manually deleted from Windows
+                        if (localPrinters != null && localPrinters.Count > 0 && !localPrinters.Contains(config.VirtualPrinterName, StringComparer.OrdinalIgnoreCase))
+                        {
+                            string oldName = $"ShaPrint - {config.TargetPrinterName}";
+                            if (!localPrinters.Contains(oldName, StringComparer.OrdinalIgnoreCase))
+                            {
+                                AppLogger.Log($"[CLIENT] Auto-removing printer '{config.VirtualPrinterName}' from config because it was manually deleted from Windows.");
+                                configChanged = true;
+                                continue;
+                            }
+                        }
+
+                        validPrinters.Add(config);
 
                         var listener = new PipeListener(config.PipeName, config.ServerIp, config.TargetPrinterName);
                         listener.Start();
                         _activeListeners.Add(listener);
+                    }
+
+                    _installedPrinters = validPrinters;
+
+                    if (configChanged)
+                    {
+                        SaveConfiguration();
                     }
                 }
             }
