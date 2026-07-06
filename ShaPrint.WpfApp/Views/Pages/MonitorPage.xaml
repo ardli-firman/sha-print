@@ -9,47 +9,207 @@
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
         <converters:IntToVisibilityConverter x:Key="IntToVis" />
         <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
-        
-        <!-- TabControl Style -->
+
+        <!-- DataGrid: Column Header -->
+        <Style x:Key="ModernDGColumnHeader" TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Padding" Value="14,0"/>
+            <Setter Property="Height" Value="36"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="SeparatorBrush" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridColumnHeader">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderThickness="0,0,0,1"
+                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              SnapsToDevicePixels="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillColorTertiaryBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- DataGrid: Cell -->
+        <Style x:Key="ModernDGCell" TargetType="DataGridCell">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="14,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridCell">
+                        <Border Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- DataGrid: Base -->
+        <Style x:Key="ModernDataGrid" TargetType="DataGrid">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="RowHeaderWidth" Value="0"/>
+            <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}"/>
+            <Setter Property="AutoGenerateColumns" Value="False"/>
+            <Setter Property="CanUserAddRows" Value="False"/>
+            <Setter Property="CanUserDeleteRows" Value="False"/>
+            <Setter Property="CanUserResizeRows" Value="False"/>
+            <Setter Property="CanUserResizeColumns" Value="False"/>
+            <Setter Property="CanUserSortColumns" Value="False"/>
+            <Setter Property="HeadersVisibility" Value="Column"/>
+            <Setter Property="SelectionMode" Value="Single"/>
+            <Setter Property="SelectionUnit" Value="FullRow"/>
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="RowHeight" Value="40"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="AlternationCount" Value="2"/>
+            <Setter Property="ColumnHeaderHeight" Value="36"/>
+            <Setter Property="ColumnHeaderStyle" Value="{StaticResource ModernDGColumnHeader}"/>
+            <Setter Property="CellStyle" Value="{StaticResource ModernDGCell}"/>
+            <Setter Property="RowStyle">
+                <Setter.Value>
+                    <Style TargetType="DataGridRow">
+                        <Setter Property="Background" Value="Transparent"/>
+                        <Setter Property="MinHeight" Value="40"/>
+                        <Setter Property="VerticalAlignment" Value="Center"/>
+                        <Style.Triggers>
+                            <Trigger Property="AlternationIndex" Value="1">
+                                <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource ControlFillColorInputActiveBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Stat Card padding style -->
+        <Style x:Key="StatCard" TargetType="ui:Card">
+            <Setter Property="Padding" Value="16,14"/>
+        </Style>
+
+        <!-- Tab Control -->
         <Style TargetType="TabControl">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="0,12,0,0"/>
+            <Setter Property="Padding" Value="0,8,0,0"/>
         </Style>
+
+        <!-- Tab Item with custom pill template -->
         <Style TargetType="TabItem">
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Padding" Value="14,7"/>
             <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Bd" Padding="{TemplateBinding Padding}" Margin="0,0,4,0"
+                                Background="Transparent" CornerRadius="6">
+                            <ContentPresenter ContentSource="Header"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Status pill style for DataGrid cells -->
+        <Style x:Key="StatusPill" TargetType="Border">
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}"/>
         </Style>
     </Page.Resources>
 
     <Grid Margin="24,20,24,16">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/> <!-- Header -->
-            <RowDefinition Height="Auto"/> <!-- Summary Stats -->
-            <RowDefinition Height="Auto"/> <!-- Filter / Refresh bar -->
-            <RowDefinition Height="*"/>    <!-- Content Area (Grid/List + Empty states) -->
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- Header -->
-        <Grid Grid.Row="0" Margin="0,0,0,16">
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!--  HEADER                                                      -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <Grid Grid.Row="0" Margin="0,0,0,20">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
+
             <StackPanel Grid.Column="0">
-                <TextBlock Text="Server Monitoring Panel" FontSize="28" FontWeight="SemiBold"/>
-                <TextBlock Text="Monitor the status, printers, scanners, active clients, and print queues of all ShaPrint servers on the LAN in real-time." 
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                <TextBlock Text="Server Monitoring" FontSize="28" FontWeight="Bold"/>
+                <TextBlock Text="Monitor the status, printers, scanners, active clients, and print queues of all ShaPrint servers on the LAN in real-time."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           FontSize="13" Margin="0,5,0,0" TextWrapping="Wrap"/>
             </StackPanel>
-            
-            <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Orientation="Horizontal">
-                <TextBlock Text="Last refreshed: " Foreground="{DynamicResource TextFillColorSecondaryBrush}" FontSize="12"/>
-                <TextBlock Text="{Binding ViewModel.LastRefreshText}" FontWeight="SemiBold" FontSize="12"/>
-            </StackPanel>
+
+            <!-- Last Refreshed pill -->
+            <Border Grid.Column="1" VerticalAlignment="Bottom"
+                    Background="{DynamicResource ControlFillColorDefaultBrush}"
+                    CornerRadius="20" Padding="14,7">
+                <StackPanel Orientation="Horizontal">
+                    <ui:SymbolIcon Symbol="ArrowClockwise24" FontSize="13" Margin="0,0,6,0"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}">
+                        <Run Text="Last refreshed: "/>
+                        <Run Text="{Binding ViewModel.LastRefreshText, Mode=OneWay}" FontWeight="SemiBold"
+                             Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                    </TextBlock>
+                </StackPanel>
+            </Border>
         </Grid>
 
-        <!-- Summary Stats -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!--  SUMMARY STAT CARDS                                         -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
         <Grid Grid.Row="1" Margin="0,0,0,16">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -61,128 +221,212 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Total -->
-            <ui:Card Grid.Column="0" Padding="12">
-                <StackPanel>
-                    <TextBlock Text="Total Servers" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                        <ui:SymbolIcon Symbol="Server24" FontSize="20" Margin="0,0,8,0"/>
-                        <TextBlock Text="{Binding ViewModel.TotalServers}" FontSize="24" FontWeight="Bold"/>
+            <!-- Total Servers -->
+            <ui:Card Grid.Column="0" Style="{StaticResource StatCard}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="Total Servers" FontSize="12" FontWeight="Medium"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="{Binding ViewModel.TotalServers}"
+                                   FontSize="30" FontWeight="Bold" Margin="0,3,0,0"/>
                     </StackPanel>
-                </StackPanel>
+                    <Border Grid.Column="1" Width="44" Height="44" CornerRadius="10"
+                            Background="{DynamicResource ControlFillColorDefaultBrush}"
+                            VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="Server24" FontSize="22"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </Grid>
             </ui:Card>
 
             <!-- Online -->
-            <ui:Card Grid.Column="2" Padding="12">
-                <StackPanel>
-                    <TextBlock Text="Online" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                        <ui:SymbolIcon Symbol="CheckmarkCircle24" FontSize="20" Margin="0,0,8,0" Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
-                        <TextBlock Text="{Binding ViewModel.OnlineCount}" FontSize="24" FontWeight="Bold"/>
+            <ui:Card Grid.Column="2" Style="{StaticResource StatCard}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="Online" FontSize="12" FontWeight="Medium"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="{Binding ViewModel.OnlineCount}"
+                                   FontSize="30" FontWeight="Bold" Margin="0,3,0,0"
+                                   Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
                     </StackPanel>
-                </StackPanel>
+                    <Border Grid.Column="1" Width="44" Height="44" CornerRadius="10"
+                            VerticalAlignment="Center">
+                        <Border.Background><SolidColorBrush Color="#1A22C55E"/></Border.Background>
+                        <ui:SymbolIcon Symbol="CheckmarkCircle24" FontSize="22"
+                                       Foreground="{DynamicResource SystemFillColorSuccessBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </Grid>
             </ui:Card>
 
             <!-- Warning -->
-            <ui:Card Grid.Column="4" Padding="12">
-                <StackPanel>
-                    <TextBlock Text="Warning" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                        <ui:SymbolIcon Symbol="Warning24" FontSize="20" Margin="0,0,8,0" Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
-                        <TextBlock Text="{Binding ViewModel.WarningCount}" FontSize="24" FontWeight="Bold"/>
+            <ui:Card Grid.Column="4" Style="{StaticResource StatCard}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="Warning" FontSize="12" FontWeight="Medium"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="{Binding ViewModel.WarningCount}"
+                                   FontSize="30" FontWeight="Bold" Margin="0,3,0,0"
+                                   Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
                     </StackPanel>
-                </StackPanel>
+                    <Border Grid.Column="1" Width="44" Height="44" CornerRadius="10"
+                            VerticalAlignment="Center">
+                        <Border.Background><SolidColorBrush Color="#1AF59E0B"/></Border.Background>
+                        <ui:SymbolIcon Symbol="Warning24" FontSize="22"
+                                       Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </Grid>
             </ui:Card>
 
             <!-- Offline -->
-            <ui:Card Grid.Column="6" Padding="12">
-                <StackPanel>
-                    <TextBlock Text="Offline" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                        <ui:SymbolIcon Symbol="ErrorCircle24" FontSize="20" Margin="0,0,8,0" Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
-                        <TextBlock Text="{Binding ViewModel.OfflineCount}" FontSize="24" FontWeight="Bold"/>
+            <ui:Card Grid.Column="6" Style="{StaticResource StatCard}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="Offline" FontSize="12" FontWeight="Medium"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="{Binding ViewModel.OfflineCount}"
+                                   FontSize="30" FontWeight="Bold" Margin="0,3,0,0"
+                                   Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
                     </StackPanel>
-                </StackPanel>
+                    <Border Grid.Column="1" Width="44" Height="44" CornerRadius="10"
+                            VerticalAlignment="Center">
+                        <Border.Background><SolidColorBrush Color="#1AEF4444"/></Border.Background>
+                        <ui:SymbolIcon Symbol="ErrorCircle24" FontSize="22"
+                                       Foreground="{DynamicResource SystemFillColorCriticalBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </Grid>
             </ui:Card>
         </Grid>
 
-        <!-- Search & Refresh bar -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!--  SEARCH &amp; TOOLBAR                                       -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
         <Grid Grid.Row="2" Margin="0,0,0,16">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Search box -->
-            <ui:TextBox Grid.Column="0" 
+            <ui:TextBox Grid.Column="0"
                         Text="{Binding ViewModel.FilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                         PlaceholderText="Filter servers by hostname or IP..."
                         Icon="{ui:SymbolIcon Search24}"
                         Margin="0,0,12,0"/>
 
-            <!-- Expand All -->
-            <ui:Button Grid.Column="1" 
+            <ui:Button Grid.Column="1"
                        Command="{Binding ViewModel.ExpandAllCommand}"
                        Content="Expand All"
                        Icon="{ui:SymbolIcon ChevronDown24}"
-                       Appearance="Transparent"
-                       Margin="0,0,4,0"/>
+                       Appearance="Secondary"
+                       Margin="0,0,6,0"/>
 
-            <!-- Collapse All -->
-            <ui:Button Grid.Column="2" 
+            <ui:Button Grid.Column="2"
                        Command="{Binding ViewModel.CollapseAllCommand}"
                        Content="Collapse All"
                        Icon="{ui:SymbolIcon ChevronUp24}"
-                       Appearance="Transparent"
-                       Margin="0,0,12,0"/>
+                       Appearance="Secondary"
+                       Margin="0,0,10,0"/>
 
-            <!-- Refresh button -->
-            <ui:Button Grid.Column="3" 
+            <ui:Button Grid.Column="3"
                        Command="{Binding ViewModel.RefreshCommand}"
                        Content="Refresh"
                        Icon="{ui:SymbolIcon ArrowClockwise24}"
                        Appearance="Primary"/>
         </Grid>
 
-        <!-- Content Area -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!--  CONTENT AREA                                               -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
         <Grid Grid.Row="3">
-            
+
             <!-- Loading State -->
-            <StackPanel Visibility="{Binding ViewModel.IsLoading, Converter={StaticResource BoolToVis}}" 
+            <StackPanel Visibility="{Binding ViewModel.IsLoading, Converter={StaticResource BoolToVis}}"
                         HorizontalAlignment="Center" VerticalAlignment="Center">
-                <ui:ProgressRing IsIndeterminate="True" Width="48" Height="48" Margin="0,0,0,16"/>
-                <TextBlock Text="Discovering servers on the network..." FontSize="16" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                <ui:ProgressRing IsIndeterminate="True" Width="52" Height="52" Margin="0,0,0,20"/>
+                <TextBlock Text="Discovering servers on the network..."
+                           FontSize="15" FontWeight="Medium"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           HorizontalAlignment="Center"/>
+                <TextBlock Text="This may take a moment..."
+                           FontSize="12"
+                           Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                           HorizontalAlignment="Center" Margin="0,4,0,0"/>
             </StackPanel>
-            
-            <!-- Empty State (No Servers) -->
-            <StackPanel Visibility="{Binding ViewModel.IsEmpty, Converter={StaticResource BoolToVis}}" 
+
+            <!-- Empty State -->
+            <StackPanel Visibility="{Binding ViewModel.IsEmpty, Converter={StaticResource BoolToVis}}"
                         HorizontalAlignment="Center" VerticalAlignment="Center">
                 <StackPanel.Style>
                     <Style TargetType="StackPanel">
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding ViewModel.IsLoading}" Value="True">
-                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Setter Property="Visibility" Value="Collapsed"/>
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
                 </StackPanel.Style>
-                <ui:SymbolIcon Symbol="Server24" FontSize="48" Foreground="{DynamicResource TextFillColorDisabledBrush}" Margin="0,0,0,16" HorizontalAlignment="Center"/>
-                <TextBlock Text="No servers discovered" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                <TextBlock Text="Make sure ShaPrint servers are running on the LAN." Foreground="{DynamicResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                <Border Width="80" Height="80" CornerRadius="40"
+                        Background="{DynamicResource ControlFillColorDefaultBrush}"
+                        HorizontalAlignment="Center" Margin="0,0,0,16">
+                    <ui:SymbolIcon Symbol="Server24" FontSize="36"
+                                   Foreground="{DynamicResource TextFillColorDisabledBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock Text="No servers discovered" FontSize="18" FontWeight="SemiBold"
+                           HorizontalAlignment="Center"/>
+                <TextBlock Text="Make sure ShaPrint servers are running on the LAN."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           HorizontalAlignment="Center" Margin="0,6,0,0"/>
+                <ui:Button Content="Refresh Now"
+                           Icon="{ui:SymbolIcon ArrowClockwise24}"
+                           Command="{Binding ViewModel.RefreshCommand}"
+                           Appearance="Primary"
+                           HorizontalAlignment="Center"
+                           Margin="0,16,0,0"/>
             </StackPanel>
 
             <!-- Filter No Results State -->
-            <StackPanel Visibility="{Binding ViewModel.IsFilterNoResults, Converter={StaticResource BoolToVis}}" 
+            <StackPanel Visibility="{Binding ViewModel.IsFilterNoResults, Converter={StaticResource BoolToVis}}"
                         HorizontalAlignment="Center" VerticalAlignment="Center">
-                <ui:SymbolIcon Symbol="Search24" FontSize="48" Foreground="{DynamicResource TextFillColorDisabledBrush}" Margin="0,0,0,16" HorizontalAlignment="Center"/>
-                <TextBlock Text="No servers match your filter" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                <TextBlock Text="Try adjusting your search criteria." Foreground="{DynamicResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                <Border Width="80" Height="80" CornerRadius="40"
+                        Background="{DynamicResource ControlFillColorDefaultBrush}"
+                        HorizontalAlignment="Center" Margin="0,0,0,16">
+                    <ui:SymbolIcon Symbol="Search24" FontSize="36"
+                                   Foreground="{DynamicResource TextFillColorDisabledBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock Text="No servers match your filter"
+                           FontSize="18" FontWeight="SemiBold"
+                           HorizontalAlignment="Center"/>
+                <TextBlock Text="Try adjusting your search criteria."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           HorizontalAlignment="Center" Margin="0,6,0,0"/>
             </StackPanel>
 
-            <!-- Servers List -->
+            <!-- ─────────────────────────────────────────────────── -->
+            <!--  Servers List                                        -->
+            <!-- ─────────────────────────────────────────────────── -->
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           Visibility="{Binding ViewModel.IsEmpty, Converter={StaticResource InverseBoolToVis}}">
                 <ScrollViewer.Style>
@@ -197,254 +441,361 @@
                         </Style.Triggers>
                     </Style>
                 </ScrollViewer.Style>
-                
-                <ListBox ItemsSource="{Binding ViewModel.FilteredServers}" 
-                         Background="Transparent" 
-                         BorderThickness="0"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         HorizontalContentAlignment="Stretch">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem">
-                            <Setter Property="Background" Value="Transparent"/>
-                            <Setter Property="BorderThickness" Value="0"/>
-                            <Setter Property="Padding" Value="0"/>
+
+                <ItemsControl ItemsSource="{Binding ViewModel.FilteredServers}">
+                    <ItemsControl.ItemContainerStyle>
+                        <Style TargetType="ContentPresenter">
                             <Setter Property="Margin" Value="0,0,0,12"/>
-                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                            <Style.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="Transparent"/>
-                                </Trigger>
-                                <Trigger Property="IsSelected" Value="True">
-                                    <Setter Property="Background" Value="Transparent"/>
-                                </Trigger>
-                            </Style.Triggers>
                         </Style>
-                    </ListBox.ItemContainerStyle>
-                    <ListBox.ItemTemplate>
+                    </ItemsControl.ItemContainerStyle>
+
+                    <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <ui:Card Padding="16" Margin="0" VerticalAlignment="Top">
+                            <!-- Server Card -->
+                            <ui:Card Padding="0" VerticalAlignment="Top">
                                 <Grid>
                                     <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/> <!-- Collapsed Row (Summary) -->
-                                        <RowDefinition Height="Auto"/> <!-- Expanded Row (Details) -->
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
 
-                                    <!-- Summary Row -->
-                                    <Grid Grid.Row="0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/> <!-- Status Badge -->
-                                            <ColumnDefinition Width="2.5*"/> <!-- Hostname, IP, Version -->
-                                            <ColumnDefinition Width="2.5*"/> <!-- Counts / Channel -->
-                                            <ColumnDefinition Width="1.5*"/> <!-- Uptime / Seen -->
-                                            <ColumnDefinition Width="Auto"/> <!-- Expand/Collapse button -->
-                                        </Grid.ColumnDefinitions>
+                                    <!-- ─────────────────────── -->
+                                    <!--  SUMMARY ROW             -->
+                                    <!-- ─────────────────────── -->
+                                    <Border Grid.Row="0" Padding="18,14">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="2.2*"/>
+                                                <ColumnDefinition Width="2*"/>
+                                                <ColumnDefinition Width="1.6*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
 
-                                        <!-- Status Badge -->
-                                        <Border Grid.Column="0" Background="{Binding StatusBrush}" 
-                                                CornerRadius="12" Padding="12,4" Margin="0,0,16,0"
-                                                VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Status}" Foreground="White" FontWeight="SemiBold" FontSize="12"/>
-                                        </Border>
+                                            <!-- Status Badge -->
+                                            <Border Grid.Column="0"
+                                                    Background="{Binding StatusBrush}"
+                                                    CornerRadius="20" Padding="12,5"
+                                                    Margin="0,0,18,0" VerticalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Ellipse Width="6" Height="6" Fill="White"
+                                                             VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                    <TextBlock Text="{Binding Status}"
+                                                               Foreground="White" FontWeight="SemiBold" FontSize="12"/>
+                                                </StackPanel>
+                                            </Border>
 
-                                        <!-- Hostname & IP & Version -->
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                                                <TextBlock Text="{Binding HostName}" FontSize="16" FontWeight="SemiBold"/>
-                                                <Border Background="{DynamicResource ControlFillColorDefaultBrush}" CornerRadius="4" Padding="4,2" Margin="8,0,0,0" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding Version, StringFormat='v{0}'}" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                </Border>
+                                            <!-- Hostname &amp; IP &amp; Version -->
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,3">
+                                                    <TextBlock Text="{Binding HostName}"
+                                                               FontSize="15" FontWeight="SemiBold"/>
+                                                    <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                            CornerRadius="4" Padding="5,2" Margin="8,0,0,0"
+                                                            VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Version, StringFormat='v{0}'}"
+                                                                   FontSize="11"
+                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                                    </Border>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding IpAddress}" FontSize="12"
+                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                                             </StackPanel>
-                                            <TextBlock Text="{Binding IpAddress}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                        </StackPanel>
 
-                                        <!-- Counts & Network Channel -->
-                                        <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Left">
-                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                                <Border Background="{DynamicResource ControlFillColorDefaultBrush}" CornerRadius="4" Padding="4,2" Margin="0,0,8,0">
-                                                    <TextBlock FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}">
+                                            <!-- Counts + Channel -->
+                                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                                <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                        CornerRadius="4" Padding="6,2"
+                                                        HorizontalAlignment="Left" Margin="0,0,0,6">
+                                                    <TextBlock FontSize="11"
+                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}">
                                                         <Run Text="CH: " FontWeight="SemiBold"/>
                                                         <Run Text="{Binding NetworkChannel, Mode=OneWay}"/>
                                                     </TextBlock>
                                                 </Border>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <ui:SymbolIcon Symbol="Print24" FontSize="13"
+                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                                    <TextBlock Text="{Binding Payload.Printers.Count, FallbackValue=0}"
+                                                               FontSize="12" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center" Margin="0,0,14,0"/>
+                                                    <ui:SymbolIcon Symbol="Scan24" FontSize="13"
+                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                                    <TextBlock Text="{Binding Payload.Scanners.Count, FallbackValue=0}"
+                                                               FontSize="12" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center" Margin="0,0,14,0"/>
+                                                    <ui:SymbolIcon Symbol="People24" FontSize="13"
+                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                                    <TextBlock Text="{Binding Payload.ActiveClients.Count, FallbackValue=0}"
+                                                               FontSize="12" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center"/>
+                                                </StackPanel>
                                             </StackPanel>
-                                            <StackPanel Orientation="Horizontal">
-                                                <ui:SymbolIcon Symbol="Print24" Margin="0,0,4,0" FontSize="14" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                <TextBlock Text="{Binding Payload.Printers.Count, FallbackValue=0}" FontSize="12" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,12,0"/>
-                                                
-                                                <ui:SymbolIcon Symbol="Scan24" Margin="0,0,4,0" FontSize="14" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                <TextBlock Text="{Binding Payload.Scanners.Count, FallbackValue=0}" FontSize="12" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,12,0"/>
-                                                
-                                                <ui:SymbolIcon Symbol="People24" Margin="0,0,4,0" FontSize="14" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                <TextBlock Text="{Binding Payload.ActiveClients.Count, FallbackValue=0}" FontSize="12" VerticalAlignment="Center" FontWeight="SemiBold"/>
-                                            </StackPanel>
-                                        </StackPanel>
 
-                                        <!-- Uptime & Last Seen -->
-                                        <StackPanel Grid.Column="3" VerticalAlignment="Center" HorizontalAlignment="Left">
-                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                                <ui:SymbolIcon Symbol="Clock24" FontSize="14" Margin="0,0,6,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                <TextBlock FontSize="12">
-                                                    <Run Text="Uptime: " Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                    <Run Text="{Binding UptimeText, Mode=OneWay}" FontWeight="SemiBold"/>
-                                                </TextBlock>
+                                            <!-- Uptime &amp; Last Seen -->
+                                            <StackPanel Grid.Column="3" VerticalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                                                    <ui:SymbolIcon Symbol="Clock24" FontSize="13"
+                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                    <TextBlock FontSize="12" VerticalAlignment="Center">
+                                                        <Run Text="Uptime: "
+                                                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                                        <Run Text="{Binding UptimeText, Mode=OneWay}" FontWeight="SemiBold"/>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <ui:SymbolIcon Symbol="Eye24" FontSize="13"
+                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                    <TextBlock FontSize="12" VerticalAlignment="Center">
+                                                        <Run Text="Seen: "
+                                                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                                        <Run Text="{Binding LastSeenText, Mode=OneWay}" FontWeight="SemiBold"/>
+                                                    </TextBlock>
+                                                </StackPanel>
                                             </StackPanel>
-                                            <StackPanel Orientation="Horizontal">
-                                                <ui:SymbolIcon Symbol="Eye24" FontSize="14" Margin="0,0,6,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                <TextBlock FontSize="12">
-                                                    <Run Text="Seen: " Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                    <Run Text="{Binding LastSeenText, Mode=OneWay}" FontWeight="SemiBold"/>
-                                                </TextBlock>
-                                            </StackPanel>
-                                        </StackPanel>
 
-                                        <!-- Expand / Collapse Toggle button -->
-                                        <ui:Button Grid.Column="4" 
-                                                   Command="{Binding DataContext.ViewModel.ToggleExpandCommand, RelativeSource={RelativeSource AncestorType=Page}}"
-                                                   CommandParameter="{Binding}"
-                                                   Appearance="Transparent"
-                                                   VerticalAlignment="Center">
-                                            <ui:Button.Style>
-                                                <Style TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
-                                                    <Setter Property="Icon" Value="{ui:SymbolIcon ChevronDown24}"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsExpanded}" Value="True">
-                                                            <Setter Property="Icon" Value="{ui:SymbolIcon ChevronUp24}"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </ui:Button.Style>
-                                        </ui:Button>
-                                    </Grid>
+                                            <!-- Expand / Collapse Button -->
+                                            <ui:Button Grid.Column="4"
+                                                       Command="{Binding DataContext.ViewModel.ToggleExpandCommand, RelativeSource={RelativeSource AncestorType=Page}}"
+                                                       CommandParameter="{Binding}"
+                                                       Appearance="Transparent"
+                                                       VerticalAlignment="Center">
+                                                <ui:Button.Style>
+                                                    <Style TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
+                                                        <Setter Property="Icon" Value="{ui:SymbolIcon ChevronDown24}"/>
+                                                        <Setter Property="Content" Value="Details"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                                                <Setter Property="Icon" Value="{ui:SymbolIcon ChevronUp24}"/>
+                                                                <Setter Property="Content" Value="Collapse"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </ui:Button.Style>
+                                            </ui:Button>
+                                        </Grid>
+                                    </Border>
 
-                                    <!-- Details Row (Visible when IsExpanded = True) -->
-                                    <Grid Grid.Row="1" Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVis}}" Margin="0,16,0,0">
+                                    <!-- ─────────────────────── -->
+                                    <!--  EXPANDED DETAIL PANEL  -->
+                                    <!-- ─────────────────────── -->
+                                    <Grid Grid.Row="1"
+                                          Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVis}}">
                                         <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/> <!-- Error Banner -->
-                                            <RowDefinition Height="*"/>    <!-- Detail Tabs -->
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
                                         </Grid.RowDefinitions>
 
+                                        <!-- Divider line -->
+                                        <Border Grid.Row="0" Height="1"
+                                                Background="{DynamicResource ControlStrokeColorDefaultBrush}"/>
+
                                         <!-- Error Banner -->
-                                        <Border Grid.Row="0" Background="{DynamicResource SystemFillColorCriticalBrush}" CornerRadius="4" Padding="12,8" Margin="0,0,0,12"
+                                        <Border Grid.Row="1"
+                                                Margin="18,12,18,0"
+                                                CornerRadius="8" Padding="14,10"
+                                                BorderThickness="1"
                                                 Visibility="{Binding Payload.Errors.Count, Converter={StaticResource IntToVis}, FallbackValue=Collapsed}">
+                                            <Border.Background><SolidColorBrush Color="#1AEF4444"/></Border.Background>
+                                            <Border.BorderBrush><SolidColorBrush Color="#33EF4444"/></Border.BorderBrush>
                                             <StackPanel Orientation="Horizontal">
-                                                <ui:SymbolIcon Symbol="Warning24" Foreground="White" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                                <TextBlock Text="Recent errors detected on this server! Check the Errors tab below." Foreground="White" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                <ui:SymbolIcon Symbol="ErrorCircle24"
+                                                               Foreground="{DynamicResource SystemFillColorCriticalBrush}"
+                                                               Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                                <TextBlock Foreground="{DynamicResource SystemFillColorCriticalBrush}"
+                                                           FontWeight="SemiBold" VerticalAlignment="Center" FontSize="13">
+                                                    <Run Text="Recent errors detected — check the "/>
+                                                    <Run Text="Errors" FontWeight="Bold"/>
+                                                    <Run Text=" tab below."/>
+                                                </TextBlock>
                                             </StackPanel>
                                         </Border>
 
                                         <!-- Detail Tabs -->
-                                        <TabControl Grid.Row="1">
+                                        <TabControl Grid.Row="2" Margin="18,8,18,16">
+
                                             <!-- Printers Tab -->
-                                            <TabItem Header="Printers">
-                                                <ListView ItemsSource="{Binding Payload.Printers}" MaxHeight="300" MinHeight="100">
-                                                    <ListView.View>
-                                                        <GridView>
-                                                            <GridViewColumn Header="Printer Name" DisplayMemberBinding="{Binding Name}" Width="250"/>
-                                                            <GridViewColumn Header="Status" Width="100">
-                                                                <GridViewColumn.CellTemplate>
+                                            <TabItem>
+                                                <TabItem.Header>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <ui:SymbolIcon Symbol="Print24" FontSize="13" Margin="0,0,6,0"/>
+                                                        <TextBlock Text="Printers"/>
+                                                    </StackPanel>
+                                                </TabItem.Header>
+                                                <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                        CornerRadius="0,6,6,6" MaxHeight="300" MinHeight="80" Margin="0,4,0,0">
+                                                    <DataGrid Style="{StaticResource ModernDataGrid}"
+                                                              ItemsSource="{Binding Payload.Printers}">
+                                                        <DataGrid.Columns>
+                                                            <DataGridTextColumn Header="Printer Name"
+                                                                                Binding="{Binding Name}" Width="4*"/>
+                                                            <DataGridTemplateColumn Header="Status" Width="1.5*">
+                                                                <DataGridTemplateColumn.CellTemplate>
                                                                     <DataTemplate>
-                                                                        <Border Background="{DynamicResource ControlFillColorDefaultBrush}" CornerRadius="4" Padding="6,2">
+                                                                        <Border Style="{StaticResource StatusPill}">
                                                                             <TextBlock Text="{Binding Status}" FontSize="12"/>
                                                                         </Border>
                                                                     </DataTemplate>
-                                                                </GridViewColumn.CellTemplate>
-                                                            </GridViewColumn>
-                                                            <GridViewColumn Header="Queue" Width="80">
-                                                                <GridViewColumn.CellTemplate>
+                                                                </DataGridTemplateColumn.CellTemplate>
+                                                            </DataGridTemplateColumn>
+                                                            <DataGridTemplateColumn Header="Queue" Width="1*">
+                                                                <DataGridTemplateColumn.CellTemplate>
                                                                     <DataTemplate>
-                                                                        <Border Background="{DynamicResource ControlFillColorDefaultBrush}" CornerRadius="4" Padding="6,2">
-                                                                            <TextBlock Text="{Binding QueueLength}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                                                        <Border Style="{StaticResource StatusPill}">
+                                                                            <TextBlock Text="{Binding QueueLength}"
+                                                                                       FontSize="12" FontWeight="SemiBold"/>
                                                                         </Border>
                                                                     </DataTemplate>
-                                                                </GridViewColumn.CellTemplate>
-                                                            </GridViewColumn>
-                                                            <GridViewColumn Header="Issues / Notes" DisplayMemberBinding="{Binding ErrorDescription}" Width="300"/>
-                                                        </GridView>
-                                                    </ListView.View>
-                                                </ListView>
+                                                                </DataGridTemplateColumn.CellTemplate>
+                                                            </DataGridTemplateColumn>
+                                                            <DataGridTextColumn Header="Issues / Notes"
+                                                                                Binding="{Binding ErrorDescription}" Width="4*"/>
+                                                        </DataGrid.Columns>
+                                                    </DataGrid>
+                                                </Border>
                                             </TabItem>
 
                                             <!-- Scanners Tab -->
-                                            <TabItem Header="Scanners">
-                                                <ListView ItemsSource="{Binding Payload.Scanners}" MaxHeight="300" MinHeight="100">
-                                                    <ListView.View>
-                                                        <GridView>
-                                                            <GridViewColumn Header="Scanner Name" DisplayMemberBinding="{Binding Name}" Width="300"/>
-                                                            <GridViewColumn Header="Status" Width="120">
-                                                                <GridViewColumn.CellTemplate>
+                                            <TabItem>
+                                                <TabItem.Header>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <ui:SymbolIcon Symbol="Scan24" FontSize="13" Margin="0,0,6,0"/>
+                                                        <TextBlock Text="Scanners"/>
+                                                    </StackPanel>
+                                                </TabItem.Header>
+                                                <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                        CornerRadius="0,6,6,6" MaxHeight="300" MinHeight="80" Margin="0,4,0,0">
+                                                    <DataGrid Style="{StaticResource ModernDataGrid}"
+                                                              ItemsSource="{Binding Payload.Scanners}">
+                                                        <DataGrid.Columns>
+                                                            <DataGridTextColumn Header="Scanner Name"
+                                                                                Binding="{Binding Name}" Width="4*"/>
+                                                            <DataGridTemplateColumn Header="Status" Width="1.5*">
+                                                                <DataGridTemplateColumn.CellTemplate>
                                                                     <DataTemplate>
-                                                                        <Border Background="{DynamicResource ControlFillColorDefaultBrush}" CornerRadius="4" Padding="6,2">
+                                                                        <Border Style="{StaticResource StatusPill}">
                                                                             <TextBlock Text="{Binding Status}" FontSize="12"/>
                                                                         </Border>
                                                                     </DataTemplate>
-                                                                </GridViewColumn.CellTemplate>
-                                                            </GridViewColumn>
-                                                            <GridViewColumn Header="Last Active" DisplayMemberBinding="{Binding LastScanAgo, FallbackValue='N/A'}" Width="150"/>
-                                                        </GridView>
-                                                    </ListView.View>
-                                                </ListView>
+                                                                </DataGridTemplateColumn.CellTemplate>
+                                                            </DataGridTemplateColumn>
+                                                            <DataGridTextColumn Header="Last Active"
+                                                                                Binding="{Binding LastScanAgo, FallbackValue='N/A'}"
+                                                                                Width="2.5*"/>
+                                                        </DataGrid.Columns>
+                                                    </DataGrid>
+                                                </Border>
                                             </TabItem>
 
                                             <!-- Connected Clients Tab -->
-                                            <TabItem Header="Connected Clients">
-                                                <ListView ItemsSource="{Binding Payload.ActiveClients}" MaxHeight="300" MinHeight="100">
-                                                    <ListView.View>
-                                                        <GridView>
-                                                            <GridViewColumn Header="Client IP Address" DisplayMemberBinding="{Binding Ip}" Width="250"/>
-                                                            <GridViewColumn Header="Connected Since" DisplayMemberBinding="{Binding ConnectedSince, StringFormat='{}{0:yyyy-MM-dd HH:mm:ss}'}" Width="250"/>
-                                                        </GridView>
-                                                    </ListView.View>
-                                                </ListView>
+                                            <TabItem>
+                                                <TabItem.Header>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <ui:SymbolIcon Symbol="People24" FontSize="13" Margin="0,0,6,0"/>
+                                                        <TextBlock Text="Connected Clients"/>
+                                                    </StackPanel>
+                                                </TabItem.Header>
+                                                <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                        CornerRadius="0,6,6,6" MaxHeight="300" MinHeight="80" Margin="0,4,0,0">
+                                                    <DataGrid Style="{StaticResource ModernDataGrid}"
+                                                              ItemsSource="{Binding Payload.ActiveClients}">
+                                                        <DataGrid.Columns>
+                                                            <DataGridTextColumn Header="Client IP Address"
+                                                                                Binding="{Binding Ip}" Width="1*"/>
+                                                            <DataGridTextColumn Header="Connected Since"
+                                                                                Binding="{Binding ConnectedSince, StringFormat='{}{0:yyyy-MM-dd HH:mm:ss}'}"
+                                                                                Width="1*"/>
+                                                        </DataGrid.Columns>
+                                                    </DataGrid>
+                                                </Border>
                                             </TabItem>
 
-                                            <!-- Print/Scan Jobs History Tab -->
-                                            <TabItem Header="Job Activity">
-                                                <ListView ItemsSource="{Binding Payload.RecentJobs}" MaxHeight="300" MinHeight="100">
-                                                    <ListView.View>
-                                                        <GridView>
-                                                            <GridViewColumn Header="Time" DisplayMemberBinding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Width="80"/>
-                                                            <GridViewColumn Header="Type" DisplayMemberBinding="{Binding Type}" Width="80"/>
-                                                            <GridViewColumn Header="Device" DisplayMemberBinding="{Binding PrinterName}" Width="200"/>
-                                                            <GridViewColumn Header="Job Title" DisplayMemberBinding="{Binding Document}" Width="250"/>
-                                                            <GridViewColumn Header="Client IP" DisplayMemberBinding="{Binding ClientIp}" Width="120"/>
-                                                            <GridViewColumn Header="Status" Width="100">
-                                                                <GridViewColumn.CellTemplate>
+                                            <!-- Job Activity Tab -->
+                                            <TabItem>
+                                                <TabItem.Header>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <ui:SymbolIcon Symbol="ClipboardTaskListLtr24" FontSize="13" Margin="0,0,6,0"/>
+                                                        <TextBlock Text="Job Activity"/>
+                                                    </StackPanel>
+                                                </TabItem.Header>
+                                                <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                        CornerRadius="0,6,6,6" MaxHeight="300" MinHeight="80" Margin="0,4,0,0">
+                                                    <DataGrid Style="{StaticResource ModernDataGrid}"
+                                                              ItemsSource="{Binding Payload.RecentJobs}">
+                                                        <DataGrid.Columns>
+                                                            <DataGridTextColumn Header="Time"
+                                                                                Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}"
+                                                                                Width="1*"/>
+                                                            <DataGridTextColumn Header="Type"
+                                                                                Binding="{Binding Type}" Width="1*"/>
+                                                            <DataGridTextColumn Header="Device"
+                                                                                Binding="{Binding PrinterName}" Width="2*"/>
+                                                            <DataGridTextColumn Header="Job Title"
+                                                                                Binding="{Binding Document}" Width="3*"/>
+                                                            <DataGridTextColumn Header="Client IP"
+                                                                                Binding="{Binding ClientIp}" Width="1.5*"/>
+                                                            <DataGridTemplateColumn Header="Status" Width="1.5*">
+                                                                <DataGridTemplateColumn.CellTemplate>
                                                                     <DataTemplate>
-                                                                        <Border Background="{DynamicResource ControlFillColorDefaultBrush}" CornerRadius="4" Padding="6,2">
+                                                                        <Border Style="{StaticResource StatusPill}">
                                                                             <TextBlock Text="{Binding Status}" FontSize="12"/>
                                                                         </Border>
                                                                     </DataTemplate>
-                                                                </GridViewColumn.CellTemplate>
-                                                            </GridViewColumn>
-                                                        </GridView>
-                                                    </ListView.View>
-                                                </ListView>
+                                                                </DataGridTemplateColumn.CellTemplate>
+                                                            </DataGridTemplateColumn>
+                                                        </DataGrid.Columns>
+                                                    </DataGrid>
+                                                </Border>
                                             </TabItem>
 
                                             <!-- Errors Tab -->
-                                            <TabItem Header="Errors">
-                                                <ListView ItemsSource="{Binding Payload.Errors}" MaxHeight="300" MinHeight="100">
-                                                    <ListView.ItemContainerStyle>
-                                                        <Style TargetType="ListViewItem">
-                                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}"/>
-                                                        </Style>
-                                                    </ListView.ItemContainerStyle>
-                                                    <ListView.View>
-                                                        <GridView>
-                                                            <GridViewColumn Header="Time" DisplayMemberBinding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Width="100"/>
-                                                            <GridViewColumn Header="Source" DisplayMemberBinding="{Binding Source}" Width="150"/>
-                                                            <GridViewColumn Header="Error Message" DisplayMemberBinding="{Binding Message}" Width="500"/>
-                                                        </GridView>
-                                                    </ListView.View>
-                                                </ListView>
+                                            <TabItem>
+                                                <TabItem.Header>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <ui:SymbolIcon Symbol="Warning24" FontSize="13" Margin="0,0,6,0"
+                                                                       Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
+                                                        <TextBlock Text="Errors"
+                                                                   Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
+                                                    </StackPanel>
+                                                </TabItem.Header>
+                                                <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                        CornerRadius="0,6,6,6" MaxHeight="300" MinHeight="80" Margin="0,4,0,0">
+                                                    <DataGrid Style="{StaticResource ModernDataGrid}"
+                                                              ItemsSource="{Binding Payload.Errors}">
+                                                        <DataGrid.Columns>
+                                                            <DataGridTextColumn Header="Time"
+                                                                                Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}"
+                                                                                Width="1*"/>
+                                                            <DataGridTextColumn Header="Source"
+                                                                                Binding="{Binding Source}" Width="1.5*"/>
+                                                            <DataGridTemplateColumn Header="Error Message" Width="5*">
+                                                                <DataGridTemplateColumn.CellTemplate>
+                                                                    <DataTemplate>
+                                                                        <TextBlock Text="{Binding Message}"
+                                                                                   Foreground="{DynamicResource SystemFillColorCriticalBrush}"
+                                                                                   FontSize="12" TextWrapping="Wrap"
+                                                                                   VerticalAlignment="Center"/>
+                                                                    </DataTemplate>
+                                                                </DataGridTemplateColumn.CellTemplate>
+                                                            </DataGridTemplateColumn>
+                                                        </DataGrid.Columns>
+                                                    </DataGrid>
+                                                </Border>
                                             </TabItem>
+
                                         </TabControl>
                                     </Grid>
                                 </Grid>
                             </ui:Card>
                         </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </ScrollViewer>
         </Grid>
     </Grid>
