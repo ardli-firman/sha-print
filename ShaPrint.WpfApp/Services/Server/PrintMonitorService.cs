@@ -110,7 +110,7 @@ namespace ShaPrint.WpfApp.Services.Server
 
         private void ShowAlert(string printerName, string jobName)
         {
-            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 _snackbarService.Show(
                     "Print Job Failed",

@@ -94,7 +94,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         {
             if (msg.Contains("[CLIENT]", StringComparison.OrdinalIgnoreCase)) return;
 
-            Application.Current.Dispatcher.Invoke(() =>
+            Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 Logs.Insert(0, $"[{DateTime.Now:HH:mm:ss}] {msg}");
                 if (Logs.Count > 200)

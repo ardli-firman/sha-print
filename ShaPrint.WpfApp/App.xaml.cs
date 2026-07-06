@@ -177,7 +177,7 @@ namespace ShaPrint.WpfApp
         /// </summary>
         private void OnActivateRequested()
         {
-            Dispatcher.Invoke(() =>
+            Dispatcher.InvokeAsync(() =>
             {
                 var window = Current?.MainWindow;
                 if (window == null) return;
