@@ -117,11 +117,11 @@
                                     <StackPanel Grid.Column="3" VerticalAlignment="Center" HorizontalAlignment="Left">
                                         <TextBlock FontSize="13">
                                             <Run Text="Clients: " Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                            <Run Text="{Binding Payload.ActiveClients.Count, FallbackValue=0}" FontWeight="SemiBold"/>
+                                            <Run Text="{Binding Payload.ActiveClients.Count, Mode=OneWay, FallbackValue=0}" FontWeight="SemiBold"/>
                                         </TextBlock>
                                         <TextBlock FontSize="13" Margin="0,4,0,0">
                                             <Run Text="Uptime: " Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                            <Run Text="{Binding UptimeText}" FontWeight="SemiBold"/>
+                                            <Run Text="{Binding UptimeText, Mode=OneWay}" FontWeight="SemiBold"/>
                                         </TextBlock>
                                     </StackPanel>
 
