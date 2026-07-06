@@ -263,7 +263,7 @@
                                                 <Border Background="{DynamicResource ControlFillColorDefaultBrush}" CornerRadius="4" Padding="4,2" Margin="0,0,8,0">
                                                     <TextBlock FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}">
                                                         <Run Text="CH: " FontWeight="SemiBold"/>
-                                                        <Run Text="{Binding NetworkChannel}"/>
+                                                        <Run Text="{Binding NetworkChannel, Mode=OneWay}"/>
                                                     </TextBlock>
                                                 </Border>
                                             </StackPanel>
