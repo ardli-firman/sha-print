@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Toolkit.Uwp.Notifications;
 using Microsoft.Extensions.Hosting;
+using ShaPrint.Core;
 using ShaPrint.WpfApp.Helpers;
 using ShaPrint.WpfApp.ViewModels.Pages;
 using ShaPrint.WpfApp.ViewModels.Windows;
@@ -8,6 +9,7 @@ using ShaPrint.WpfApp.Views.Pages;
 using ShaPrint.WpfApp.Views.Windows;
 using ShaPrint.WpfApp.Services;
 using System.IO;
+using System.IO.Pipes;
 using System.Windows;
 using Wpf.Ui;
 using Wpf.Ui.Abstractions;
@@ -75,10 +77,39 @@ namespace ShaPrint.WpfApp
                 Shutdown();
                 return;
             }
-
             // ── Toast notification AUMID/COM registration ──────────────
+#pragma warning disable CS0618
             DesktopNotificationManagerCompat.RegisterAumidAndComServer<ShaPrint.WpfApp.Services.NotificationActivator>("ShaPrint.NotificationApp");
             DesktopNotificationManagerCompat.RegisterActivator<ShaPrint.WpfApp.Services.NotificationActivator>();
+#pragma warning restore CS0618
+
+            // ── Activation pipe listener (for toast click handling) ────
+            _ = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    try
+                    {
+                        using var server = new NamedPipeServerStream("ShaPrint.ActivationPipe",
+                            PipeDirection.In, 1, PipeTransmissionMode.Byte,
+                            PipeOptions.Asynchronous);
+                        await server.WaitForConnectionAsync();
+
+                        using var reader = new StreamReader(server);
+                        string? args = await reader.ReadLineAsync();
+
+                        if (!string.IsNullOrEmpty(args))
+                        {
+                            await Dispatcher.InvokeAsync(() => ShowWindowFromActivation(args));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Error("[ACTIVATION] Pipe listener error", ex);
+                        await Task.Delay(1000);
+                    }
+                }
+            });
 
             // ── Original startup logic ───────────────────────────────────
             this.DispatcherUnhandledException += (s, ex) =>
@@ -162,6 +193,54 @@ namespace ShaPrint.WpfApp
                 window.Topmost = false;
                 window.Focus();
             });
+        }
+
+        /// <summary>
+        /// Called from the activation pipe listener when a toast notification is clicked.
+        /// Shows/brings window to front and navigates to the relevant page.
+        /// </summary>
+        private void ShowWindowFromActivation(string arguments)
+        {
+            var window = Current?.MainWindow;
+
+            if (window == null)
+            {
+                // App started with --startup, window never created
+                window = GetService<MainWindow>();
+                Current!.MainWindow = window;
+            }
+
+            // Show and activate window
+            window!.Show();
+            if (window.WindowState == WindowState.Minimized)
+                window.WindowState = WindowState.Normal;
+            window.Activate();
+            window.Topmost = true;
+            window.Topmost = false;
+            window.Focus();
+
+            // Navigate based on arguments
+            // Known values: "page=server", "page=scan", "page=client", "page=settings", "" (generic)
+            if (arguments.StartsWith("page="))
+            {
+                var pageArg = arguments[5..];
+                var navigation = GetService<INavigationService>();
+                if (navigation != null)
+                {
+                    var pageType = pageArg switch
+                    {
+                        "server"   => typeof(Views.Pages.ServerPage),
+                        "scan"     => typeof(Views.Pages.ScanPage),
+                        "client"   => typeof(Views.Pages.ClientPage),
+                        "settings" => typeof(Views.Pages.SettingsPage),
+                        _          => null
+                    };
+                    if (pageType != null)
+                    {
+                        navigation.Navigate(pageType);
+                    }
+                }
+            }
         }
     }
 }
