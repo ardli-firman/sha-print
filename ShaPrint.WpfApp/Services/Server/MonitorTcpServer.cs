@@ -59,7 +59,7 @@ namespace ShaPrint.WpfApp.Services.Server
             }
         }
 
-        private async Task HandleClientAsync(TcpClient client, CancellationToken token)
+        private Task HandleClientAsync(TcpClient client, CancellationToken token)
         {
             using (client)
             {
@@ -113,6 +113,7 @@ namespace ShaPrint.WpfApp.Services.Server
                     }
                 }
             }
+            return Task.CompletedTask;
         }
     }
 }
