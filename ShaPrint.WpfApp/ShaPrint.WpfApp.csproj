@@ -17,7 +17,8 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <AssemblyName>ShaPrint</AssemblyName>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.17763</TargetFramework>
+    <WindowsSdkPackageVersion>10.0.17763.56</WindowsSdkPackageVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
