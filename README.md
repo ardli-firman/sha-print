@@ -19,7 +19,7 @@ By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TC
 - 🔒 **Enterprise-Grade Security:** Network communication is secured via a shared **Network Channel** password. All discovery payloads are verified using **HMAC signatures**, ensuring only authorized clients can discover or print to your server.
 - ⚡ **Seamless Auto-Updater:** ShaPrint includes a built-in background updater. It checks for new releases on GitHub and updates itself seamlessly without interrupting active print jobs.
 - 👻 **Stealth Background Service:** Minimize the app to the System Tray to handle print jobs silently. ShaPrint integrates directly with the **Windows Task Scheduler** to automatically start at boot with the highest privileges, entirely bypassing annoying UAC prompts.
-
+- 🔔 **Real-Time Notifications:** Receive native Windows Toast notifications for print job completions, printer errors, client connections/disconnections, and scan results. Works reliably even when the application is minimized to the system tray or running as a background startup service. Clicking a toast instantly restores the application window.
 ---
 
 ## 📸 Screenshots
