@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using ShaPrint.Core;
+using ShaPrint.WpfApp.Services;
 using ShaPrint.Core.Network;
 
 namespace ShaPrint.Server
@@ -19,6 +20,13 @@ namespace ShaPrint.Server
         private CancellationTokenSource? _cts;
         private List<string> _exposedPrinters = new List<string>();
         private List<string> _exposedScanners = new List<string>();
+        private readonly INotificationService _notificationService;
+
+        // Client tracking for connect/disconnect notifications
+        private readonly HashSet<string> _connectedClients = new();
+        private readonly ConcurrentDictionary<string, DateTime> _lastSeenByClient = new();
+        private int _requestCount;
+
         private readonly ScannerService _scannerService = new ScannerService();
 
         // Rate limiting: max 5 requests per second per IP
@@ -31,6 +39,11 @@ namespace ShaPrint.Server
             public int Count;
             public long WindowStart;
         }
+        public DiscoveryServer(INotificationService notificationService)
+        {
+            _notificationService = notificationService;
+        }
+
 
         public void SetExposedPrinters(List<string> printers)
         {
@@ -166,6 +179,29 @@ namespace ShaPrint.Server
                     response.HmacSignature = CryptoHelper.SignHmac(Encoding.UTF8.GetBytes(jsonResponse));
                     jsonResponse = JsonSerializer.Serialize(response);
 
+
+                    // Track client for connect/disconnect notifications
+                    if (_connectedClients.Add(remoteIp))
+                    {
+                        _notificationService.ShowClientConnected(remoteIp);
+                    }
+                    _lastSeenByClient[remoteIp] = DateTime.UtcNow;
+
+                    // Periodic cleanup of disconnected clients (every ~50 requests)
+                    if (++_requestCount % 50 == 0)
+                    {
+                        var cutoff = DateTime.UtcNow.AddMinutes(-5);
+                        foreach (var kvp in _lastSeenByClient)
+                        {
+                            if (kvp.Value < cutoff)
+                            {
+                                var disconnectedIp = kvp.Key;
+                                _connectedClients.Remove(disconnectedIp);
+                                _lastSeenByClient.TryRemove(disconnectedIp, out _);
+                                _notificationService.ShowClientDisconnected(disconnectedIp);
+                            }
+                        }
+                    }
                     byte[] responseData = Encoding.UTF8.GetBytes(jsonResponse);
                     await _udpClient.SendAsync(responseData, responseData.Length, result.RemoteEndPoint);
                 }

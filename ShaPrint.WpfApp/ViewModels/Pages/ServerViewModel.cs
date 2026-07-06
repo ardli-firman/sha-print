@@ -77,11 +77,10 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _snackbarService = snackbarService;
             _printMonitorService = printMonitorService;
             _scannerService = new ScannerService();
-            _discoveryServer = new DiscoveryServer();
+            _discoveryServer = new DiscoveryServer(notificationService);
             _printReceiver = new PrintReceiver(notificationService);
             
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
             _configFile = Path.Combine(dir, "ServerConfig.json");
 
             AppLogger.OnLog += AppLogger_OnLog;
