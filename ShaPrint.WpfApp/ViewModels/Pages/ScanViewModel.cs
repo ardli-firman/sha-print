@@ -15,6 +15,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Controls;
 using Wpf.Ui;
+using ShaPrint.WpfApp.Services;
 using Wpf.Ui.Controls;
 
 namespace ShaPrint.WpfApp.ViewModels.Pages
@@ -141,11 +142,11 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public Visibility EmptyStateVisibility => (!HasScannedFile && !IsPerformingScan) ? Visibility.Visible : Visibility.Collapsed;
         public Visibility LoadingStateVisibility => IsPerformingScan ? Visibility.Visible : Visibility.Collapsed;
  
-        public ScanViewModel(ISnackbarService snackbarService)
+        public ScanViewModel(ISnackbarService snackbarService, INotificationService notificationService)
         {
             _snackbarService = snackbarService;
             _discoveryClient = new DiscoveryClient();
-            _scanClientService = new ScanClientService();
+            _scanClientService = new ScanClientService(notificationService);
  
             AppLogger.OnLog += AppLogger_OnLog;
         }

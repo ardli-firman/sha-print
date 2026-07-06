@@ -12,6 +12,7 @@ using System.Windows;
 using Wpf.Ui;
 using Wpf.Ui.Controls;
 using ShaPrint.WpfApp.Views.Pages;
+using ShaPrint.WpfApp.Services;
 
 namespace ShaPrint.WpfApp.ViewModels.Pages
 {
@@ -70,14 +71,14 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public ObservableCollection<string> Logs { get; } = new();
         public string LogsText => string.Join(Environment.NewLine, Logs);
 
-        public ServerViewModel(INavigationService navigationService, ISnackbarService snackbarService, ShaPrint.WpfApp.Services.Server.PrintMonitorService printMonitorService)
+        public ServerViewModel(INavigationService navigationService, ISnackbarService snackbarService, ShaPrint.WpfApp.Services.Server.PrintMonitorService printMonitorService, INotificationService notificationService)
         {
             _navigationService = navigationService;
             _snackbarService = snackbarService;
             _printMonitorService = printMonitorService;
             _scannerService = new ScannerService();
             _discoveryServer = new DiscoveryServer();
-            _printReceiver = new PrintReceiver();
+            _printReceiver = new PrintReceiver(notificationService);
             
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);

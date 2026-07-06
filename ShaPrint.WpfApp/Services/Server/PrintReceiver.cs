@@ -1,3 +1,5 @@
+using ShaPrint.WpfApp.Services;
+
 using System;
 using System.IO;
 using System.Net;
@@ -15,6 +17,12 @@ namespace ShaPrint.Server
         private CancellationTokenSource? _cts;
         private SemaphoreSlim? _concurrencyLimit;
         private readonly ScannerService _scannerService = new ScannerService();
+        private readonly INotificationService _notificationService;
+
+        public PrintReceiver(INotificationService notificationService)
+        {
+            _notificationService = notificationService;
+        }
 
         public void Start()
         {
@@ -135,9 +143,15 @@ namespace ShaPrint.Server
                                 bool printed = SpoolerApi.PrintRawData(payload.TargetPrinterName, payload.SpoolData, docName);
                                 
                                 if (printed)
+                                {
                                     AppLogger.Log($"[SERVER] SUCCESS: Print job accepted by Windows Spooler.");
+                                    _notificationService.ShowPrintJobCompleted(docName, payload.TargetPrinterName);
+                                }
                                 else
+                                {
                                     AppLogger.Error($"[SERVER] FAILED: Windows Spooler rejected the job. Check SpoolerApi logs.");
+                                    _notificationService.ShowPrintJobFailed(docName, payload.TargetPrinterName, "Spooler rejected job");
+                                }
                             }
                             else
                             {

@@ -43,7 +43,7 @@ namespace ShaPrint.Tests
         public void SetMonitoredPrinters_ShouldUpdateInternalList()
         {
             // Arrange
-            var service = new PrintMonitorService(null!);
+            var service = new PrintMonitorService(null!, null!);
             var printers = new System.Collections.Generic.List<string> { "PrinterA", "PrinterB" };
 
             // Act
@@ -63,7 +63,7 @@ namespace ShaPrint.Tests
         public void SetMonitoredPrinters_WithNull_ShouldInitializeEmptyList()
         {
             // Arrange
-            var service = new PrintMonitorService(null!);
+            var service = new PrintMonitorService(null!, null!);
 
             // Act
             service.SetMonitoredPrinters(null!);

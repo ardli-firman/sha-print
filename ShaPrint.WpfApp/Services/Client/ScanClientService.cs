@@ -5,11 +5,19 @@ using System.Text;
 using System.Threading.Tasks;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
+using ShaPrint.WpfApp.Services;
 
 namespace ShaPrint.Client
 {
     public class ScanClientService
     {
+        private readonly INotificationService _notificationService;
+
+        public ScanClientService(INotificationService notificationService)
+        {
+            _notificationService = notificationService;
+        }
+
         public async Task<ScanResponsePayload> RequestScanAsync(string serverIp, string scannerName, int dpi, int colorMode, string format)
         {
             try
@@ -27,14 +35,14 @@ namespace ShaPrint.Client
                 }
                 
                 await connectTask; // Propagate any connection exception
- 
+
                 using var stream = client.GetStream();
                 
                 // Step 1: Write multiplexing packet header
                 var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
                 writer.Write(Constants.PacketTypeScan); // 0x00000002
                 writer.Flush();
- 
+
                 // Step 2: Write Scan Request Payload
                 var request = new ScanRequestPayload
                 {
@@ -45,13 +53,30 @@ namespace ShaPrint.Client
                     Brightness = 0,
                     Contrast = 0
                 };
- 
+
                 AppLogger.Log($"[CLIENT] Sending scan request to {serverIp}: scanner='{scannerName}', DPI={dpi}, Mode={colorMode}, Format={format}");
                 await ScanRequestPayload.WriteAsync(stream, request);
 
                 // Step 3: Read Scan Response Payload
                 AppLogger.Log("[CLIENT] Waiting for scan results (this might take several seconds depending on scanner speed)...");
                 var response = await ScanResponsePayload.ReadAsync(stream);
+
+                // Notify based on scan result
+                string ext = format.ToLowerInvariant() switch
+                {
+                    "png" => "png",
+                    "pdf" => "pdf",
+                    _ => "jpg"
+                };
+
+                if (response.Success)
+                {
+                    _notificationService.ShowScanCompleted($"Scan_{DateTime.Now:yyyyMMdd_HHmmss}.{ext}");
+                }
+                else
+                {
+                    _notificationService.ShowScanFailed(response.ErrorMessage ?? "Unknown scan error");
+                }
 
                 return response;
             }
