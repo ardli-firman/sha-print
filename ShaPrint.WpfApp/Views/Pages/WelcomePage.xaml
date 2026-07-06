@@ -10,48 +10,65 @@
 
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" 
-                    Margin="40,60" MaxWidth="420">
+                    Margin="40,40" MaxWidth="760">
             
-            <TextBlock Text="Welcome to ShaPrint" FontSize="32" FontWeight="Bold" 
+            <TextBlock Text="Welcome to ShaPrint" FontSize="36" FontWeight="Bold" 
                        HorizontalAlignment="Center" Margin="0,0,0,8" 
                        TextWrapping="Wrap" TextAlignment="Center"/>
-            <TextBlock Text="Select an operation mode to get started:" FontSize="16" 
+            <TextBlock Text="Secure local printing and monitoring made effortless." FontSize="16" 
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" 
-                       HorizontalAlignment="Center" Margin="0,0,0,36" 
+                       HorizontalAlignment="Center" Margin="0,0,0,32" 
                        TextWrapping="Wrap" TextAlignment="Center"/>
 
-            <TextBlock Text="Network Channel" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8" 
-                       HorizontalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
-            <ui:TextBox Text="{Binding ViewModel.ChannelName, UpdateSourceTrigger=PropertyChanged}" 
-                        PlaceholderText="Enter your room or department name..." 
-                        Margin="0,0,0,36" HorizontalAlignment="Stretch"/>
+            <!-- Network Channel Input Card -->
+            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" 
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" 
+                    BorderThickness="1" CornerRadius="8" Padding="24,16" Margin="0,0,0,32" HorizontalAlignment="Center" Width="692">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <TextBlock Text="Active Network Channel:" VerticalAlignment="Center" FontWeight="SemiBold" FontSize="14" Margin="0,0,16,0" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                    <ui:TextBox Text="{Binding ViewModel.ChannelName, UpdateSourceTrigger=PropertyChanged}" 
+                                PlaceholderText="Enter room or department name (e.g., Room-302)..." 
+                                Width="320" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
 
-            <ui:Button Appearance="Primary" Content="RUN AS SERVER" 
-                       Icon="{ui:SymbolIcon Server24}"
-                       Command="{Binding ViewModel.SelectServerModeCommand}"
-                       HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                       Padding="20,15" FontSize="16" Margin="0,0,0,4"/>
-            <TextBlock Text="Host your local printers to the network." FontSize="13" 
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" 
-                       Margin="12,0,0,24" TextWrapping="Wrap"/>
+            <!-- 3-Column Mode Grid -->
+            <Grid Margin="0,0,0,0" HorizontalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="220" />
+                    <ColumnDefinition Width="16" /> <!-- Margin -->
+                    <ColumnDefinition Width="220" />
+                    <ColumnDefinition Width="16" /> <!-- Margin -->
+                    <ColumnDefinition Width="220" />
+                </Grid.ColumnDefinitions>
+                
+                <!-- Server Card -->
+                <ui:CardAction Grid.Column="0" Command="{Binding ViewModel.SelectServerModeCommand}" Padding="16,24" Height="220" VerticalAlignment="Stretch">
+                    <StackPanel VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="Server24" FontSize="36" Foreground="{DynamicResource SystemAccentColorBrush}" Margin="0,0,0,16" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Server Mode" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,8" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Expose local printers and scanners to the network channel." FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center"/>
+                    </StackPanel>
+                </ui:CardAction>
 
-            <ui:Button Appearance="Secondary" Content="RUN AS CLIENT" 
-                       Icon="{ui:SymbolIcon Desktop24}"
-                       Command="{Binding ViewModel.SelectClientModeCommand}"
-                       HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                       Padding="20,15" FontSize="16" Margin="0,0,0,4"/>
-            <TextBlock Text="Connect and print to a ShaPrint Server." FontSize="13" 
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" 
-                       Margin="12,0,0,24" TextWrapping="Wrap"/>
+                <!-- Client Card -->
+                <ui:CardAction Grid.Column="2" Command="{Binding ViewModel.SelectClientModeCommand}" Padding="16,24" Height="220" VerticalAlignment="Stretch">
+                    <StackPanel VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="Desktop24" FontSize="36" Foreground="{DynamicResource SystemAccentColorBrush}" Margin="0,0,0,16" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Client Mode" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,8" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Connect to active servers on the channel to print or scan." FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center"/>
+                    </StackPanel>
+                </ui:CardAction>
 
-            <ui:Button Appearance="Secondary" Content="RUN AS MONITOR" 
-                       Icon="{ui:SymbolIcon Pulse24}"
-                       Command="{Binding ViewModel.SelectMonitorModeCommand}"
-                       HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                       Padding="20,15" FontSize="16" Margin="0,0,0,4"/>
-            <TextBlock Text="Monitor status and activity of all room servers." FontSize="13" 
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" 
-                       Margin="12,0,0,0" TextWrapping="Wrap"/>
+                <!-- Monitor Card -->
+                <ui:CardAction Grid.Column="4" Command="{Binding ViewModel.SelectMonitorModeCommand}" Padding="16,24" Height="220" VerticalAlignment="Stretch">
+                    <StackPanel VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="Pulse24" FontSize="36" Foreground="{DynamicResource SystemAccentColorBrush}" Margin="0,0,0,16" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Monitor Mode" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,8" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Oversee print jobs, device statuses, and activity logs." FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center"/>
+                    </StackPanel>
+                </ui:CardAction>
+            </Grid>
         </StackPanel>
     </ScrollViewer>
 </Page>
