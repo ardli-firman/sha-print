@@ -11,6 +11,7 @@ using ShaPrint.Core;
 using ShaPrint.Core.Network;
 using ShaPrint.Client;
 using ShaPrint.WpfApp.ViewModels.Pages;
+using CommunityToolkit.Mvvm.Input;
 
 namespace ShaPrint.WpfApp.Services.Monitor
 {
@@ -24,6 +25,7 @@ namespace ShaPrint.WpfApp.Services.Monitor
         public MonitorService(MonitorViewModel monitorViewModel)
         {
             _monitorViewModel = monitorViewModel;
+            _monitorViewModel.RefreshCommand = new AsyncRelayCommand(TriggerManualRefreshAsync);
             _discoveryClient = new DiscoveryClient();
         }
 
@@ -127,6 +129,8 @@ namespace ShaPrint.WpfApp.Services.Monitor
 
             // Flag offline servers that were NOT in the discovered list
             _monitorViewModel.FlagUndiscoveredServers(discoveredServers);
+            
+            _monitorViewModel.LastRefreshTime = DateTime.UtcNow;
         }
 
         private async Task QueryServerStatusAsync(string hostName, string ipAddress, CancellationToken token)

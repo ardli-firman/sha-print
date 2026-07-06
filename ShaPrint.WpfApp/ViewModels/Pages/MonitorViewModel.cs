@@ -38,7 +38,12 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private bool _isExpanded;
 
         [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(Version))]
+        [NotifyPropertyChangedFor(nameof(NetworkChannel))]
         private ServerStatusPayload? _payload;
+
+        public string Version => Payload?.Version ?? "Unknown";
+        public string NetworkChannel => Payload?.NetworkChannel ?? "Unknown";
 
         public int StatusSortOrder => Status switch
         {
@@ -139,6 +144,35 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             private set => SetProperty(ref _isFilterEmpty, value);
         }
 
+        [ObservableProperty] private int _totalServers;
+        [ObservableProperty] private int _onlineCount;
+        [ObservableProperty] private int _warningCount;
+        [ObservableProperty] private int _offlineCount;
+        [ObservableProperty] private int _unknownCount;
+        [ObservableProperty] private bool _hasAnyErrors;
+        [ObservableProperty] private bool _isEmpty = true;
+        [ObservableProperty] private bool _isFilterNoResults;
+        [ObservableProperty] private bool _isLoading = true;
+        
+        [ObservableProperty] 
+        [NotifyPropertyChangedFor(nameof(LastRefreshText))]
+        private DateTime? _lastRefreshTime;
+
+        public string LastRefreshText
+        {
+            get
+            {
+                if (LastRefreshTime == null) return "Never";
+                var diff = DateTime.UtcNow - LastRefreshTime.Value;
+                if (diff.TotalSeconds < 5) return "Just now";
+                if (diff.TotalSeconds < 60) return $"{(int)diff.TotalSeconds}s ago";
+                if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes}m ago";
+                return $"{(int)diff.TotalHours}h ago";
+            }
+        }
+
+        public IAsyncRelayCommand? RefreshCommand { get; set; }
+
         public MonitorViewModel()
         {
             BindingOperations.EnableCollectionSynchronization(Servers, _serversLock);
@@ -157,11 +191,26 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             try
             {
                 _serversView?.Refresh();
+                UpdateSummary();
             }
             catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
             {
                 // Ignore threading exceptions in headless tests
             }
+        }
+
+        private void UpdateSummary()
+        {
+            TotalServers = Servers.Count;
+            OnlineCount = Servers.Count(s => s.Status == "Online");
+            WarningCount = Servers.Count(s => s.Status == "Warning");
+            OfflineCount = Servers.Count(s => s.Status == "Offline");
+            UnknownCount = Servers.Count(s => s.Status == "Unknown");
+            HasAnyErrors = Servers.Any(s => s.Payload?.Errors?.Count > 0);
+            IsEmpty = Servers.Count == 0;
+            
+            // If we have servers but filtered view is empty, and filter is not empty
+            IsFilterNoResults = Servers.Count > 0 && !IsFilterEmpty && _serversView.Cast<object>().Count() == 0;
         }
 
         [RelayCommand]
@@ -170,6 +219,24 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             if (node != null)
             {
                 node.IsExpanded = !node.IsExpanded;
+            }
+        }
+
+        [RelayCommand]
+        private void ExpandAll()
+        {
+            foreach (var server in Servers)
+            {
+                server.IsExpanded = true;
+            }
+        }
+
+        [RelayCommand]
+        private void CollapseAll()
+        {
+            foreach (var server in Servers)
+            {
+                server.IsExpanded = false;
             }
         }
 
@@ -235,6 +302,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         }
                     }
                 }
+                IsLoading = false;
                 SafeRefreshView();
             });
         }
@@ -314,6 +382,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 {
                     server.RefreshDisplayProperties();
                 }
+                OnPropertyChanged(nameof(LastRefreshText));
             });
         }
     }
