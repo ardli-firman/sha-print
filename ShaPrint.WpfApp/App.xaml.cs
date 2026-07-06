@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Toolkit.Uwp.Notifications;
 using Microsoft.Extensions.Hosting;
 using ShaPrint.WpfApp.Helpers;
 using ShaPrint.WpfApp.ViewModels.Pages;
@@ -52,6 +53,7 @@ namespace ShaPrint.WpfApp
                 // Background Services
                 services.AddSingleton<UpdateService>();
                 services.AddHostedService(provider => provider.GetRequiredService<UpdateService>());
+                services.AddSingleton<ShaPrint.WpfApp.Services.INotificationService, ShaPrint.WpfApp.Services.NotificationService>();
                 services.AddSingleton<ShaPrint.WpfApp.Services.Server.PrintMonitorService>();
             }).Build();
 
@@ -73,6 +75,10 @@ namespace ShaPrint.WpfApp
                 Shutdown();
                 return;
             }
+
+            // ── Toast notification AUMID/COM registration ──────────────
+            DesktopNotificationManagerCompat.RegisterAumidAndComServer<ShaPrint.WpfApp.Services.NotificationActivator>("ShaPrint.NotificationApp");
+            DesktopNotificationManagerCompat.RegisterActivator<ShaPrint.WpfApp.Services.NotificationActivator>();
 
             // ── Original startup logic ───────────────────────────────────
             this.DispatcherUnhandledException += (s, ex) =>
