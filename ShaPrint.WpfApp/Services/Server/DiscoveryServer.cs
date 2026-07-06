@@ -25,6 +25,8 @@ namespace ShaPrint.Server
         // Client tracking for connect/disconnect notifications
         private readonly HashSet<string> _connectedClients = new();
         private readonly ConcurrentDictionary<string, DateTime> _lastSeenByClient = new();
+        private readonly ConcurrentDictionary<string, DateTime> _connectionStartTime = new();
+        private readonly HashSet<string> _monitorClients = new();
         private int _requestCount;
 
         private readonly ScannerService _scannerService = new ScannerService();
@@ -42,6 +44,23 @@ namespace ShaPrint.Server
         public DiscoveryServer(INotificationService notificationService)
         {
             _notificationService = notificationService;
+        }
+
+        public Dictionary<string, DateTime> GetActiveClientsWithConnectionTimes()
+        {
+            var result = new Dictionary<string, DateTime>();
+            lock (_connectedClients)
+            {
+                foreach (var ip in _connectedClients)
+                {
+                    if (!_monitorClients.Contains(ip))
+                    {
+                        _connectionStartTime.TryGetValue(ip, out var startTime);
+                        result[ip] = startTime == default ? DateTime.UtcNow : startTime;
+                    }
+                }
+            }
+            return result;
         }
 
 
@@ -107,7 +126,8 @@ namespace ShaPrint.Server
                     string request = Encoding.UTF8.GetString(result.Buffer);
                     string remoteIp = result.RemoteEndPoint.Address.ToString();
 
-                    if (request != Constants.DiscoveryRequestMessage)
+                    bool isMonitorRequest = (request == Constants.MonitorDiscoveryRequestMessage);
+                    if (request != Constants.DiscoveryRequestMessage && !isMonitorRequest)
                         continue;
 
                     if (IsRateLimited(remoteIp))
@@ -181,7 +201,21 @@ namespace ShaPrint.Server
 
 
                     // Track client for connect/disconnect notifications
-                    if (_connectedClients.Add(remoteIp))
+                    bool isNewClient;
+                    lock (_connectedClients)
+                    {
+                        if (isMonitorRequest)
+                        {
+                            _monitorClients.Add(remoteIp);
+                        }
+                        isNewClient = _connectedClients.Add(remoteIp);
+                        if (isNewClient)
+                        {
+                            _connectionStartTime[remoteIp] = DateTime.UtcNow;
+                        }
+                    }
+
+                    if (isNewClient && !isMonitorRequest)
                     {
                         _notificationService.ShowClientConnected(remoteIp);
                     }
@@ -196,9 +230,18 @@ namespace ShaPrint.Server
                             if (kvp.Value < cutoff)
                             {
                                 var disconnectedIp = kvp.Key;
-                                _connectedClients.Remove(disconnectedIp);
+                                bool isMonitor;
+                                lock (_connectedClients)
+                                {
+                                    _connectedClients.Remove(disconnectedIp);
+                                    _connectionStartTime.TryRemove(disconnectedIp, out _);
+                                    isMonitor = _monitorClients.Remove(disconnectedIp);
+                                }
                                 _lastSeenByClient.TryRemove(disconnectedIp, out _);
-                                _notificationService.ShowClientDisconnected(disconnectedIp);
+                                if (!isMonitor)
+                                {
+                                    _notificationService.ShowClientDisconnected(disconnectedIp);
+                                }
                             }
                         }
                     }

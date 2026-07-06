@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Collections.Concurrent;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
 
@@ -11,6 +12,8 @@ namespace ShaPrint.Server
 {
     public class ScannerService
     {
+        public static readonly ConcurrentDictionary<string, DateTime> LastScanTimes = new();
+        public static readonly ConcurrentDictionary<string, bool> ActiveScans = new();
         // WIA Format GUIDs
         private const string WiaFormatBMP = "{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}";
         private const string WiaFormatJPEG = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}";
@@ -65,7 +68,10 @@ namespace ShaPrint.Server
 
         public byte[] PerformScan(string scannerName, int dpi, int colorMode, string format, out string actualFormat)
         {
-            byte[] resultBytes = Array.Empty<byte>();
+            ActiveScans[scannerName] = true;
+            try
+            {
+                byte[] resultBytes = Array.Empty<byte>();
             string ext = "jpg";
  
             if (format.Equals("PNG", StringComparison.OrdinalIgnoreCase))
@@ -293,7 +299,13 @@ namespace ShaPrint.Server
                 return WrapJpegInPdf(rawBytes);
             }
  
-            return rawBytes;
+                return rawBytes;
+            }
+            finally
+            {
+                ActiveScans.TryRemove(scannerName, out _);
+                LastScanTimes[scannerName] = DateTime.UtcNow;
+            }
         }
 
         private static void SetWiaProperty(dynamic properties, int propId, object value)

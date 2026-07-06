@@ -1,0 +1,242 @@
+<Page x:Class="ShaPrint.WpfApp.Views.Pages.MonitorPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="Server Monitoring">
+
+    <Page.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    </Page.Resources>
+
+    <Grid Margin="24,20,24,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Header -->
+            <RowDefinition Height="Auto"/> <!-- Filter / Refresh bar -->
+            <RowDefinition Height="*"/>    <!-- Server Grid/List -->
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,16">
+            <TextBlock Text="Server Monitoring Panel" FontSize="28" FontWeight="SemiBold"/>
+            <TextBlock Text="Monitor the status, printers, scanners, active clients, and print queues of all ShaPrint servers on the LAN in real-time." 
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <!-- Search & Refresh bar -->
+        <Grid Grid.Row="1" Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Search box -->
+            <ui:TextBox Grid.Column="0" 
+                        Text="{Binding ViewModel.FilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                        PlaceholderText="Filter servers by hostname or IP..."
+                        Icon="{ui:SymbolIcon Search24}"
+                        Margin="0,0,12,0"/>
+
+            <!-- Refresh button -->
+            <ui:Button Grid.Column="1" 
+                       x:Name="RefreshButton"
+                       Click="RefreshButton_Click"
+                       Content="Refresh"
+                       Icon="{ui:SymbolIcon ArrowClockwise24}"
+                       Appearance="Secondary"/>
+        </Grid>
+
+        <!-- Servers List -->
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <ListBox ItemsSource="{Binding ViewModel.FilteredServers}" 
+                     Background="Transparent" 
+                     BorderThickness="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     HorizontalContentAlignment="Stretch">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Background" Value="Transparent"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="Padding" Value="0"/>
+                        <Setter Property="Margin" Value="0,0,0,12"/>
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="Transparent"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Background" Value="Transparent"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <ui:Card Padding="16" Margin="0" VerticalAlignment="Top">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/> <!-- Collapsed Row (Summary) -->
+                                    <RowDefinition Height="Auto"/> <!-- Expanded Row (Details) -->
+                                </Grid.RowDefinitions>
+
+                                <!-- Summary Row -->
+                                <Grid Grid.Row="0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/> <!-- Status Dot -->
+                                        <ColumnDefinition Width="2*"/>  <!-- Hostname & IP -->
+                                        <ColumnDefinition Width="*"/>   <!-- Active printers / scanners counts -->
+                                        <ColumnDefinition Width="*"/>   <!-- Clients / Uptime -->
+                                        <ColumnDefinition Width="Auto"/> <!-- Expand/Collapse button -->
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- Status Dot indicator -->
+                                    <Ellipse Grid.Column="0" Width="14" Height="14" Fill="{Binding StatusBrush}" 
+                                             VerticalAlignment="Center" Margin="0,0,16,0"
+                                             ToolTip="{Binding Status}"/>
+
+                                    <!-- Hostname & IP -->
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding HostName}" FontSize="16" FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding IpAddress}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0"/>
+                                    </StackPanel>
+
+                                    <!-- Counts -->
+                                    <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Left">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="Print24" Margin="0,0,6,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                            <TextBlock Text="{Binding Payload.Printers.Count, FallbackValue=0}" FontSize="13" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                                            <TextBlock Text=" Printers Exposed" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <ui:SymbolIcon Symbol="Scan24" Margin="0,0,6,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                            <TextBlock Text="{Binding Payload.Scanners.Count, FallbackValue=0}" FontSize="13" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                                            <TextBlock Text=" Scanners Exposed" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                        </StackPanel>
+                                    </StackPanel>
+
+                                    <!-- Clients & Uptime -->
+                                    <StackPanel Grid.Column="3" VerticalAlignment="Center" HorizontalAlignment="Left">
+                                        <TextBlock FontSize="13">
+                                            <Run Text="Clients: " Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                            <Run Text="{Binding Payload.ActiveClients.Count, FallbackValue=0}" FontWeight="SemiBold"/>
+                                        </TextBlock>
+                                        <TextBlock FontSize="13" Margin="0,4,0,0">
+                                            <Run Text="Uptime: " Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                            <Run Text="{Binding UptimeText}" FontWeight="SemiBold"/>
+                                        </TextBlock>
+                                    </StackPanel>
+
+                                    <!-- Expand / Collapse Toggle button -->
+                                    <ui:Button Grid.Column="4" 
+                                               Content="{Binding IsExpanded, Converter={StaticResource BoolToVis}, ConverterParameter='Collapse'}" 
+                                               Command="{Binding DataContext.ViewModel.ToggleExpandCommand, RelativeSource={RelativeSource AncestorType=Page}}"
+                                               CommandParameter="{Binding}"
+                                               Appearance="Transparent"
+                                               VerticalAlignment="Center">
+                                        <ui:Button.Style>
+                                            <Style TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
+                                                <Setter Property="Icon" Value="{ui:SymbolIcon ChevronDown24}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                                        <Setter Property="Icon" Value="{ui:SymbolIcon ChevronUp24}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ui:Button.Style>
+                                    </ui:Button>
+                                </Grid>
+
+                                <!-- Details Row (Visible when IsExpanded = True) -->
+                                <Grid Grid.Row="1" Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVis}}" Margin="0,16,0,0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/> <!-- Error Banner -->
+                                        <RowDefinition Height="*"/>    <!-- Detail Tabs -->
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Error Banner -->
+                                    <Border Grid.Row="0" Background="{DynamicResource SystemFillColorCriticalBrush}" CornerRadius="4" Padding="12,8" Margin="0,0,0,16"
+                                            Visibility="{Binding Payload.Errors.Count, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="Warning24" Foreground="White" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="Recent errors detected on this server! Check the Errors tab below." Foreground="White" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Detail Tabs -->
+                                    <TabControl Grid.Row="1" Background="Transparent" BorderThickness="0" Padding="0,12,0,0">
+                                        <!-- Printers Tab -->
+                                        <TabItem Header="Printers" FontSize="13" Padding="12,6">
+                                            <ListView ItemsSource="{Binding Payload.Printers}" Height="180">
+                                                <ListView.View>
+                                                    <GridView>
+                                                        <GridViewColumn Header="Printer Name" DisplayMemberBinding="{Binding Name}" Width="200"/>
+                                                        <GridViewColumn Header="Status" DisplayMemberBinding="{Binding Status}" Width="100"/>
+                                                        <GridViewColumn Header="Queue Jobs" DisplayMemberBinding="{Binding QueueLength}" Width="100"/>
+                                                        <GridViewColumn Header="Issues / Notes" DisplayMemberBinding="{Binding ErrorDescription}" Width="250"/>
+                                                    </GridView>
+                                                </ListView.View>
+                                            </ListView>
+                                        </TabItem>
+
+                                        <!-- Scanners Tab -->
+                                        <TabItem Header="Scanners" FontSize="13" Padding="12,6">
+                                            <ListView ItemsSource="{Binding Payload.Scanners}" Height="180">
+                                                <ListView.View>
+                                                    <GridView>
+                                                        <GridViewColumn Header="Scanner Name" DisplayMemberBinding="{Binding Name}" Width="250"/>
+                                                        <GridViewColumn Header="Status" DisplayMemberBinding="{Binding Status}" Width="120"/>
+                                                        <GridViewColumn Header="Last Active" DisplayMemberBinding="{Binding LastScanAgo, FallbackValue='N/A'}" Width="150"/>
+                                                    </GridView>
+                                                </ListView.View>
+                                            </ListView>
+                                        </TabItem>
+
+                                        <!-- Connected Clients Tab -->
+                                        <TabItem Header="Connected Clients" FontSize="13" Padding="12,6">
+                                            <ListView ItemsSource="{Binding Payload.ActiveClients}" Height="180">
+                                                <ListView.View>
+                                                    <GridView>
+                                                        <GridViewColumn Header="Client IP Address" DisplayMemberBinding="{Binding Ip}" Width="200"/>
+                                                        <GridViewColumn Header="Connected Since" DisplayMemberBinding="{Binding ConnectedSince, StringFormat='{}{0:yyyy-MM-dd HH:mm:ss}'}" Width="250"/>
+                                                    </GridView>
+                                                </ListView.View>
+                                            </ListView>
+                                        </TabItem>
+
+                                        <!-- Print/Scan Jobs History Tab -->
+                                        <TabItem Header="Job Activity" FontSize="13" Padding="12,6">
+                                            <ListView ItemsSource="{Binding Payload.RecentJobs}" Height="180">
+                                                <ListView.View>
+                                                    <GridView>
+                                                        <GridViewColumn Header="Time" DisplayMemberBinding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Width="80"/>
+                                                        <GridViewColumn Header="Type" DisplayMemberBinding="{Binding Type}" Width="80"/>
+                                                        <GridViewColumn Header="Device" DisplayMemberBinding="{Binding PrinterName}" Width="150"/>
+                                                        <GridViewColumn Header="Job Title" DisplayMemberBinding="{Binding Document}" Width="180"/>
+                                                        <GridViewColumn Header="Client IP" DisplayMemberBinding="{Binding ClientIp}" Width="120"/>
+                                                        <GridViewColumn Header="Status" DisplayMemberBinding="{Binding Status}" Width="100"/>
+                                                    </GridView>
+                                                </ListView.View>
+                                            </ListView>
+                                        </TabItem>
+
+                                        <!-- Errors Tab -->
+                                        <TabItem Header="Errors" FontSize="13" Padding="12,6">
+                                            <ListView ItemsSource="{Binding Payload.Errors}" Height="180">
+                                                <ListView.View>
+                                                    <GridView>
+                                                        <GridViewColumn Header="Time" DisplayMemberBinding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Width="100"/>
+                                                        <GridViewColumn Header="Source" DisplayMemberBinding="{Binding Source}" Width="150"/>
+                                                        <GridViewColumn Header="Error Message" DisplayMemberBinding="{Binding Message}" Width="400"/>
+                                                    </GridView>
+                                                </ListView.View>
+                                            </ListView>
+                                        </TabItem>
+                                    </TabControl>
+                                </Grid>
+                            </Grid>
+                        </ui:Card>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </ScrollViewer>
+    </Grid>
+</Page>

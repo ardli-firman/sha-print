@@ -42,6 +42,15 @@
                        Padding="20,15" FontSize="16" Margin="0,0,0,4"/>
             <TextBlock Text="Connect and print to a ShaPrint Server." FontSize="13" 
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" 
+                       Margin="12,0,0,24" TextWrapping="Wrap"/>
+
+            <ui:Button Appearance="Secondary" Content="RUN AS MONITOR" 
+                       Icon="{ui:SymbolIcon Heartbeat24}"
+                       Command="{Binding ViewModel.SelectMonitorModeCommand}"
+                       HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                       Padding="20,15" FontSize="16" Margin="0,0,0,4"/>
+            <TextBlock Text="Monitor status and activity of all room servers." FontSize="13" 
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" 
                        Margin="12,0,0,0" TextWrapping="Wrap"/>
         </StackPanel>
     </ScrollViewer>

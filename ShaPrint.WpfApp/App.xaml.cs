@@ -8,6 +8,7 @@ using ShaPrint.WpfApp.ViewModels.Windows;
 using ShaPrint.WpfApp.Views.Pages;
 using ShaPrint.WpfApp.Views.Windows;
 using ShaPrint.WpfApp.Services;
+using ShaPrint.WpfApp.Services.Monitor;
 using System.IO;
 using System.IO.Pipes;
 using System.Windows;
@@ -43,6 +44,8 @@ namespace ShaPrint.WpfApp
                 services.AddSingleton<ClientViewModel>();
                 services.AddTransient<ScanPage>();
                 services.AddSingleton<ScanViewModel>();
+                services.AddTransient<MonitorPage>();
+                services.AddSingleton<MonitorViewModel>();
 
                 // Settings Page
                 services.AddTransient<SettingsPage>();
@@ -57,6 +60,7 @@ namespace ShaPrint.WpfApp
                 services.AddHostedService(provider => provider.GetRequiredService<UpdateService>());
                 services.AddSingleton<ShaPrint.WpfApp.Services.INotificationService, ShaPrint.WpfApp.Services.NotificationService>();
                 services.AddSingleton<ShaPrint.WpfApp.Services.Server.PrintMonitorService>();
+                services.AddSingleton<MonitorService>();
             }).Build();
 
         public static T? GetService<T>() where T : class
@@ -149,6 +153,10 @@ namespace ShaPrint.WpfApp
                     {
                         GetService<ClientViewModel>(); // Initiates constructor and starts listening
                     }
+                    else if (mode == "Monitor")
+                    {
+                        GetService<MonitorService>()?.Start(); // Starts monitoring periodic task
+                    }
                 }
             }
             catch (Exception ex)
@@ -166,6 +174,12 @@ namespace ShaPrint.WpfApp
         {
             _singleInstanceEnforcer?.Dispose();
             _singleInstanceEnforcer = null;
+
+            try
+            {
+                GetService<MonitorService>()?.Stop();
+            }
+            catch { }
 
             await _host.StopAsync();
             _host.Dispose();

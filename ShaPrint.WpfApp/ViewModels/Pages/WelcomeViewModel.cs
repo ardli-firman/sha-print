@@ -51,6 +51,11 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         SelectClientMode();
                         return;
                     }
+                    else if (mode == "Monitor")
+                    {
+                        SelectMonitorMode();
+                        return;
+                    }
                 }
                 catch { }
             }
@@ -63,6 +68,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             SaveMode("Server");
             _mainWindowViewModel.IsServerMode = System.Windows.Visibility.Visible;
             _mainWindowViewModel.IsClientMode = System.Windows.Visibility.Collapsed;
+            _mainWindowViewModel.IsMonitorMode = System.Windows.Visibility.Collapsed;
             _mainWindowViewModel.WelcomeVisibility = System.Windows.Visibility.Collapsed;
             _mainWindowViewModel.SidebarVisibility = System.Windows.Visibility.Visible;
             
@@ -77,11 +83,27 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             SaveMode("Client");
             _mainWindowViewModel.IsServerMode = System.Windows.Visibility.Collapsed;
             _mainWindowViewModel.IsClientMode = System.Windows.Visibility.Visible;
+            _mainWindowViewModel.IsMonitorMode = System.Windows.Visibility.Collapsed;
             _mainWindowViewModel.WelcomeVisibility = System.Windows.Visibility.Collapsed;
             _mainWindowViewModel.SidebarVisibility = System.Windows.Visibility.Visible;
             
             System.Windows.Application.Current.Dispatcher.InvokeAsync(() => 
                 _navigationService.Navigate(typeof(Views.Pages.ClientPage)));
+        }
+
+        [RelayCommand]
+        private void SelectMonitorMode()
+        {
+            SaveChannel();
+            SaveMode("Monitor");
+            _mainWindowViewModel.IsServerMode = System.Windows.Visibility.Collapsed;
+            _mainWindowViewModel.IsClientMode = System.Windows.Visibility.Collapsed;
+            _mainWindowViewModel.IsMonitorMode = System.Windows.Visibility.Visible;
+            _mainWindowViewModel.WelcomeVisibility = System.Windows.Visibility.Collapsed;
+            _mainWindowViewModel.SidebarVisibility = System.Windows.Visibility.Visible;
+            
+            System.Windows.Application.Current.Dispatcher.InvokeAsync(() => 
+                _navigationService.Navigate(typeof(Views.Pages.MonitorPage)));
         }
 
         private void SaveMode(string mode)
