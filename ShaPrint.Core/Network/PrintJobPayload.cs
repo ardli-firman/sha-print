@@ -105,7 +105,9 @@ namespace ShaPrint.Core.Network
 
             payload.DocumentName = br.ReadString();
             if (payload.DocumentName.Length > 1024)
-                throw new InvalidDataException("DocumentName too long (max 1024 characters).");
+            {
+                payload.DocumentName = payload.DocumentName.Substring(0, 1024);
+            }
 
             int dataLength = br.ReadInt32();
             if (dataLength < 0)

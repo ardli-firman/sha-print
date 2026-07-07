@@ -210,4 +210,24 @@ public class PrintJobPayloadTests
         await Assert.ThrowsAsync<InvalidDataException>(
             () => PrintJobPayload.ReadAsync(tamperedStream));
     }
+
+    [Fact]
+    public async Task ReadAsync_DocumentNameTooLong_TruncatesTo1024Characters()
+    {
+        var original = new PrintJobPayload
+        {
+            TargetPrinterName = "Printer",
+            DocumentName = new string('A', 2000), // 2000 characters
+            SpoolData = Encoding.UTF8.GetBytes("Data")
+        };
+
+        using var ms = new MemoryStream();
+        await PrintJobPayload.WriteAsync(ms, original);
+        ms.Position = 0;
+
+        var recovered = await PrintJobPayload.ReadAsync(ms);
+
+        Assert.Equal(1024, recovered.DocumentName.Length);
+        Assert.Equal(new string('A', 1024), recovered.DocumentName);
+    }
 }
