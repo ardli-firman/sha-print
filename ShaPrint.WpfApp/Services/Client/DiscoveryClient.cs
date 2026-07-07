@@ -14,14 +14,19 @@ namespace ShaPrint.Client
 {
     public class DiscoveryClient
     {
-        public async Task<List<DiscoveryResponseMessage>> DiscoverServersAsync(string? targetIp = null, int timeoutMs = 2000)
+        public async Task<List<DiscoveryResponseMessage>> DiscoverServersAsync(
+            string? targetIp = null, 
+            int timeoutMs = 2000, 
+            bool skipUnicastSweep = false, 
+            string? requestMessage = null)
         {
             var servers = new List<DiscoveryResponseMessage>();
             using var udpClient = new UdpClient();
             udpClient.EnableBroadcast = true;
             
             IPAddress ip = string.IsNullOrWhiteSpace(targetIp) ? IPAddress.Broadcast : IPAddress.Parse(targetIp);
-            byte[] requestData = Encoding.UTF8.GetBytes(Constants.DiscoveryRequestMessage);
+            string msg = requestMessage ?? Constants.DiscoveryRequestMessage;
+            byte[] requestData = Encoding.UTF8.GetBytes(msg);
             
             if (string.IsNullOrWhiteSpace(targetIp) || ip.Equals(IPAddress.Broadcast))
             {
@@ -50,18 +55,21 @@ namespace ShaPrint.Client
                                 await udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(broadcastIp, Constants.DiscoveryUdpPort));
 
                                 // 2. Unicast Sweep for AP Isolation bypass
-                                uint ipInt = (uint)ipBytes[0] << 24 | (uint)ipBytes[1] << 16 | (uint)ipBytes[2] << 8 | (uint)ipBytes[3];
-                                uint maskInt = (uint)maskBytes[0] << 24 | (uint)maskBytes[1] << 16 | (uint)maskBytes[2] << 8 | (uint)maskBytes[3];
-                                uint networkInt = ipInt & maskInt;
-                                uint broadcastInt = networkInt | ~maskInt;
-                                
-                                uint hostCount = ~maskInt;
-                                if (hostCount > 0 && hostCount <= 1024)
+                                if (!skipUnicastSweep)
                                 {
-                                    for (uint i = networkInt + 1; i < broadcastInt; i++)
+                                    uint ipInt = (uint)ipBytes[0] << 24 | (uint)ipBytes[1] << 16 | (uint)ipBytes[2] << 8 | (uint)ipBytes[3];
+                                    uint maskInt = (uint)maskBytes[0] << 24 | (uint)maskBytes[1] << 16 | (uint)maskBytes[2] << 8 | (uint)maskBytes[3];
+                                    uint networkInt = ipInt & maskInt;
+                                    uint broadcastInt = networkInt | ~maskInt;
+                                    
+                                    uint hostCount = ~maskInt;
+                                    if (hostCount > 0 && hostCount <= 1024)
                                     {
-                                        byte[] targetIpBytes = new byte[] { (byte)(i >> 24), (byte)(i >> 16), (byte)(i >> 8), (byte)i };
-                                        _ = udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(new IPAddress(targetIpBytes), Constants.DiscoveryUdpPort));
+                                        for (uint i = networkInt + 1; i < broadcastInt; i++)
+                                        {
+                                            byte[] targetIpBytes = new byte[] { (byte)(i >> 24), (byte)(i >> 16), (byte)(i >> 8), (byte)i };
+                                            _ = udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(new IPAddress(targetIpBytes), Constants.DiscoveryUdpPort));
+                                        }
                                     }
                                 }
                             }

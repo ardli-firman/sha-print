@@ -9,7 +9,9 @@ namespace ShaPrint.Core
     {
         public const int DiscoveryUdpPort = 9876;
         public const int PrintTcpPort = 9877;
+        public const int MonitorTcpPort = 9878;
         public const string DiscoveryRequestMessage = "SHAPRINT_DISCOVER_REQUEST";
+        public const string MonitorDiscoveryRequestMessage = "SHAPRINT_MONITOR_DISCOVER_REQUEST";
 
         public const int PacketTypePrint = 0x00000001;
         public const int PacketTypeScan = 0x00000002;

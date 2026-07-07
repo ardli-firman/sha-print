@@ -187,7 +187,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
                 if (result.Success)
                 {
-                    var listener = new PipeListener(pipeName, serverIp, printerName);
+                    var listener = new PipeListener(pipeName, serverIp, printerName, virtualPrinterName);
                     listener.Start();
                     _activeListeners.Add(listener);
 
@@ -315,7 +315,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                             continue;
                         }
 
-                        var listener = new PipeListener(config.PipeName, config.ServerIp, config.TargetPrinterName);
+                        var listener = new PipeListener(config.PipeName, config.ServerIp, config.TargetPrinterName, config.VirtualPrinterName);
                         listener.Start();
                         _activeListeners.Add(listener);
                     }

@@ -18,10 +18,14 @@ namespace ShaPrint.Server
         private SemaphoreSlim? _concurrencyLimit;
         private readonly ScannerService _scannerService = new ScannerService();
         private readonly INotificationService _notificationService;
+        private readonly Action<JobHistoryEntry>? _onJobLog;
+        private readonly Action<ServerErrorEntry>? _onErrorLog;
 
-        public PrintReceiver(INotificationService notificationService)
+        public PrintReceiver(INotificationService notificationService, Action<JobHistoryEntry>? onJobLog = null, Action<ServerErrorEntry>? onErrorLog = null)
         {
             _notificationService = notificationService;
+            _onJobLog = onJobLog;
+            _onErrorLog = onErrorLog;
         }
 
         public void Start()
@@ -138,7 +142,9 @@ namespace ShaPrint.Server
 
                             if (!string.IsNullOrEmpty(payload.TargetPrinterName) && payload.SpoolData != null && payload.SpoolData.Length > 0)
                             {
-                                string docName = "ShaPrint Job - " + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                                string docName = !string.IsNullOrEmpty(payload.DocumentName)
+                                    ? payload.DocumentName
+                                    : "ShaPrint Job - " + DateTime.Now.ToString("yyyyMMdd_HHmmss");
                                 AppLogger.Log($"[SERVER] Injecting {payload.SpoolData.Length} bytes into Windows Spooler for '{payload.TargetPrinterName}'");
                                 bool printed = SpoolerApi.PrintRawData(payload.TargetPrinterName, payload.SpoolData, docName);
                                 
@@ -146,11 +152,35 @@ namespace ShaPrint.Server
                                 {
                                     AppLogger.Log($"[SERVER] SUCCESS: Print job accepted by Windows Spooler.");
                                     _notificationService.ShowPrintJobCompleted(docName, payload.TargetPrinterName);
+                                    _onJobLog?.Invoke(new JobHistoryEntry
+                                    {
+                                        Type = "print",
+                                        Document = docName,
+                                        PrinterName = payload.TargetPrinterName,
+                                        ClientIp = remoteIp,
+                                        Status = "completed",
+                                        Timestamp = DateTime.UtcNow
+                                    });
                                 }
                                 else
                                 {
                                     AppLogger.Error($"[SERVER] FAILED: Windows Spooler rejected the job. Check SpoolerApi logs.");
                                     _notificationService.ShowPrintJobFailed(docName, payload.TargetPrinterName, "Spooler rejected job");
+                                    _onJobLog?.Invoke(new JobHistoryEntry
+                                    {
+                                        Type = "print",
+                                        Document = docName,
+                                        PrinterName = payload.TargetPrinterName,
+                                        ClientIp = remoteIp,
+                                        Status = "failed",
+                                        Timestamp = DateTime.UtcNow
+                                    });
+                                    _onErrorLog?.Invoke(new ServerErrorEntry
+                                    {
+                                        Source = "PrintReceiver",
+                                        Message = $"Windows Spooler rejected job '{docName}' for printer '{payload.TargetPrinterName}'",
+                                        Timestamp = DateTime.UtcNow
+                                    });
                                 }
                             }
                             else
@@ -191,6 +221,16 @@ namespace ShaPrint.Server
                     response.Success = true;
                     response.FileBytes = scannedBytes;
                     response.ErrorMessage = string.Empty;
+
+                    _onJobLog?.Invoke(new JobHistoryEntry
+                    {
+                        Type = "scan",
+                        Document = $"Scan - {request.TargetScannerName}",
+                        PrinterName = request.TargetScannerName,
+                        ClientIp = remoteIp,
+                        Status = "completed",
+                        Timestamp = DateTime.UtcNow
+                    });
                 }
                 catch (Exception ex)
                 {
@@ -198,6 +238,22 @@ namespace ShaPrint.Server
                     response.Success = false;
                     response.ErrorMessage = ex.Message;
                     response.FileBytes = Array.Empty<byte>();
+
+                    _onJobLog?.Invoke(new JobHistoryEntry
+                    {
+                        Type = "scan",
+                        Document = $"Scan - {request.TargetScannerName}",
+                        PrinterName = request.TargetScannerName,
+                        ClientIp = remoteIp,
+                        Status = "failed",
+                        Timestamp = DateTime.UtcNow
+                    });
+                    _onErrorLog?.Invoke(new ServerErrorEntry
+                    {
+                        Source = "PrintReceiver-Scan",
+                        Message = $"Scan failed for scanner '{request.TargetScannerName}': {ex.Message}",
+                        Timestamp = DateTime.UtcNow
+                    });
                 }
 
                 AppLogger.Log($"[SERVER] Sending scan response to {remoteIp}. Success={response.Success}, Size={response.FileBytes.Length} bytes.");

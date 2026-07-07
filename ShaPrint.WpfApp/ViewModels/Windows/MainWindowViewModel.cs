@@ -21,6 +21,9 @@ namespace ShaPrint.WpfApp.ViewModels.Windows
         [ObservableProperty]
         private Visibility _isClientMode = Visibility.Collapsed;
 
+        [ObservableProperty]
+        private Visibility _isMonitorMode = Visibility.Collapsed;
+
         public bool IsExiting { get; set; } = false;
 
         [RelayCommand]

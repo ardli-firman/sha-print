@@ -17,6 +17,7 @@ namespace ShaPrint.Core.Network
     public class PrintJobPayload
     {
         public string TargetPrinterName { get; set; } = string.Empty;
+        public string DocumentName { get; set; } = string.Empty;
         public byte[] SpoolData { get; set; } = Array.Empty<byte>();
 
         public static async Task WriteAsync(Stream stream, PrintJobPayload payload)
@@ -37,6 +38,7 @@ namespace ShaPrint.Core.Network
                 using (var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
                 {
                     bw.Write(payload.TargetPrinterName);
+                    bw.Write(payload.DocumentName);
                     bw.Write(payload.SpoolData.Length);
                     bw.Write(payload.SpoolData);
                     bw.Flush();
@@ -100,6 +102,12 @@ namespace ShaPrint.Core.Network
             if (payload.TargetPrinterName.Length > Constants.MaxTargetPrinterNameBytes)
                 throw new InvalidDataException(
                     $"TargetPrinterName too long: {payload.TargetPrinterName.Length} bytes (max {Constants.MaxTargetPrinterNameBytes}).");
+
+            payload.DocumentName = br.ReadString();
+            if (payload.DocumentName.Length > 1024)
+            {
+                payload.DocumentName = payload.DocumentName.Substring(0, 1024);
+            }
 
             int dataLength = br.ReadInt32();
             if (dataLength < 0)
