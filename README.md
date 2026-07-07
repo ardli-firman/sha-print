@@ -53,6 +53,71 @@ By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TC
 
 ---
 
+## 🔒 Security & Safety
+
+ShaPrint implements defense-in-depth security to protect your local network, computer performance, and hardware.
+
+### Encryption & Authentication
+
+| Layer | Mechanism | Description |
+|---|---|---|
+| **TCP Data (Print/Scan/Monitor)** | **AES-256-GCM** | All TCP payloads (print jobs, scan data, monitoring status) are encrypted with AES-256 in Galois/Counter Mode — providing both confidentiality and tamper detection. Each encryption uses a fresh random 96-bit nonce. |
+| **UDP Discovery** | **HMAC-SHA256** | Discovery responses are signed with HMAC-SHA256. Clients verify the signature before trusting any server response, preventing spoofing and man-in-the-middle attacks. |
+| **Key Derivation** | **PBKDF2 (100k iterations)** | All cryptographic keys are derived from the **Network Channel** shared secret using PBKDF2 with 100,000 iterations and unique salts per purpose (AES, HMAC, local config). |
+| **Config Integrity** | **HMAC-wrapped JSON** | Server configuration files are stored with an embedded HMAC to detect tampering. Corrupted or modified configs are rejected on load. |
+
+### Network Protection
+
+- **Rate Limiting:** Discovery server limits requests to **5 per second per IP address**. Stale rate-limit entries are periodically pruned to prevent memory leaks.
+- **Payload Size Limits:** Every network payload has a strict maximum size — discovery responses (8 KB), monitor requests (4 KB), print jobs (100 MB). Excessively large payloads are rejected immediately.
+- **Input Sanitization:** All strings received from the network (printer names, server names, driver names) are validated against a strict whitelist regex. Shell metacharacters (`' " ; $ \` \| & < > \n \r \t \0`) are explicitly blocked.
+- **Concurrency Throttling:** Maximum **10 concurrent print jobs** to prevent resource exhaustion.
+- **Firewall Integration:** On server start, Windows Firewall rules for ports 9876/UDP, 9877/TCP, and 9878/TCP are automatically configured (with user consent via UAC prompt). Rules are persistent — only needed once.
+- **Connection Timeout:** Monitoring TCP queries time out after **5 seconds**, preventing hung connections from accumulating.
+
+### Performance & Stability
+
+- **Lightweight Polling:** Monitor mode polls servers every **15 seconds** with requests staggered **1 second apart** to avoid network/CPU spikes.
+- **Unicast Sweep Control:** Bulk IP sweep (up to 1024 addresses) runs only on **first startup and manual refresh**. Routine polling uses broadcast discovery only (`skipUnicastSweep=true`).
+- **In-Memory Logging:** Server logs are stored in memory (max 200 entries) — no continuous disk I/O.
+- **Automatic Job Recovery:** PrintMonitorService automatically detects and cancels stuck/error print jobs, preventing spooler congestion.
+
+### Hardware Safety
+
+ShaPrint interacts with hardware **exclusively through standard Windows APIs**:
+- **Printing:** Windows Print Spooler API (`AddJob` / spool file injection)
+- **Scanning:** Windows Image Acquisition (WIA) 2.0
+- **Result:** The application **cannot cause physical damage** to printers, scanners, or computer components. All risks are identical to printing or scanning from any standard Windows application.
+
+### Safety Assessment Summary
+
+| Concern | Verdict | Notes |
+|---|---|---|
+| **Local network security** | 🟢 **Safe** (with configuration) | AES-256-GCM + HMAC-SHA256 provide strong protection. **Must** customize Network Channel from default for multi-tenant environments. |
+| **Computer performance** | 🟢 **Safe** | CPU/RAM impact is negligible for monitoring. Print/scan load is temporary and on-demand. |
+| **Hardware damage** | 🟢 **Safe** | Software-only — uses only standard Windows APIs (Spooler, WIA). No risk of physical damage. |
+
+### ⚠️ Critical Recommendations
+
+1. **🔴 Customize Your Network Channel**
+   - Go to **Settings → Network Channel**
+   - Change from the default `"DefaultChannel"` to a **unique, random string** known only to your devices
+   - Share the same value with all clients on your network
+   - This regenerates ALL encryption keys — without this, any ShaPrint instance on the same network can decrypt your traffic
+
+2. **Coordinate with IT**
+   - Inform your network administrator about these ports:
+     - `UDP 9876` — Service discovery
+     - `TCP 9877` — Print/scan data transfer
+     - `TCP 9878` — Server monitoring status
+   - Ask them to restrict access to these ports to your subnet/VLAN only
+
+3. **Use Only on Trusted Networks**
+   - ShaPrint is designed for **local LAN / VPN environments**
+   - Do not expose ports to the public internet or untrusted WiFi networks
+
+---
+
 ## 🚀 Installation
 
 ShaPrint is packaged as a fully self-contained Standalone Setup. You do **not** need to install the .NET Runtime manually.
