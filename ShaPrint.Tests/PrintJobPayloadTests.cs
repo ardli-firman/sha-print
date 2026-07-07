@@ -19,6 +19,7 @@ public class PrintJobPayloadTests
         var original = new PrintJobPayload
         {
             TargetPrinterName = "Epson L3210 Series",
+            DocumentName = "Invoice.pdf",
             SpoolData = Encoding.UTF8.GetBytes("RAW spool data for the printer")
         };
 
@@ -30,6 +31,7 @@ public class PrintJobPayloadTests
         var recovered = await PrintJobPayload.ReadAsync(ms);
 
         Assert.Equal(original.TargetPrinterName, recovered.TargetPrinterName);
+        Assert.Equal(original.DocumentName, recovered.DocumentName);
         Assert.Equal(original.SpoolData, recovered.SpoolData);
     }
 
@@ -41,6 +43,7 @@ public class PrintJobPayloadTests
         var original = new PrintJobPayload
         {
             TargetPrinterName = "SecretPrinter",
+            DocumentName = "Classified.docx",
             SpoolData = Encoding.UTF8.GetBytes("CLASSIFIED DOCUMENT")
         };
 
@@ -166,6 +169,7 @@ public class PrintJobPayloadTests
         var original = new PrintJobPayload
         {
             TargetPrinterName = "Large Job Printer",
+            DocumentName = "HugeReport.xlsx",
             SpoolData = largeData
         };
 
@@ -176,6 +180,7 @@ public class PrintJobPayloadTests
         var recovered = await PrintJobPayload.ReadAsync(ms);
 
         Assert.Equal(original.TargetPrinterName, recovered.TargetPrinterName);
+        Assert.Equal(original.DocumentName, recovered.DocumentName);
         Assert.Equal(original.SpoolData, recovered.SpoolData);
     }
 
@@ -187,6 +192,7 @@ public class PrintJobPayloadTests
         var original = new PrintJobPayload
         {
             TargetPrinterName = "Target",
+            DocumentName = "secret.txt",
             SpoolData = Encoding.UTF8.GetBytes("secret print data")
         };
 
