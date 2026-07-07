@@ -386,6 +386,47 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     server.IpAddress = ipAddress;
                     server.UptimeSeconds = payload.UptimeSeconds;
                     server.LastSeen = DateTime.UtcNow;
+                    // Convert UTC timestamps to local time for proper UI display
+                    if (payload.ActiveClients != null)
+                    {
+                        foreach (var client in payload.ActiveClients)
+                        {
+                            if (client.ConnectedSince.Kind != DateTimeKind.Local)
+                            {
+                                var utcTime = client.ConnectedSince.Kind == DateTimeKind.Utc 
+                                    ? client.ConnectedSince 
+                                    : DateTime.SpecifyKind(client.ConnectedSince, DateTimeKind.Utc);
+                                client.ConnectedSince = utcTime.ToLocalTime();
+                            }
+                        }
+                    }
+                    if (payload.RecentJobs != null)
+                    {
+                        foreach (var job in payload.RecentJobs)
+                        {
+                            if (job.Timestamp.Kind != DateTimeKind.Local)
+                            {
+                                var utcTime = job.Timestamp.Kind == DateTimeKind.Utc 
+                                    ? job.Timestamp 
+                                    : DateTime.SpecifyKind(job.Timestamp, DateTimeKind.Utc);
+                                job.Timestamp = utcTime.ToLocalTime();
+                            }
+                        }
+                    }
+                    if (payload.Errors != null)
+                    {
+                        foreach (var err in payload.Errors)
+                        {
+                            if (err.Timestamp.Kind != DateTimeKind.Local)
+                            {
+                                var utcTime = err.Timestamp.Kind == DateTimeKind.Utc 
+                                    ? err.Timestamp 
+                                    : DateTime.SpecifyKind(err.Timestamp, DateTimeKind.Utc);
+                                err.Timestamp = utcTime.ToLocalTime();
+                            }
+                        }
+                    }
+
                     server.Payload = payload;
 
                     if (isOnline)
