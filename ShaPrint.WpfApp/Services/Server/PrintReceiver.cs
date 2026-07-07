@@ -146,7 +146,7 @@ namespace ShaPrint.Server
                                     ? payload.DocumentName
                                     : "ShaPrint Job - " + DateTime.Now.ToString("yyyyMMdd_HHmmss");
                                 AppLogger.Log($"[SERVER] Injecting {payload.SpoolData.Length} bytes into Windows Spooler for '{payload.TargetPrinterName}'");
-                                bool printed = SpoolerApi.PrintRawData(payload.TargetPrinterName, payload.SpoolData, docName);
+                                bool printed = await SpoolerApi.PrintRawDataAsync(payload.TargetPrinterName, payload.SpoolData, docName);
                                 
                                 if (printed)
                                 {
