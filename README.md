@@ -20,6 +20,7 @@ By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TC
 - ⚡ **Seamless Auto-Updater:** ShaPrint includes a built-in background updater. It checks for new releases on GitHub and updates itself seamlessly without interrupting active print jobs.
 - 👻 **Stealth Background Service:** Minimize the app to the System Tray to handle print jobs silently. ShaPrint integrates directly with the **Windows Task Scheduler** to automatically start at boot with the highest privileges, entirely bypassing annoying UAC prompts.
 - 🔔 **Real-Time Notifications:** Receive native Windows Toast notifications for print job completions, printer errors, client connections/disconnections, and scan results. Works reliably even when the application is minimized to the system tray or running as a background startup service. Clicking a toast instantly restores the application window.
+- 📊 **Server Monitoring Mode:** Consolidated dashboard to monitor all active servers on the local network. View real-time server information, network channel, software version, uptime, exposed printer queues, scanner availability, active client connections, recent job histories, and printer/scanner error notifications.
 ---
 
 ## 📸 Screenshots
@@ -27,11 +28,12 @@ By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TC
 <div align="center">
 <table>
   <tr>
-    <td align="center" colspan="4"><b>Switch Mode</b><br><img src="img/1.png" width="400"></td>
+    <td align="center" colspan="5"><b>Switch Mode</b><br><img src="img/1.png" width="400"></td>
   </tr>
   <tr>
     <td align="center"><b>Server Mode</b><br><img src="img/2.png" width="220"></td>
     <td align="center"><b>Client Mode</b><br><img src="img/3.png" width="220"></td>
+    <td align="center"><b>Monitoring</b><br><img src="img/6.png" width="220"></td>
     <td align="center"><b>Settings</b><br><img src="img/4.png" width="220"></td>
     <td align="center"><b>Update Manager</b><br><img src="img/5.png" width="220"></td>
   </tr>
@@ -45,6 +47,9 @@ By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TC
    
 2. **Client Mode**
    The application intercepts print jobs by creating a *Virtual Printer Port* within the Windows Spooler. Any document printed from standard applications (Word, Chrome, Acrobat) to this virtual printer is instantly intercepted and streamed directly to the Server.
+
+3. **Monitoring Mode**
+   Operators or users can monitor all active ShaPrint servers across the network channel. It discovers active servers via UDP and queries their status on **TCP Port 9878** to retrieve real-time encrypted details.
 
 ---
 
@@ -79,6 +84,12 @@ ShaPrint is packaged as a fully self-contained Standalone Setup. You do **not** 
    **Manual Discovery:** Enter the Server's IP address into the "Specific Server IP" box and click Scan if you are on a different VLAN.
 5. Select your target printer from the list and click **Install Selected Printer**.
 6. Open any application, press `Ctrl + P`, select `ShaPrint - [Printer Name]`, and **Print!**
+
+### 3. Monitoring Server Status
+1. Open ShaPrint.
+2. Select the **Monitor** tab from the sidebar.
+3. The dashboard will automatically scan and list all active servers on your network channel, displaying their status, connected clients, recent jobs, and active printer/scanner status.
+4. You can filter servers by hostname/IP, filter by online/offline/warning status, or click "Refresh" to trigger a manual sweep.
 
 ---
 
