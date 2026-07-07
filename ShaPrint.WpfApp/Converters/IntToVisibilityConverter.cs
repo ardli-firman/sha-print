@@ -9,11 +9,17 @@ namespace ShaPrint.WpfApp.Converters
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
+            bool inverse = parameter is string str && str.Equals("Inverse", StringComparison.OrdinalIgnoreCase);
+
             if (value is int intValue)
             {
-                return intValue > 0 ? Visibility.Visible : Visibility.Collapsed;
+                bool visible = intValue > 0;
+                if (inverse) visible = !visible;
+                return visible ? Visibility.Visible : Visibility.Collapsed;
             }
-            return Visibility.Collapsed;
+
+            // If binding fails or value is null, default to collapsed (or visible if inverse)
+            return inverse ? Visibility.Visible : Visibility.Collapsed;
         }
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
