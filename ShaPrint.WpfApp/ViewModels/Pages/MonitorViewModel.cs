@@ -42,6 +42,9 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         [NotifyPropertyChangedFor(nameof(NetworkChannel))]
         private ServerStatusPayload? _payload;
 
+        [ObservableProperty]
+        private int _selectedTabIndex;
+
         public string Version => Payload?.Version ?? "Unknown";
         public string NetworkChannel => Payload?.NetworkChannel ?? "Unknown";
 
@@ -144,6 +147,19 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             private set => SetProperty(ref _isFilterEmpty, value);
         }
 
+        private string _activeStatusFilter = "All";
+        public string ActiveStatusFilter
+        {
+            get => _activeStatusFilter;
+            set
+            {
+                if (SetProperty(ref _activeStatusFilter, value))
+                {
+                    SafeRefreshView();
+                }
+            }
+        }
+
         [ObservableProperty] private int _totalServers;
         [ObservableProperty] private int _onlineCount;
         [ObservableProperty] private int _warningCount;
@@ -240,11 +256,25 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             }
         }
 
+        [RelayCommand]
+        private void SetStatusFilter(string status)
+        {
+            if (!string.IsNullOrEmpty(status))
+            {
+                ActiveStatusFilter = status;
+            }
+        }
+
 
         private bool FilterServerNode(object item)
         {
             if (item is ServerNode node)
             {
+                if (ActiveStatusFilter != "All" && !node.Status.Equals(ActiveStatusFilter, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
                 if (string.IsNullOrWhiteSpace(FilterText))
                     return true;
 

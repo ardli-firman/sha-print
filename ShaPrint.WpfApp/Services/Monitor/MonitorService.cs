@@ -92,7 +92,6 @@ namespace ShaPrint.WpfApp.Services.Monitor
 
                     if (_isRefreshing) continue;
 
-                    // Periodic background poll - skip unicast sweep to prevent network flooding
                     var discovered = await _discoveryClient.DiscoverServersAsync(
                         skipUnicastSweep: true, 
                         requestMessage: Constants.MonitorDiscoveryRequestMessage);

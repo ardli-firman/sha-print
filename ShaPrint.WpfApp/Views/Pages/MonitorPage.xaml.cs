@@ -10,10 +10,11 @@ namespace ShaPrint.WpfApp.Views.Pages
     {
         public MonitorViewModel ViewModel { get; }
 
-        public MonitorPage(MonitorViewModel viewModel)
+        public MonitorPage(MonitorViewModel viewModel, Services.Monitor.MonitorService monitorService)
         {
             ViewModel = viewModel;
             DataContext = this;
+            monitorService.Start();
             InitializeComponent();
         }
     }

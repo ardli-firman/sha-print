@@ -11,8 +11,10 @@
         <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
 
         <!-- Stat Card padding style -->
-        <Style x:Key="StatCard" TargetType="ui:Card">
+        <Style x:Key="StatCard" TargetType="ui:CardAction" BasedOn="{StaticResource {x:Type ui:CardAction}}">
             <Setter Property="Padding" Value="16,14"/>
+            <Setter Property="Margin" Value="0,0,12,0"/>
+            <Setter Property="IsChevronVisible" Value="False"/>
         </Style>
 
         <!-- Tab Control -->
@@ -115,112 +117,107 @@
         <!-- ═══════════════════════════════════════════════════════════ -->
         <!--  SUMMARY STAT CARDS                                         -->
         <!-- ═══════════════════════════════════════════════════════════ -->
-        <Grid Grid.Row="1" Margin="0,0,0,16">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="12"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="12"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="12"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
+        <UniformGrid Grid.Row="1" Columns="4" Rows="1" Margin="0,0,0,16">
 
             <!-- Total Servers -->
-            <ui:Card Grid.Column="0" Style="{StaticResource StatCard}">
+            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="All" Style="{StaticResource StatCard}" ToolTip="View all servers">
                 <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                        <TextBlock Text="Total Servers" FontSize="12" FontWeight="Medium"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Text="{Binding ViewModel.TotalServers}"
-                                   FontSize="30" FontWeight="Bold" Margin="0,3,0,0"/>
-                    </StackPanel>
-                    <Border Grid.Column="1" Width="44" Height="44" CornerRadius="10"
-                            Background="{DynamicResource ControlFillColorDefaultBrush}"
-                            VerticalAlignment="Center">
-                        <ui:SymbolIcon Symbol="Server24" FontSize="22"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Total Servers" 
+                               FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding ViewModel.TotalServers}" 
+                               FontSize="36" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+
+                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="48" Height="48" CornerRadius="12" 
+                            Background="{DynamicResource ControlFillColorDefaultBrush}" VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="Server24" FontSize="24" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                     </Border>
                 </Grid>
-            </ui:Card>
+            </ui:CardAction>
 
             <!-- Online -->
-            <ui:Card Grid.Column="2" Style="{StaticResource StatCard}">
+            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Online" Style="{StaticResource StatCard}" ToolTip="Filter by Online">
                 <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                        <TextBlock Text="Online" FontSize="12" FontWeight="Medium"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Text="{Binding ViewModel.OnlineCount}"
-                                   FontSize="30" FontWeight="Bold" Margin="0,3,0,0"
-                                   Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
-                    </StackPanel>
-                    <Border Grid.Column="1" Width="44" Height="44" CornerRadius="10"
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Online" 
+                               FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding ViewModel.OnlineCount}" 
+                               FontSize="36" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
+
+                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="48" Height="48" CornerRadius="12" 
                             VerticalAlignment="Center">
                         <Border.Background><SolidColorBrush Color="#1A22C55E"/></Border.Background>
-                        <ui:SymbolIcon Symbol="CheckmarkCircle24" FontSize="22"
-                                       Foreground="{DynamicResource SystemFillColorSuccessBrush}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <ui:SymbolIcon Symbol="CheckmarkCircle24" FontSize="24" Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
                     </Border>
                 </Grid>
-            </ui:Card>
+            </ui:CardAction>
 
             <!-- Warning -->
-            <ui:Card Grid.Column="4" Style="{StaticResource StatCard}">
+            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Warning" Style="{StaticResource StatCard}" ToolTip="Filter by Warning">
                 <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                        <TextBlock Text="Warning" FontSize="12" FontWeight="Medium"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Text="{Binding ViewModel.WarningCount}"
-                                   FontSize="30" FontWeight="Bold" Margin="0,3,0,0"
-                                   Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
-                    </StackPanel>
-                    <Border Grid.Column="1" Width="44" Height="44" CornerRadius="10"
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Warning" 
+                               FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding ViewModel.WarningCount}" 
+                               FontSize="36" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
+
+                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="48" Height="48" CornerRadius="12" 
                             VerticalAlignment="Center">
                         <Border.Background><SolidColorBrush Color="#1AF59E0B"/></Border.Background>
-                        <ui:SymbolIcon Symbol="Warning24" FontSize="22"
-                                       Foreground="{DynamicResource SystemFillColorCautionBrush}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <ui:SymbolIcon Symbol="Warning24" FontSize="24" Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
                     </Border>
                 </Grid>
-            </ui:Card>
+            </ui:CardAction>
 
             <!-- Offline -->
-            <ui:Card Grid.Column="6" Style="{StaticResource StatCard}">
+            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Offline" Style="{StaticResource StatCard}" Margin="0" ToolTip="Filter by Offline">
                 <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                        <TextBlock Text="Offline" FontSize="12" FontWeight="Medium"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Text="{Binding ViewModel.OfflineCount}"
-                                   FontSize="30" FontWeight="Bold" Margin="0,3,0,0"
-                                   Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
-                    </StackPanel>
-                    <Border Grid.Column="1" Width="44" Height="44" CornerRadius="10"
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Offline" 
+                               FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding ViewModel.OfflineCount}" 
+                               FontSize="36" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
+
+                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="48" Height="48" CornerRadius="12" 
                             VerticalAlignment="Center">
                         <Border.Background><SolidColorBrush Color="#1AEF4444"/></Border.Background>
-                        <ui:SymbolIcon Symbol="ErrorCircle24" FontSize="22"
-                                       Foreground="{DynamicResource SystemFillColorCriticalBrush}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <ui:SymbolIcon Symbol="ErrorCircle24" FontSize="24" Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
                     </Border>
                 </Grid>
-            </ui:Card>
-        </Grid>
+            </ui:CardAction>
+        </UniformGrid>
 
         <!-- ═══════════════════════════════════════════════════════════ -->
         <!--  SEARCH &amp; TOOLBAR                                       -->
@@ -556,7 +553,7 @@
                                         </Border>
 
                                         <!-- Detail Tabs -->
-                                        <TabControl Grid.Row="2" Margin="18,8,18,16">
+                                        <TabControl Grid.Row="2" Margin="18,8,18,16" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
 
                                             <!-- Printers Tab -->
                                             <TabItem>
