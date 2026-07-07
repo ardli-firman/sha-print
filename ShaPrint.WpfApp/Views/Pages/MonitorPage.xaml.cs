@@ -27,6 +27,7 @@ namespace ShaPrint.WpfApp.Views.Pages
             if (sender is DataGridCell cell)
             {
                 cell.IsSelected = true;
+                cell.Focus();
             }
         }
     }

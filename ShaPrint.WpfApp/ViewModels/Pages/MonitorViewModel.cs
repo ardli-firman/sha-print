@@ -18,6 +18,9 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(StatusBrush))]
         [NotifyPropertyChangedFor(nameof(StatusSortOrder))]
+        [NotifyPropertyChangedFor(nameof(StatusTextBrush))]
+        [NotifyPropertyChangedFor(nameof(StatusBackgroundBrush))]
+        [NotifyPropertyChangedFor(nameof(StatusBorderBrush))]
         private string _status = "Unknown"; // "Online", "Warning", "Offline", "Unknown"
 
         [ObservableProperty]
@@ -83,6 +86,21 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     };
                 }
             }
+        }
+
+        public Brush StatusTextBrush => StatusBrush;
+
+        public Brush StatusBackgroundBrush => GetModifiedOpacityBrush(StatusBrush, 26); // ~10% opacity
+
+        public Brush StatusBorderBrush => GetModifiedOpacityBrush(StatusBrush, 76); // ~30% opacity
+
+        private Brush GetModifiedOpacityBrush(Brush baseBrush, byte opacity)
+        {
+            if (baseBrush is SolidColorBrush solidBrush)
+            {
+                return new SolidColorBrush(Color.FromArgb(opacity, solidBrush.Color.R, solidBrush.Color.G, solidBrush.Color.B));
+            }
+            return baseBrush;
         }
 
         public string UptimeText

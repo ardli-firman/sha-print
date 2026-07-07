@@ -11,10 +11,11 @@
         <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
         <converters:StatusToBrushConverter x:Key="StatusToBrush" />
         <converters:StatusToTextBrushConverter x:Key="StatusToTextBrush" />
+        <converters:StatusToDotBrushConverter x:Key="StatusToDotBrush" />
 
         <!-- Stat Card padding style -->
         <Style x:Key="StatCard" TargetType="ui:CardAction" BasedOn="{StaticResource {x:Type ui:CardAction}}">
-            <Setter Property="Padding" Value="16,14"/>
+            <Setter Property="Padding" Value="14,12"/>
             <Setter Property="Margin" Value="0,0,12,0"/>
             <Setter Property="IsChevronVisible" Value="False"/>
         </Style>
@@ -57,27 +58,42 @@
             </Setter>
         </Style>
 
-        <!-- Status pill style for DataGrid cells -->
-        <Style x:Key="StatusPill" TargetType="Border">
-            <Setter Property="CornerRadius" Value="4"/>
-            <Setter Property="Padding" Value="8,3"/>
-            <Setter Property="HorizontalAlignment" Value="Left"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}"/>
-        </Style>
-
         <!-- Tab content panel — wraps each DataGrid -->
         <Style x:Key="TabContentPanel" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}"/>
             <Setter Property="CornerRadius" Value="0,0,8,8"/>
-            <Setter Property="MaxHeight" Value="320"/>
             <Setter Property="MinHeight" Value="100"/>
             <Setter Property="Margin" Value="0,4,0,0"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}"/>
         </Style>
 
-        <!-- ─── DataGrid base style (functional only, WPF-UI handles Fluent Design visuals) ─── -->
+        <!-- Shadcn row style: transparent bg, hover highlight, no borders -->
+        <Style x:Key="ShadcnRowStyle" TargetType="DataGridRow">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Shadcn header style: muted, semi-bold, thin bottom border -->
+        <Style x:Key="ShadcnHeaderStyle" TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}"/>
+            <Setter Property="Padding" Value="16,10"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+
+        <!-- ─── Shadcn-style DataGrid: flat, clean, no grid lines, row hover, muted headers ─── -->
         <Style x:Key="TabDataGrid" TargetType="ui:DataGrid">
             <Setter Property="AutoGenerateColumns" Value="False"/>
             <Setter Property="IsReadOnly" Value="True"/>
@@ -87,24 +103,31 @@
             <Setter Property="CanUserResizeRows" Value="False"/>
             <Setter Property="CanUserDeleteRows" Value="False"/>
             <Setter Property="CanUserReorderColumns" Value="False"/>
-            <Setter Property="CanUserSortColumns" Value="False"/>
-            <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+            <Setter Property="CanUserSortColumns" Value="True"/>
+            <Setter Property="GridLinesVisibility" Value="None"/>
             <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
             <Setter Property="RowHeaderWidth" Value="0"/>
             <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="RowStyle" Value="{StaticResource ShadcnRowStyle}"/>
+            <Setter Property="ColumnHeaderStyle" Value="{StaticResource ShadcnHeaderStyle}"/>
         </Style>
 
         <!-- TextBlock style applied inside every DataGridTextColumn (guarantees cell padding) -->
         <Style x:Key="CellTextStyle" TargetType="TextBlock">
-            <Setter Property="Margin" Value="22,0"/>
+            <Setter Property="Margin" Value="16,0"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontSize" Value="11.5"/>
         </Style>
 
         <!-- ─── Flat cell style: global font, wider padding, copy context ─── -->
         <Style x:Key="ShadcnCellStyle" TargetType="DataGridCell">
-            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontSize" Value="11.5"/>
             <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="VerticalAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="ContextMenu">
                 <Setter.Value>
                     <ContextMenu>
@@ -118,6 +141,19 @@
                 </Setter.Value>
             </Setter>
             <EventSetter Event="PreviewMouseRightButtonDown" Handler="DataGridCell_PreviewMouseRightButtonDown"/>
+            <Style.Resources>
+                <!-- Remove default highlight/selection background -->
+                <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="Transparent"/>
+                <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="{DynamicResource TextFillColorPrimary}"/>
+                <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="Transparent"/>
+                <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="{DynamicResource TextFillColorPrimary}"/>
+            </Style.Resources>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <!-- Empty state for tabs with no data -->
@@ -132,7 +168,7 @@
 
         <!-- ─── Server Card summary row hover effect ─── -->
         <Style x:Key="SummaryRowBorder" TargetType="Border">
-            <Setter Property="Padding" Value="18,14"/>
+            <Setter Property="Padding" Value="14,12"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
@@ -141,7 +177,7 @@
             </Style.Triggers>
         </Style>
 
-        <!-- Sleek status dot style -->
+        <!-- Sleek status dot style (used in server card status badge, NOT DataGrid) -->
         <Style x:Key="StatusDot" TargetType="Ellipse">
             <Setter Property="Width" Value="7"/>
             <Setter Property="Height" Value="7"/>
@@ -152,14 +188,14 @@
 
         <!-- Counts icon style -->
         <Style x:Key="CountIcon" TargetType="ui:SymbolIcon">
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
 
         <!-- Count value style -->
         <Style x:Key="CountValue" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
@@ -210,7 +246,17 @@
         <UniformGrid Grid.Row="1" Columns="4" Rows="1" Margin="0,0,0,16">
 
             <!-- Total Servers -->
-            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="All" Style="{StaticResource StatCard}" ToolTip="View all servers">
+            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="All" ToolTip="View all servers">
+                <ui:CardAction.Style>
+                    <Style TargetType="ui:CardAction" BasedOn="{StaticResource StatCard}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ViewModel.ActiveStatusFilter}" Value="All">
+                                <Setter Property="BorderBrush" Value="{DynamicResource SystemFillColorAttentionBrush}"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ui:CardAction.Style>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -222,19 +268,29 @@
                     </Grid.ColumnDefinitions>
 
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Total Servers" 
-                               FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                               FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding ViewModel.TotalServers}" 
-                               FontSize="36" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                               FontSize="32" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
 
-                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="48" Height="48" CornerRadius="12" 
+                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="40" Height="40" CornerRadius="10" 
                             Background="{DynamicResource ControlFillColorDefaultBrush}" VerticalAlignment="Center">
-                        <ui:SymbolIcon Symbol="Server24" FontSize="24" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <ui:SymbolIcon Symbol="Server24" FontSize="20" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                     </Border>
                 </Grid>
             </ui:CardAction>
 
             <!-- Online -->
-            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Online" Style="{StaticResource StatCard}" ToolTip="Filter by Online">
+            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Online" ToolTip="Filter by Online">
+                <ui:CardAction.Style>
+                    <Style TargetType="ui:CardAction" BasedOn="{StaticResource StatCard}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ViewModel.ActiveStatusFilter}" Value="Online">
+                                <Setter Property="BorderBrush" Value="{DynamicResource SystemFillColorSuccessBrush}"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ui:CardAction.Style>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -246,20 +302,30 @@
                     </Grid.ColumnDefinitions>
 
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Online" 
-                               FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                               FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding ViewModel.OnlineCount}" 
-                               FontSize="36" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
+                               FontSize="32" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
 
-                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="48" Height="48" CornerRadius="12" 
+                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="40" Height="40" CornerRadius="10" 
                             VerticalAlignment="Center">
                         <Border.Background><SolidColorBrush Color="#1A22C55E"/></Border.Background>
-                        <ui:SymbolIcon Symbol="CheckmarkCircle24" FontSize="24" Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
+                        <ui:SymbolIcon Symbol="CheckmarkCircle24" FontSize="20" Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
                     </Border>
                 </Grid>
             </ui:CardAction>
 
             <!-- Warning -->
-            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Warning" Style="{StaticResource StatCard}" ToolTip="Filter by Warning">
+            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Warning" ToolTip="Filter by Warning">
+                <ui:CardAction.Style>
+                    <Style TargetType="ui:CardAction" BasedOn="{StaticResource StatCard}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ViewModel.ActiveStatusFilter}" Value="Warning">
+                                <Setter Property="BorderBrush" Value="{DynamicResource SystemFillColorCautionBrush}"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ui:CardAction.Style>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -271,20 +337,31 @@
                     </Grid.ColumnDefinitions>
 
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Warning" 
-                               FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                               FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding ViewModel.WarningCount}" 
-                               FontSize="36" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
+                               FontSize="32" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
 
-                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="48" Height="48" CornerRadius="12" 
+                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="40" Height="40" CornerRadius="10" 
                             VerticalAlignment="Center">
                         <Border.Background><SolidColorBrush Color="#1AF59E0B"/></Border.Background>
-                        <ui:SymbolIcon Symbol="Warning24" FontSize="24" Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
+                        <ui:SymbolIcon Symbol="Warning24" FontSize="20" Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
                     </Border>
                 </Grid>
             </ui:CardAction>
 
             <!-- Offline -->
-            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Offline" Style="{StaticResource StatCard}" Margin="0" ToolTip="Filter by Offline">
+            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Offline" Margin="0" ToolTip="Filter by Offline">
+                <ui:CardAction.Style>
+                    <Style TargetType="ui:CardAction" BasedOn="{StaticResource StatCard}">
+                        <Setter Property="Margin" Value="0"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ViewModel.ActiveStatusFilter}" Value="Offline">
+                                <Setter Property="BorderBrush" Value="{DynamicResource SystemFillColorCriticalBrush}"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ui:CardAction.Style>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -296,14 +373,14 @@
                     </Grid.ColumnDefinitions>
 
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Offline" 
-                               FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                               FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding ViewModel.OfflineCount}" 
-                               FontSize="36" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
+                               FontSize="32" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
 
-                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="48" Height="48" CornerRadius="12" 
+                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="40" Height="40" CornerRadius="10" 
                             VerticalAlignment="Center">
                         <Border.Background><SolidColorBrush Color="#1AEF4444"/></Border.Background>
-                        <ui:SymbolIcon Symbol="ErrorCircle24" FontSize="24" Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
+                        <ui:SymbolIcon Symbol="ErrorCircle24" FontSize="20" Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
                     </Border>
                 </Grid>
             </ui:CardAction>
@@ -475,9 +552,9 @@
                                     </Grid.RowDefinitions>
 
                                     <!-- ─────────────────────── -->
-                                    <!--  SUMMARY ROW             -->
+                                    <!--  SUMMARY ROW (compact)    -->
                                     <!-- ─────────────────────── -->
-                                    <Border Grid.Row="0" Padding="18,14"
+                                    <Border Grid.Row="0" Padding="14,12"
                                             Style="{StaticResource SummaryRowBorder}">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
@@ -490,14 +567,19 @@
 
                                             <!-- Status Badge -->
                                             <Border Grid.Column="0"
-                                                    Background="{Binding StatusBrush}"
-                                                    CornerRadius="20" Padding="10,4"
-                                                    Margin="0,0,18,0" VerticalAlignment="Center"
-                                                    Opacity="0.95">
+                                                    Background="{Binding StatusBackgroundBrush}"
+                                                    BorderBrush="{Binding StatusBorderBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="6" Padding="8,3.5"
+                                                    Margin="0,0,18,0" VerticalAlignment="Center">
                                                 <StackPanel Orientation="Horizontal">
-                                                    <Ellipse Style="{StaticResource StatusDot}"/>
+                                                    <Ellipse Width="6" Height="6"
+                                                             Fill="{Binding StatusTextBrush}"
+                                                             VerticalAlignment="Center"
+                                                             Margin="0,0,6,0"/>
                                                     <TextBlock Text="{Binding Status, Mode=OneWay}"
-                                                               Foreground="White" FontWeight="SemiBold" FontSize="11.5"/>
+                                                               Foreground="{Binding StatusTextBrush}"
+                                                               FontWeight="SemiBold" FontSize="11"/>
                                                 </StackPanel>
                                             </Border>
 
@@ -505,7 +587,7 @@
                                             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
                                                     <TextBlock Text="{Binding HostName, Mode=OneWay}"
-                                                               FontSize="15" FontWeight="SemiBold"
+                                                               FontSize="14" FontWeight="SemiBold"
                                                                TextTrimming="CharacterEllipsis" MaxWidth="220"
                                                                ToolTip="{Binding HostName, Mode=OneWay}"/>
                                                     <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
@@ -518,7 +600,7 @@
                                                                    Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
                                                     </Border>
                                                 </StackPanel>
-                                                <TextBlock Text="{Binding IpAddress, Mode=OneWay}" FontSize="12"
+                                                <TextBlock Text="{Binding IpAddress, Mode=OneWay}" FontSize="11.5"
                                                            Foreground="{DynamicResource TextFillColorTertiaryBrush}"
                                                            TextTrimming="CharacterEllipsis"
                                                            ToolTip="{Binding IpAddress, Mode=OneWay}"/>
@@ -528,34 +610,60 @@
                                             <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                                 <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
                                                         CornerRadius="4" Padding="5,1.5"
-                                                        HorizontalAlignment="Left" Margin="0,0,0,5"
+                                                        HorizontalAlignment="Left" Margin="0,0,0,6"
                                                         ToolTip="Network Channel">
                                                     <TextBlock FontSize="10.5"
                                                                Foreground="{DynamicResource TextFillColorTertiaryBrush}">
-                                                        <Run Text="CH " FontWeight="SemiBold"/>
-                                                        <Run Text="{Binding NetworkChannel, Mode=OneWay}"/>
+                                                         <Run Text="CH " FontWeight="SemiBold"/>
+                                                         <Run Text="{Binding NetworkChannel, Mode=OneWay}"/>
                                                     </TextBlock>
                                                 </Border>
                                                 <StackPanel Orientation="Horizontal" ToolTip="Printers, Scanners, Active Clients">
-                                                    <ui:SymbolIcon Symbol="Print24" Style="{StaticResource CountIcon}" Margin="0,0,3,0"/>
-                                                    <TextBlock Text="{Binding Payload.Printers.Count, Mode=OneWay, FallbackValue=0}"
-                                                               Style="{StaticResource CountValue}" Margin="0,0,12,0"/>
-                                                    <ui:SymbolIcon Symbol="Scan24" Style="{StaticResource CountIcon}" Margin="0,0,3,0"/>
-                                                    <TextBlock Text="{Binding Payload.Scanners.Count, Mode=OneWay, FallbackValue=0}"
-                                                               Style="{StaticResource CountValue}" Margin="0,0,12,0"/>
-                                                    <ui:SymbolIcon Symbol="People24" Style="{StaticResource CountIcon}" Margin="0,0,3,0"/>
-                                                    <TextBlock Text="{Binding Payload.ActiveClients.Count, Mode=OneWay, FallbackValue=0}"
-                                                               Style="{StaticResource CountValue}"/>
+                                                     <!-- Printers Badge -->
+                                                     <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                             BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                             BorderThickness="1"
+                                                             CornerRadius="4"
+                                                             Padding="6,2"
+                                                             Margin="0,0,6,0">
+                                                         <StackPanel Orientation="Horizontal">
+                                                             <ui:SymbolIcon Symbol="Print24" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,4,0"/>
+                                                             <TextBlock Text="{Binding Payload.Printers.Count, Mode=OneWay, FallbackValue=0}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                         </StackPanel>
+                                                     </Border>
+                                                     <!-- Scanners Badge -->
+                                                     <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                             BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                             BorderThickness="1"
+                                                             CornerRadius="4"
+                                                             Padding="6,2"
+                                                             Margin="0,0,6,0">
+                                                         <StackPanel Orientation="Horizontal">
+                                                             <ui:SymbolIcon Symbol="Scan24" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,4,0"/>
+                                                             <TextBlock Text="{Binding Payload.Scanners.Count, Mode=OneWay, FallbackValue=0}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                         </StackPanel>
+                                                     </Border>
+                                                     <!-- Connected Clients Badge -->
+                                                     <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                             BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                             BorderThickness="1"
+                                                             CornerRadius="4"
+                                                             Padding="6,2">
+                                                         <StackPanel Orientation="Horizontal">
+                                                             <ui:SymbolIcon Symbol="People24" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,4,0"/>
+                                                             <TextBlock Text="{Binding Payload.ActiveClients.Count, Mode=OneWay, FallbackValue=0}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                         </StackPanel>
+                                                     </Border>
                                                 </StackPanel>
                                             </StackPanel>
 
                                             <!-- Uptime &amp; Last Seen -->
                                             <StackPanel Grid.Column="3" VerticalAlignment="Center">
                                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                                    <ui:SymbolIcon Symbol="Clock24" FontSize="13"
+                                                    <ui:SymbolIcon Symbol="Clock24" FontSize="12"
                                                                    Foreground="{DynamicResource TextFillColorTertiaryBrush}"
                                                                    VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                    <TextBlock FontSize="12" VerticalAlignment="Center">
+                                                    <TextBlock FontSize="11.5" VerticalAlignment="Center">
                                                         <Run Text="Uptime: "
                                                              Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
                                                         <Run Text="{Binding UptimeText, Mode=OneWay}" FontWeight="SemiBold"
@@ -563,10 +671,10 @@
                                                     </TextBlock>
                                                 </StackPanel>
                                                 <StackPanel Orientation="Horizontal">
-                                                    <ui:SymbolIcon Symbol="Eye24" FontSize="13"
+                                                    <ui:SymbolIcon Symbol="Eye24" FontSize="12"
                                                                    Foreground="{DynamicResource TextFillColorTertiaryBrush}"
                                                                    VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                    <TextBlock FontSize="12" VerticalAlignment="Center">
+                                                    <TextBlock FontSize="11.5" VerticalAlignment="Center">
                                                         <Run Text="Seen: "
                                                              Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
                                                         <Run Text="{Binding LastSeenText, Mode=OneWay}" FontWeight="SemiBold"
@@ -581,7 +689,7 @@
                                                        CommandParameter="{Binding}"
                                                        Appearance="Secondary"
                                                        VerticalAlignment="Center"
-                                                       MinWidth="86"
+                                                       MinWidth="80"
                                                        Margin="12,0,0,0">
                                                 <ui:Button.Style>
                                                     <Style TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
@@ -658,25 +766,28 @@
                                             <!-- Printers Tab -->
                                             <TabItem>
                                                 <TabItem.Header>
-                                                    <StackPanel Orientation="Horizontal">
-                                                        <ui:SymbolIcon Symbol="Print24" FontSize="13" Margin="0,0,6,0"/>
-                                                        <TextBlock Text="Printers"/>
-                                                        <Border CornerRadius="9" Padding="7,1" Margin="6,0,0,0"
-                                                                Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                                                                Visibility="{Binding Payload.Printers.Count, Converter={StaticResource IntToVis}}">
-                                                            <TextBlock Text="{Binding Payload.Printers.Count, Mode=OneWay}"
-                                                                       FontSize="11" FontWeight="SemiBold"
-                                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                        </Border>
-                                                    </StackPanel>
-                                                </TabItem.Header>
+                                                     <StackPanel Orientation="Horizontal">
+                                                         <ui:SymbolIcon Symbol="Print24" FontSize="13" Margin="0,0,6,0"/>
+                                                         <TextBlock Text="Printers"/>
+                                                         <Border CornerRadius="10" Padding="6,1.5" Margin="6,0,0,0"
+                                                                 Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                                 BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                                 BorderThickness="1"
+                                                                 Visibility="{Binding Payload.Printers.Count, Converter={StaticResource IntToVis}}">
+                                                             <TextBlock Text="{Binding Payload.Printers.Count, Mode=OneWay}"
+                                                                        FontSize="10.5" FontWeight="Bold"
+                                                                        Foreground="{Binding RelativeSource={RelativeSource AncestorType=TabItem}, Path=Foreground}"/>
+                                                         </Border>
+                                                     </StackPanel>
+                                                 </TabItem.Header>
                                                 <Border Style="{StaticResource TabContentPanel}">
                                                     <Grid>
                                                         <TextBlock Text="No printers registered" Style="{StaticResource TabEmptyState}"
                                                                    Visibility="{Binding Payload.Printers.Count, Converter={StaticResource IntToVis}, ConverterParameter=Inverse}"/>
                                                         <ui:DataGrid Style="{StaticResource TabDataGrid}"
                                                                   CellStyle="{StaticResource ShadcnCellStyle}"
-                                                                  ItemsSource="{Binding Payload.Printers}">
+                                                                  ItemsSource="{Binding Payload.Printers}"
+                                                                  Visibility="{Binding Payload.Printers.Count, Converter={StaticResource IntToVis}}">
                                                             <DataGrid.Columns>
                                                                 <DataGridTextColumn Header="Printer Name"
                                                                                     Binding="{Binding Name}" Width="4*"
@@ -684,21 +795,20 @@
                                                                 <DataGridTemplateColumn Header="Status" Width="1.5*">
                                                                     <DataGridTemplateColumn.CellTemplate>
                                                                         <DataTemplate>
-                                                                            <Border CornerRadius="4" Padding="8,3"
-                                                                                    HorizontalAlignment="Left"
-                                                                                    VerticalAlignment="Center"
-                                                                                    Background="{Binding Status, Converter={StaticResource StatusToBrush}}">
+                                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0">
+                                                                                <Ellipse Width="7" Height="7"
+                                                                                         Fill="{Binding Status, Converter={StaticResource StatusToDotBrush}}"
+                                                                                         Margin="0,0,8,0" VerticalAlignment="Center"/>
                                                                                 <TextBlock Text="{Binding Status}" FontSize="11.5"
-                                                                                           Foreground="{Binding Status, Converter={StaticResource StatusToTextBrush}}"
-                                                                                           FontWeight="SemiBold"/>
-                                                                            </Border>
+                                                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                                            </StackPanel>
                                                                         </DataTemplate>
                                                                     </DataGridTemplateColumn.CellTemplate>
                                                                 </DataGridTemplateColumn>
                                                                 <DataGridTemplateColumn Header="Queue" Width="1.2*">
                                                                     <DataGridTemplateColumn.CellTemplate>
                                                                         <DataTemplate>
-                                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0">
                                                                                 <Border CornerRadius="4" Padding="6,2"
                                                                                         Background="{DynamicResource ControlFillColorDefaultBrush}">
                                                                                     <TextBlock FontSize="12" FontWeight="SemiBold"
@@ -727,12 +837,14 @@
                                                     <StackPanel Orientation="Horizontal">
                                                         <ui:SymbolIcon Symbol="Scan24" FontSize="13" Margin="0,0,6,0"/>
                                                         <TextBlock Text="Scanners"/>
-                                                        <Border CornerRadius="9" Padding="7,1" Margin="6,0,0,0"
+                                                        <Border CornerRadius="10" Padding="6,1.5" Margin="6,0,0,0"
                                                                 Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                                BorderThickness="1"
                                                                 Visibility="{Binding Payload.Scanners.Count, Converter={StaticResource IntToVis}}">
                                                             <TextBlock Text="{Binding Payload.Scanners.Count, Mode=OneWay}"
-                                                                       FontSize="11" FontWeight="SemiBold"
-                                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                                                       FontSize="10.5" FontWeight="Bold"
+                                                                       Foreground="{Binding RelativeSource={RelativeSource AncestorType=TabItem}, Path=Foreground}"/>
                                                         </Border>
                                                     </StackPanel>
                                                 </TabItem.Header>
@@ -742,7 +854,8 @@
                                                                    Visibility="{Binding Payload.Scanners.Count, Converter={StaticResource IntToVis}, ConverterParameter=Inverse}"/>
                                                         <ui:DataGrid Style="{StaticResource TabDataGrid}"
                                                                   CellStyle="{StaticResource ShadcnCellStyle}"
-                                                                  ItemsSource="{Binding Payload.Scanners}">
+                                                                  ItemsSource="{Binding Payload.Scanners}"
+                                                                  Visibility="{Binding Payload.Scanners.Count, Converter={StaticResource IntToVis}}">
                                                             <DataGrid.Columns>
                                                                 <DataGridTextColumn Header="Scanner Name"
                                                                                     Binding="{Binding Name}" Width="4*"
@@ -750,14 +863,13 @@
                                                                 <DataGridTemplateColumn Header="Status" Width="1.5*">
                                                                     <DataGridTemplateColumn.CellTemplate>
                                                                         <DataTemplate>
-                                                                            <Border CornerRadius="4" Padding="8,3"
-                                                                                    HorizontalAlignment="Left"
-                                                                                    VerticalAlignment="Center"
-                                                                                    Background="{Binding Status, Converter={StaticResource StatusToBrush}}">
+                                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0">
+                                                                                <Ellipse Width="7" Height="7"
+                                                                                         Fill="{Binding Status, Converter={StaticResource StatusToDotBrush}}"
+                                                                                         Margin="0,0,8,0" VerticalAlignment="Center"/>
                                                                                 <TextBlock Text="{Binding Status}" FontSize="11.5"
-                                                                                           Foreground="{Binding Status, Converter={StaticResource StatusToTextBrush}}"
-                                                                                           FontWeight="SemiBold"/>
-                                                                            </Border>
+                                                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                                            </StackPanel>
                                                                         </DataTemplate>
                                                                     </DataGridTemplateColumn.CellTemplate>
                                                                 </DataGridTemplateColumn>
@@ -774,25 +886,28 @@
                                             <!-- Connected Clients Tab -->
                                             <TabItem>
                                                 <TabItem.Header>
-                                                    <StackPanel Orientation="Horizontal">
-                                                        <ui:SymbolIcon Symbol="People24" FontSize="13" Margin="0,0,6,0"/>
-                                                        <TextBlock Text="Connected Clients"/>
-                                                        <Border CornerRadius="9" Padding="7,1" Margin="6,0,0,0"
-                                                                Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                                                                Visibility="{Binding Payload.ActiveClients.Count, Converter={StaticResource IntToVis}}">
-                                                            <TextBlock Text="{Binding Payload.ActiveClients.Count, Mode=OneWay}"
-                                                                       FontSize="11" FontWeight="SemiBold"
-                                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                        </Border>
-                                                    </StackPanel>
-                                                </TabItem.Header>
+                                                     <StackPanel Orientation="Horizontal">
+                                                         <ui:SymbolIcon Symbol="People24" FontSize="13" Margin="0,0,6,0"/>
+                                                         <TextBlock Text="Connected Clients"/>
+                                                         <Border CornerRadius="10" Padding="6,1.5" Margin="6,0,0,0"
+                                                                 Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                                 BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                                 BorderThickness="1"
+                                                                 Visibility="{Binding Payload.ActiveClients.Count, Converter={StaticResource IntToVis}}">
+                                                             <TextBlock Text="{Binding Payload.ActiveClients.Count, Mode=OneWay}"
+                                                                        FontSize="10.5" FontWeight="Bold"
+                                                                        Foreground="{Binding RelativeSource={RelativeSource AncestorType=TabItem}, Path=Foreground}"/>
+                                                         </Border>
+                                                     </StackPanel>
+                                                 </TabItem.Header>
                                                 <Border Style="{StaticResource TabContentPanel}">
                                                     <Grid>
                                                         <TextBlock Text="No connected clients" Style="{StaticResource TabEmptyState}"
                                                                    Visibility="{Binding Payload.ActiveClients.Count, Converter={StaticResource IntToVis}, ConverterParameter=Inverse}"/>
                                                         <ui:DataGrid Style="{StaticResource TabDataGrid}"
                                                                   CellStyle="{StaticResource ShadcnCellStyle}"
-                                                                  ItemsSource="{Binding Payload.ActiveClients}">
+                                                                  ItemsSource="{Binding Payload.ActiveClients}"
+                                                                  Visibility="{Binding Payload.ActiveClients.Count, Converter={StaticResource IntToVis}}">
                                                             <DataGrid.Columns>
                                                                 <DataGridTextColumn Header="Client IP"
                                                                                     Binding="{Binding Ip}" Width="1*"
@@ -810,25 +925,28 @@
                                             <!-- Job Activity Tab -->
                                             <TabItem>
                                                 <TabItem.Header>
-                                                    <StackPanel Orientation="Horizontal">
-                                                        <ui:SymbolIcon Symbol="ClipboardTaskListLtr24" FontSize="13" Margin="0,0,6,0"/>
-                                                        <TextBlock Text="Job Activity"/>
-                                                        <Border CornerRadius="9" Padding="7,1" Margin="6,0,0,0"
-                                                                Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                                                                Visibility="{Binding Payload.RecentJobs.Count, Converter={StaticResource IntToVis}}">
-                                                            <TextBlock Text="{Binding Payload.RecentJobs.Count, Mode=OneWay}"
-                                                                       FontSize="11" FontWeight="SemiBold"
-                                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                        </Border>
-                                                    </StackPanel>
-                                                </TabItem.Header>
+                                                     <StackPanel Orientation="Horizontal">
+                                                         <ui:SymbolIcon Symbol="ClipboardTaskListLtr24" FontSize="13" Margin="0,0,6,0"/>
+                                                         <TextBlock Text="Job Activity"/>
+                                                         <Border CornerRadius="10" Padding="6,1.5" Margin="6,0,0,0"
+                                                                 Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                                 BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                                 BorderThickness="1"
+                                                                 Visibility="{Binding Payload.RecentJobs.Count, Converter={StaticResource IntToVis}}">
+                                                             <TextBlock Text="{Binding Payload.RecentJobs.Count, Mode=OneWay}"
+                                                                        FontSize="10.5" FontWeight="Bold"
+                                                                        Foreground="{Binding RelativeSource={RelativeSource AncestorType=TabItem}, Path=Foreground}"/>
+                                                         </Border>
+                                                     </StackPanel>
+                                                 </TabItem.Header>
                                                 <Border Style="{StaticResource TabContentPanel}">
                                                     <Grid>
                                                         <TextBlock Text="No recent job activity" Style="{StaticResource TabEmptyState}"
                                                                    Visibility="{Binding Payload.RecentJobs.Count, Converter={StaticResource IntToVis}, ConverterParameter=Inverse}"/>
                                                         <ui:DataGrid Style="{StaticResource TabDataGrid}"
                                                                   CellStyle="{StaticResource ShadcnCellStyle}"
-                                                                  ItemsSource="{Binding Payload.RecentJobs}">
+                                                                  ItemsSource="{Binding Payload.RecentJobs}"
+                                                                  Visibility="{Binding Payload.RecentJobs.Count, Converter={StaticResource IntToVis}}">
                                                             <DataGrid.Columns>
                                                                 <DataGridTextColumn Header="Time"
                                                                                     Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}"
@@ -837,7 +955,8 @@
                                                                 <DataGridTemplateColumn Header="Type" Width="0.8*">
                                                                     <DataGridTemplateColumn.CellTemplate>
                                                                         <DataTemplate>
-                                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">                                                                <!-- Print job icon -->
+                                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0">
+                                                                <!-- Print job icon -->
                                                                 <ui:SymbolIcon Symbol="Print24" FontSize="13" Margin="0,0,5,0"
                                                                                Foreground="{DynamicResource TextFillColorTertiaryBrush}">
                                                                     <ui:SymbolIcon.Style>
@@ -883,14 +1002,13 @@
                                                                 <DataGridTemplateColumn Header="Status" Width="1.5*">
                                                                     <DataGridTemplateColumn.CellTemplate>
                                                                         <DataTemplate>
-                                                                            <Border CornerRadius="4" Padding="8,3"
-                                                                                    HorizontalAlignment="Left"
-                                                                                    VerticalAlignment="Center"
-                                                                                    Background="{Binding Status, Converter={StaticResource StatusToBrush}}">
+                                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0">
+                                                                                <Ellipse Width="7" Height="7"
+                                                                                         Fill="{Binding Status, Converter={StaticResource StatusToDotBrush}}"
+                                                                                         Margin="0,0,8,0" VerticalAlignment="Center"/>
                                                                                 <TextBlock Text="{Binding Status}" FontSize="11.5"
-                                                                                           Foreground="{Binding Status, Converter={StaticResource StatusToTextBrush}}"
-                                                                                           FontWeight="SemiBold"/>
-                                                                            </Border>
+                                                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                                            </StackPanel>
                                                                         </DataTemplate>
                                                                     </DataGridTemplateColumn.CellTemplate>
                                                                 </DataGridTemplateColumn>
@@ -908,11 +1026,13 @@
                                                                        Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
                                                         <TextBlock Text="Errors"
                                                                    Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
-                                                        <Border CornerRadius="9" Padding="7,1" Margin="6,0,0,0"
-                                                                Background="#1AEF4444"
-                                                                Visibility="{Binding Payload.Errors.Count, Converter={StaticResource IntToVis}}">
+                                                        <Border CornerRadius="10" Padding="6,1.5" Margin="6,0,0,0"
+                                                                 Background="#1AEF4444"
+                                                                 BorderBrush="#33EF4444"
+                                                                 BorderThickness="1"
+                                                                 Visibility="{Binding Payload.Errors.Count, Converter={StaticResource IntToVis}}">
                                                             <TextBlock Text="{Binding Payload.Errors.Count, Mode=OneWay}"
-                                                                       FontSize="11" FontWeight="SemiBold"
+                                                                       FontSize="10.5" FontWeight="Bold"
                                                                        Foreground="{DynamicResource SystemFillColorCriticalBrush}"/>
                                                         </Border>
                                                     </StackPanel>
@@ -923,7 +1043,8 @@
                                                                    Visibility="{Binding Payload.Errors.Count, Converter={StaticResource IntToVis}, ConverterParameter=Inverse}"/>
                                                         <ui:DataGrid Style="{StaticResource TabDataGrid}"
                                                                   CellStyle="{StaticResource ShadcnCellStyle}"
-                                                                  ItemsSource="{Binding Payload.Errors}">
+                                                                  ItemsSource="{Binding Payload.Errors}"
+                                                                  Visibility="{Binding Payload.Errors.Count, Converter={StaticResource IntToVis}}">
                                                             <DataGrid.Columns>
                                                                 <DataGridTextColumn Header="Time"
                                                                                     Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}"
