@@ -103,20 +103,56 @@ namespace ShaPrint.Core.Network
                 throw new InvalidDataException(
                     $"TargetPrinterName too long: {payload.TargetPrinterName.Length} bytes (max {Constants.MaxTargetPrinterNameBytes}).");
 
-            payload.DocumentName = br.ReadString();
-            if (payload.DocumentName.Length > 1024)
+            // Detect format version (legacy/v1 vs new/v2 with DocumentName)
+            long posBeforeDetect = ms.Position;
+            bool parsedAsNewFormat = false;
+
+            try
             {
-                payload.DocumentName = payload.DocumentName.Substring(0, 1024);
+                payload.DocumentName = br.ReadString();
+                long remainingAfterDocName = ms.Length - ms.Position;
+                if (remainingAfterDocName >= 4)
+                {
+                    int dataLength = br.ReadInt32();
+                    if (dataLength >= 0 && dataLength <= Constants.MaxPrintJobBytes && dataLength == remainingAfterDocName - 4)
+                    {
+                        payload.SpoolData = br.ReadBytes(dataLength);
+                        if (payload.DocumentName.Length > 1024)
+                        {
+                            payload.DocumentName = payload.DocumentName.Substring(0, 1024);
+                        }
+                        parsedAsNewFormat = true;
+                    }
+                }
+            }
+            catch
+            {
+                // Fallback to legacy parsing below
             }
 
-            int dataLength = br.ReadInt32();
-            if (dataLength < 0)
-                throw new InvalidDataException($"Negative spool data length: {dataLength}.");
-            if (dataLength > Constants.MaxPrintJobBytes)
-                throw new InvalidDataException(
-                    $"Spool data exceeds limit: {dataLength} bytes (max {Constants.MaxPrintJobBytes}).");
+            if (!parsedAsNewFormat)
+            {
+                // Reset position to after TargetPrinterName
+                ms.Position = posBeforeDetect;
+                long remainingAfterReset = ms.Length - ms.Position;
+                if (remainingAfterReset >= 4)
+                {
+                    int dataLength = br.ReadInt32();
+                    if (dataLength < 0)
+                        throw new InvalidDataException($"Negative spool data length: {dataLength}.");
+                    if (dataLength > Constants.MaxPrintJobBytes)
+                        throw new InvalidDataException(
+                            $"Spool data exceeds limit: {dataLength} bytes (max {Constants.MaxPrintJobBytes}).");
 
-            payload.SpoolData = br.ReadBytes(dataLength);
+                    payload.DocumentName = string.Empty;
+                    payload.SpoolData = br.ReadBytes(dataLength);
+                }
+                else
+                {
+                    throw new InvalidDataException("Invalid print job payload format.");
+                }
+            }
+
             return payload;
         }
     }

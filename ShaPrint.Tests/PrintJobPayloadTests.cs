@@ -230,4 +230,45 @@ public class PrintJobPayloadTests
         Assert.Equal(1024, recovered.DocumentName.Length);
         Assert.Equal(new string('A', 1024), recovered.DocumentName);
     }
+
+    [Fact]
+    public async Task ReadAsync_LegacyPayloadWithoutDocumentName_ParsesSuccessfullyWithEmptyDocumentName()
+    {
+        var printerName = "LegacyPrinter";
+        var spoolData = Encoding.UTF8.GetBytes("Legacy Spool Data");
+
+        // Manually build legacy inner payload
+        byte[] innerPayload;
+        using (var ms = new MemoryStream())
+        using (var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
+        {
+            bw.Write(printerName);
+            bw.Write(spoolData.Length);
+            bw.Write(spoolData);
+            bw.Flush();
+            innerPayload = ms.ToArray();
+        }
+
+        // Encrypt with AES-GCM
+        byte[] encryptedBlob = CryptoHelper.EncryptAesGcm(innerPayload);
+
+        // Build the wire payload
+        using var wireMs = new MemoryStream();
+        using (var bw = new BinaryWriter(wireMs, Encoding.UTF8, leaveOpen: true))
+        {
+            bw.Write(encryptedBlob.Length);
+            bw.Write(encryptedBlob);
+            bw.Flush();
+        }
+
+        wireMs.Position = 0;
+
+        // Act
+        var payload = await PrintJobPayload.ReadAsync(wireMs);
+
+        // Assert
+        Assert.Equal(printerName, payload.TargetPrinterName);
+        Assert.Equal(string.Empty, payload.DocumentName);
+        Assert.Equal(spoolData, payload.SpoolData);
+    }
 }
