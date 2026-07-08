@@ -18,43 +18,7 @@ namespace ShaPrint.WpfApp.Utils
 
                 if (enable)
                 {
-                    string currentUser = System.Security.Principal.WindowsIdentity.GetCurrent().Name;
-                    string escapedUser = System.Security.SecurityElement.Escape(currentUser);
-                    string escapedExe = System.Security.SecurityElement.Escape(exePath);
-
-                    string xmlContent = $@"<?xml version=""1.0"" encoding=""UTF-16""?>
-<Task version=""1.2"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-    </LogonTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id=""Author"">
-      <UserId>{escapedUser}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>HighestAvailable</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
-    <RunOnlyIfIdle>false</RunOnlyIfIdle>
-    <WakeToRun>false</WakeToRun>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>7</Priority>
-  </Settings>
-  <Actions Context=""Author"">
-    <Exec>
-      <Command>{escapedExe}</Command>
-      <Arguments>--startup</Arguments>
-    </Exec>
-  </Actions>
-</Task>";
+                    string xmlContent = GenerateXml(exePath);
 
                     string tempXmlPath = Path.Combine(Path.GetTempPath(), "ShaPrint_Startup.xml");
                     File.WriteAllText(tempXmlPath, xmlContent, System.Text.Encoding.Unicode);
@@ -107,6 +71,48 @@ namespace ShaPrint.WpfApp.Utils
             {
                 AppLogger.Error("[SYSTEM] Failed to change startup settings: " + ex.Message);
             }
+        }
+
+        internal static string GenerateXml(string exePath)
+        {
+            string exeDir = Path.GetDirectoryName(exePath) ?? string.Empty;
+            string escapedExe = System.Security.SecurityElement.Escape(exePath);
+            string escapedDir = System.Security.SecurityElement.Escape(exeDir);
+
+            return $@"<?xml version=""1.0"" encoding=""UTF-16""?>
+<Task version=""1.2"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id=""Author"">
+      <GroupId>S-1-5-32-545</GroupId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context=""Author"">
+    <Exec>
+      <Command>&quot;{escapedExe}&quot;</Command>
+      <Arguments>--startup</Arguments>
+      <WorkingDirectory>{escapedDir}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>";
         }
 
         public static bool IsStartupEnabled()
