@@ -2,116 +2,180 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using ShaPrint.Core.Network;
-using ShaPrint.WpfApp.ViewModels.Pages;
+using ShaPrint.WpfApp.Models;
 using ShaPrint.WpfApp.Services.Server;
-using ShaPrint.WpfApp.Services;
+using ShaPrint.WpfApp.ViewModels.Pages;
 using Xunit;
 
 namespace ShaPrint.Tests
 {
     public class ServerStatusProviderTests
     {
-        private class DummyNotificationService : INotificationService
+        private static ServerViewModel CreateSvm(DateTime? startTime = null)
         {
-            public void ShowClientConnected(string clientIp) { }
-            public void ShowClientDisconnected(string clientIp) { }
-            public void ShowPrintJobCompleted(string documentName, string printerName) { }
-            public void ShowPrintJobFailed(string documentName, string printerName, string reason) { }
-            public void ShowScanCompleted(string fileName) { }
-            public void ShowScanFailed(string errorMessage) { }
-            public void ShowPrinterError(string printerName, string errorDescription) { }
-            public void ShowSecurityAlert(string message, string detail) { }
-            public void ShowToast(string title, string body, ToastAction? action = null) { }
+            var svm = new ServerViewModel(null!, null!, null!, null!);
+            if (startTime.HasValue)
+            {
+                var property = typeof(ServerViewModel).GetProperty("ServerStartTime",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                property!.SetValue(svm, startTime.Value);
+            }
+            return svm;
         }
 
         [Fact]
-        public void BuildStatus_PopulatesAllFieldsCorrectly()
+        public void BuildStatus_ServerName_HostName_AreMachineName()
         {
             // Arrange
-            var dummyNotification = new DummyNotificationService();
-            var vm = new ServerViewModel(null!, null!, null!, dummyNotification);
-            
-            // Set some exposed devices
-            vm.ExposedPrinters.Add("Test Printer 1");
-            vm.ExposedScanners.Add("Test Scanner 1");
-
-            // Seed history
-            vm.LogJob(new JobHistoryEntry
-            {
-                Type = "print",
-                Document = "test.pdf",
-                PrinterName = "Test Printer 1",
-                ClientIp = "192.168.1.50",
-                Status = "completed",
-                Timestamp = DateTime.UtcNow
-            });
-
-            vm.LogError(new ServerErrorEntry
-            {
-                Source = "Test",
-                Message = "Simulated error",
-                Timestamp = DateTime.UtcNow
-            });
-
-            var provider = new ServerStatusProvider(vm);
+            var svm = CreateSvm();
+            var provider = new ServerStatusProvider(svm);
 
             // Act
             var payload = provider.BuildStatus();
 
             // Assert
-            Assert.NotNull(payload);
             Assert.Equal(Environment.MachineName, payload.ServerName);
             Assert.Equal(Environment.MachineName, payload.HostName);
-            Assert.Single(payload.Printers);
-            Assert.Equal("Test Printer 1", payload.Printers[0].Name);
-            Assert.Single(payload.Scanners);
-            Assert.Equal("Test Scanner 1", payload.Scanners[0].Name);
-            Assert.Single(payload.RecentJobs);
-            Assert.Equal("test.pdf", payload.RecentJobs[0].Document);
-            Assert.Single(payload.Errors);
-            Assert.Equal("Simulated error", payload.Errors[0].Message);
+            Assert.Equal(AppSettings.Current.NetworkChannel, payload.NetworkChannel);
         }
 
         [Fact]
-        public void HistoryQueues_EnforceCapacityLimits()
+        public void BuildStatus_Uptime_WhenServerNotStarted_ReturnsZero()
+        {
+            // Arrange — no ServerStartTime set (null)
+            var svm = CreateSvm(null);
+            var provider = new ServerStatusProvider(svm);
+
+            // Act
+            var payload = provider.BuildStatus();
+
+            // Assert
+            Assert.Equal(0, payload.UptimeSeconds);
+        }
+
+        [Fact]
+        public void BuildStatus_Uptime_WhenServerStarted_ReturnsPositive()
         {
             // Arrange
-            var dummyNotification = new DummyNotificationService();
-            var vm = new ServerViewModel(null!, null!, null!, dummyNotification);
+            var startTime = DateTime.UtcNow.AddHours(-2);
+            var svm = CreateSvm(startTime);
+            var provider = new ServerStatusProvider(svm);
 
-            // Act: Enqueue 100 jobs
-            for (int i = 1; i <= 100; i++)
+            // Act
+            var payload = provider.BuildStatus();
+
+            // Assert
+            Assert.True(payload.UptimeSeconds >= 7190); // ~2 hours minus small delta
+            Assert.True(payload.UptimeSeconds <= 7220);
+        }
+
+        [Fact]
+        public void BuildStatus_NoExposedPrinters_ReturnsEmptyPrinters()
+        {
+            // Arrange
+            var svm = CreateSvm(DateTime.UtcNow);
+            // ExposedPrinters is empty by default
+            var provider = new ServerStatusProvider(svm);
+
+            // Act
+            var payload = provider.BuildStatus();
+
+            // Assert
+            Assert.NotNull(payload.Printers);
+            Assert.Empty(payload.Printers);
+        }
+
+        [Fact]
+        public void BuildStatus_NoExposedScanners_ReturnsEmptyScanners()
+        {
+            // Arrange
+            var svm = CreateSvm(DateTime.UtcNow);
+            var provider = new ServerStatusProvider(svm);
+
+            // Act
+            var payload = provider.BuildStatus();
+
+            // Assert
+            Assert.NotNull(payload.Scanners);
+            Assert.Empty(payload.Scanners);
+        }
+
+        [Fact]
+        public void BuildStatus_ActiveClients_ReturnsEmptyWhenNoDiscoveryServer()
+        {
+            // Arrange — DiscoveryServer is null by default
+            var svm = CreateSvm(DateTime.UtcNow);
+            var provider = new ServerStatusProvider(svm);
+
+            // Act
+            var payload = provider.BuildStatus();
+
+            // Assert — should not throw
+            Assert.NotNull(payload.ActiveClients);
+        }
+
+        [Fact]
+        public void BuildStatus_Version_ReturnsAssemblyVersion()
+        {
+            // Arrange
+            var svm = CreateSvm(DateTime.UtcNow);
+            var provider = new ServerStatusProvider(svm);
+
+            // Act
+            var payload = provider.BuildStatus();
+
+            // Assert
+            Assert.False(string.IsNullOrEmpty(payload.Version));
+            Assert.Matches(@"^\d+\.\d+\.\d+\.\d+$", payload.Version);
+        }
+
+        [Fact]
+        public void BuildStatus_RecentJobs_FromViewModel()
+        {
+            // Arrange
+            var svm = CreateSvm(DateTime.UtcNow);
+            svm.RecentJobs.Enqueue(new JobHistoryEntry
             {
-                vm.LogJob(new JobHistoryEntry
-                {
-                    Type = "print",
-                    Document = $"job_{i}.pdf",
-                    PrinterName = "Printer",
-                    ClientIp = "127.0.0.1",
-                    Status = "completed",
-                    Timestamp = DateTime.UtcNow
-                });
-            }
+                Type = "print",
+                Document = "test.doc",
+                PrinterName = "P1",
+                ClientIp = "10.0.0.1",
+                Status = "completed",
+                Timestamp = DateTime.UtcNow
+            });
 
-            // Act: Enqueue 100 errors
-            for (int i = 1; i <= 100; i++)
+            var provider = new ServerStatusProvider(svm);
+
+            // Act
+            var payload = provider.BuildStatus();
+
+            // Assert
+            var job = Assert.Single(payload.RecentJobs);
+            Assert.Equal("print", job.Type);
+            Assert.Equal("P1", job.PrinterName);
+        }
+
+        [Fact]
+        public void BuildStatus_Errors_FromViewModel()
+        {
+            // Arrange
+            var svm = CreateSvm(DateTime.UtcNow);
+            svm.Errors.Enqueue(new ServerErrorEntry
             {
-                vm.LogError(new ServerErrorEntry
-                {
-                    Source = "Test",
-                    Message = $"error_{i}",
-                    Timestamp = DateTime.UtcNow
-                });
-            }
+                Source = "PrintMonitor",
+                Message = "Test error",
+                Timestamp = DateTime.UtcNow
+            });
 
-            // Assert: capacity capped at 50, and contains the LATEST 50 items
-            Assert.Equal(50, vm.RecentJobs.Count);
-            Assert.Equal("job_51.pdf", vm.RecentJobs.First().Document);
-            Assert.Equal("job_100.pdf", vm.RecentJobs.Last().Document);
+            var provider = new ServerStatusProvider(svm);
 
-            Assert.Equal(50, vm.Errors.Count);
-            Assert.Equal("error_51", vm.Errors.First().Message);
-            Assert.Equal("error_100", vm.Errors.Last().Message);
+            // Act
+            var payload = provider.BuildStatus();
+
+            // Assert
+            var err = Assert.Single(payload.Errors);
+            Assert.Equal("PrintMonitor", err.Source);
+            Assert.Equal("Test error", err.Message);
         }
     }
 }

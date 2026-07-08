@@ -21,6 +21,8 @@ namespace ShaPrint.WpfApp.Services.Monitor
         private readonly DiscoveryClient _discoveryClient;
         private CancellationTokenSource? _cts;
         private bool _isRefreshing = false;
+        private readonly List<Task> _inFlightTasks = new();
+        private readonly object _inFlightLock = new();
 
         public MonitorService(MonitorViewModel monitorViewModel)
         {
@@ -42,6 +44,24 @@ namespace ShaPrint.WpfApp.Services.Monitor
             if (_cts == null) return;
             _cts.Cancel();
             _cts = null;
+
+            Task? waitTask;
+            lock (_inFlightLock)
+            {
+                waitTask = _inFlightTasks.Count > 0
+                    ? Task.WhenAll(_inFlightTasks.ToArray())
+                    : null;
+            }
+            if (waitTask != null)
+            {
+                try { waitTask.GetAwaiter().GetResult(); }
+                catch (OperationCanceledException) { /* expected */ }
+                catch (Exception ex)
+                {
+                    AppLogger.Error("[MONITOR SERVICE] Error awaiting in-flight tasks during stop", ex);
+                }
+            }
+
             AppLogger.Log("[MONITOR SERVICE] Service stopped.");
         }
 
@@ -52,12 +72,15 @@ namespace ShaPrint.WpfApp.Services.Monitor
             AppLogger.Log("[MONITOR SERVICE] Triggering manual full refresh (with unicast sweep)...");
             try
             {
+                var cts = _cts;
+                var token = cts?.Token ?? CancellationToken.None;
+
                 // Unicast sweep allowed on manual refresh to find AP isolated servers
                 var discovered = await _discoveryClient.DiscoverServersAsync(
                     skipUnicastSweep: false, 
                     requestMessage: Constants.MonitorDiscoveryRequestMessage);
                 
-                await QueryAllServersStaggeredAsync(discovered, _cts?.Token ?? CancellationToken.None);
+                await QueryAllServersStaggeredAsync(discovered, token);
             }
             catch (Exception ex)
             {
@@ -71,17 +94,29 @@ namespace ShaPrint.WpfApp.Services.Monitor
 
         private async Task PollLoopAsync(CancellationToken token)
         {
+            // --- Wait for any ongoing manual refresh to complete ---
+            while (_isRefreshing && !token.IsCancellationRequested)
+            {
+                try { await Task.Delay(500, token); } catch (OperationCanceledException) { return; }
+            }
+
             // Initial poll at startup
             try
             {
+                _isRefreshing = true;
                 var initialDiscovered = await _discoveryClient.DiscoverServersAsync(
                     skipUnicastSweep: false, 
                     requestMessage: Constants.MonitorDiscoveryRequestMessage);
                 await QueryAllServersStaggeredAsync(initialDiscovered, token);
             }
+            catch (OperationCanceledException) { /* Graceful shutdown */ }
             catch (Exception ex)
             {
                 AppLogger.Error("[MONITOR SERVICE] Initial discovery failed", ex);
+            }
+            finally
+            {
+                _isRefreshing = false;
             }
 
             while (!token.IsCancellationRequested)
@@ -113,10 +148,19 @@ namespace ShaPrint.WpfApp.Services.Monitor
 
             foreach (var server in discoveredServers)
             {
-                if (token.IsCancellationRequested) break;
+                Task queryTask;
+                lock (_inFlightLock)
+                {
+                    if (token.IsCancellationRequested) break;
 
-                // Fire and forget status check for each server
-                _ = QueryServerStatusAsync(server.ServerName, server.IpAddress, token);
+                    queryTask = QueryServerStatusAsync(server.ServerName, server.IpAddress, token);
+                    _inFlightTasks.Add(queryTask);
+                }
+
+                _ = queryTask.ContinueWith(t => 
+                { 
+                    lock (_inFlightLock) _inFlightTasks.Remove(queryTask); 
+                }, TaskContinuationOptions.ExecuteSynchronously);
 
                 // Stagger requests by 1 second to avoid network and CPU spikes
                 try
@@ -180,6 +224,10 @@ namespace ShaPrint.WpfApp.Services.Monitor
                     payload.HostName = hostName; // Normalise hostname
                     _monitorViewModel.UpdateServerStatus(payload, ipAddress, isOnline: true);
                 }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Graceful cancellation on service stop, ignore
             }
             catch (Exception ex)
             {
