@@ -89,7 +89,6 @@ namespace ShaPrint.WpfApp.Utils
   <Principals>
     <Principal id=""Author"">
       <GroupId>S-1-5-32-545</GroupId>
-      <LogonType>InteractiveToken</LogonType>
       <RunLevel>HighestAvailable</RunLevel>
     </Principal>
   </Principals>
