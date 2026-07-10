@@ -62,6 +62,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         private List<InstalledPrinterConfig> _installedPrinters = new();
         private List<PipeListener> _activeListeners = new();
+        private ServerReachabilityTracker? _tracker;
 
         [ObservableProperty]
         private string _targetIp = "";
@@ -92,6 +93,84 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             AppLogger.OnLog += AppLogger_OnLog;
 
             LoadConfiguration();
+            InitializeTracker();
+        }
+
+        private void InitializeTracker()
+        {
+            _tracker = new ServerReachabilityTracker(
+                configProvider: () => _installedPrinters,
+                scanner: () => _discoveryClient.DiscoverServersAsync(targetIp: null, timeoutMs: 2000),
+                onIdentityChanged: OnServerIdentityChanged,
+                onSuspiciousMatch: OnSuspiciousMatch,
+                debounceWindow: TimeSpan.FromSeconds(30)
+            );
+
+            // Subscribe every existing + future PipeListener's OnServerUnreachable to the tracker.
+            foreach (var l in _activeListeners) l.OnServerUnreachable += TriggerTrackerRescan;
+        }
+
+        private void TriggerTrackerRescan()
+        {
+            // Fire-and-forget. Tracker handles its own debounce + cancellation.
+            _ = _tracker?.RequestRescanAsync(ServerReachabilityTracker.RescanReason.PrintFailed, CancellationToken.None);
+        }
+
+        private void RestartListener(InstalledPrinterConfig cfg)
+        {
+            var oldListener = _activeListeners.FirstOrDefault(l => l.PipeName == cfg.PipeName);
+            if (oldListener != null)
+            {
+                oldListener.OnServerUnreachable -= TriggerTrackerRescan;
+                oldListener.Stop();
+            }
+
+            // 200ms grace for the OS to release the named pipe handle.
+            Thread.Sleep(200);
+
+            var fresh = new PipeListener(cfg.PipeName, cfg.ServerIp, cfg.TargetPrinterName, cfg.VirtualPrinterName);
+            fresh.OnServerUnreachable += TriggerTrackerRescan;
+            fresh.Start();
+
+            if (oldListener != null)
+            {
+                int idx = _activeListeners.IndexOf(oldListener);
+                _activeListeners[idx] = fresh;
+            }
+            else
+            {
+                _activeListeners.Add(fresh);
+            }
+        }
+
+        private void OnServerIdentityChanged(ServerIdentityChangedArgs args)
+        {
+            var cfg = _installedPrinters.FirstOrDefault(c => c.PipeName == args.PipeName);
+            if (cfg != null) RestartListener(cfg);
+
+            SaveConfiguration();
+            Application.Current?.Dispatcher.InvokeAsync(() =>
+            {
+                _snackbarService.Show(
+                    "Server IP updated",
+                    $"Server '{args.ServerName}' IP updated: {args.OldIp} → {args.NewIp}",
+                    ControlAppearance.Info,
+                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ArrowSync24),
+                    TimeSpan.FromSeconds(5));
+            });
+        }
+
+        private void OnSuspiciousMatch(SuspiciousMatchArgs args)
+        {
+            Application.Current?.Dispatcher.InvokeAsync(() =>
+            {
+                _snackbarService.Show(
+                    "Server identity changed",
+                    $"Server identity changed for '{args.ExpectedServerName}'. Please remove and reinstall this virtual printer.",
+                    ControlAppearance.Caution,
+                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Warning24),
+                    TimeSpan.FromSeconds(7));
+            });
         }
 
         private void AppLogger_OnLog(string msg)
@@ -196,6 +275,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 if (result.Success)
                 {
                     var listener = new PipeListener(pipeName, serverIp, printerName, virtualPrinterName);
+                    listener.OnServerUnreachable += TriggerTrackerRescan;
                     listener.Start();
                     _activeListeners.Add(listener);
 
@@ -277,6 +357,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     var listener = _activeListeners.FirstOrDefault(l => l.PipeName == config.PipeName);
                     if (listener != null)
                     {
+                        listener.OnServerUnreachable -= TriggerTrackerRescan;
                         listener.Stop();
                         _activeListeners.Remove(listener);
                     }
@@ -328,6 +409,19 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         var listener = new PipeListener(config.PipeName, config.ServerIp, config.TargetPrinterName, config.VirtualPrinterName);
                         listener.Start();
                         _activeListeners.Add(listener);
+                    }
+
+                    if (_installedPrinters.Count > 0)
+                    {
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(2000);
+                            if (_tracker == null) InitializeTracker();
+                            if (_tracker != null)
+                            {
+                                await _tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
+                            }
+                        });
                     }
                 }
             }
