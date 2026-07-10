@@ -239,6 +239,44 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 }
             }
 
+            // Unicast rescan for any saved config entry that wasn't represented in the
+            // broadcast results. This catches the "server IP changed, but we are still
+            // pointed at the old IP via the saved config" case.
+            var matchedVirtualNames = new HashSet<string>(
+                DiscoveredPrinters.Select(p => p.DisplayName),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var cfg in _installedPrinters.ToList())
+            {
+                string displayName = $"[{ServerReachabilityTracker.ExtractServerName(cfg.VirtualPrinterName)}] {cfg.TargetPrinterName}";
+                if (matchedVirtualNames.Contains(displayName)) continue;
+                if (string.IsNullOrEmpty(cfg.ServerIp)) continue;
+
+                var unicast = await _discoveryClient.DiscoverServersAsync(cfg.ServerIp, timeoutMs: 3000);
+                if (unicast.Count == 0) continue;
+
+                var match = unicast.FirstOrDefault(r =>
+                    (!string.IsNullOrEmpty(cfg.ServerId) && r.ServerId == cfg.ServerId) ||
+                    (string.IsNullOrEmpty(cfg.ServerId) && string.Equals(r.ServerName, ServerReachabilityTracker.ExtractServerName(cfg.VirtualPrinterName), StringComparison.OrdinalIgnoreCase)));
+
+                if (match == null) continue;
+
+                if (!string.Equals(match.IpAddress, cfg.ServerIp, StringComparison.Ordinal))
+                {
+                    var oldIp = cfg.ServerIp;
+                    cfg.ServerIp = match.IpAddress;
+                    SaveConfiguration();
+                    
+                    RestartListener(cfg);
+
+                    _snackbarService.Show(
+                        "Server IP updated",
+                        $"Server '{match.ServerName}' IP updated: {oldIp} → {match.IpAddress}",
+                        ControlAppearance.Info,
+                        new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ArrowSync24),
+                        TimeSpan.FromSeconds(5));
+                }
+            }
+
             StatusText = $"Found {discoveredServers.Count} server(s).";
             IsScanning = false;
         }
