@@ -19,5 +19,13 @@ namespace ShaPrint.Core.Network
         /// </summary>
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? HmacSignature { get; set; }
+
+        /// <summary>
+        /// Stable per-server UUID generated once on first start, persisted in ServerConfig.json.
+        /// Null for old servers (pre-ServerId). Clients use this as the primary match key.
+        /// Omitted from the JSON when null so old clients ignore it.
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? ServerId { get; set; }
     }
 }
