@@ -78,27 +78,68 @@ namespace ShaPrint.Client
                 {
                     string safePrinterName = printerName.Replace("'", "''");
                     string safePipeName = pipeName.Replace("'", "''");
-                    
-                    // Clear any stuck print jobs to prevent "ghost printers" (Pending Deletion)
+
+                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Attempting to remove printer '{safePrinterName}'...");
+
+                    // Step 1: Aggressively clear all stuck print jobs to prevent "ghost printers" (Pending Deletion)
+                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Clearing print jobs for '{safePrinterName}'...");
                     RunPowerShell($"Get-PrintJob -PrinterName '{safePrinterName}' -ErrorAction SilentlyContinue | Remove-PrintJob -ErrorAction SilentlyContinue");
 
-                    var removeResult = RunPowerShell($"Remove-Printer -Name '{safePrinterName}'");
-                    
+                    // Give Windows time to process job removal
+                    System.Threading.Thread.Sleep(500);
+
+                    // Step 2: Remove the printer
+                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Removing printer '{safePrinterName}'...");
+                    var removeResult = RunPowerShell($"Remove-Printer -Name '{safePrinterName}' -ErrorAction SilentlyContinue");
+
+                    // Step 3: Remove the printer port
                     if (!string.IsNullOrEmpty(safePipeName))
                     {
-                        RunPowerShell($"Remove-PrinterPort -Name '{safePipeName}'");
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Removing printer port '{safePipeName}'...");
+                        RunPowerShell($"Remove-PrinterPort -Name '{safePipeName}' -ErrorAction SilentlyContinue");
                     }
 
-                    // If it was already removed, we can consider it a success
-                    if (!removeResult.Success && removeResult.ErrorMessage.Contains("was not found"))
+                    // Step 4: Verify printer is actually removed
+                    System.Threading.Thread.Sleep(500);
+                    var verifyResult = RunPowerShell($"Get-Printer -Name '{safePrinterName}' -ErrorAction SilentlyContinue");
+
+                    if (verifyResult.Success && !string.IsNullOrWhiteSpace(verifyResult.ErrorMessage))
                     {
-                        return (true, string.Empty);
+                        // Printer still exists! Try restarting Print Spooler to force release
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Printer still exists after removal. Restarting Print Spooler...");
+
+                        var stopSpooler = RunPowerShell("Stop-Service -Name Spooler -Force -ErrorAction SilentlyContinue");
+                        System.Threading.Thread.Sleep(1000);
+                        var startSpooler = RunPowerShell("Start-Service -Name Spooler -ErrorAction SilentlyContinue");
+
+                        if (!startSpooler.Success)
+                        {
+                            return (false, "Failed to restart Print Spooler. Please restart it manually via Services.");
+                        }
+
+                        // Wait for spooler to fully start
+                        System.Threading.Thread.Sleep(2000);
+
+                        // Retry printer removal
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Retrying printer removal after spooler restart...");
+                        removeResult = RunPowerShell($"Remove-Printer -Name '{safePrinterName}' -ErrorAction SilentlyContinue");
+
+                        // Final verification
+                        System.Threading.Thread.Sleep(500);
+                        verifyResult = RunPowerShell($"Get-Printer -Name '{safePrinterName}' -ErrorAction SilentlyContinue");
+
+                        if (verifyResult.Success && !string.IsNullOrWhiteSpace(verifyResult.ErrorMessage))
+                        {
+                            return (false, "Printer removal failed. The printer may be stuck in 'Pending Deletion' state. Please manually delete it from Control Panel.");
+                        }
                     }
 
-                    return (removeResult.Success, removeResult.ErrorMessage);
+                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Printer '{safePrinterName}' removed successfully.");
+                    return (true, string.Empty);
                 }
                 catch (Exception ex)
                 {
+                    ShaPrint.Core.AppLogger.Error($"[CLIENT] Exception during printer removal: {ex.Message}");
                     return (false, "Exception: " + ex.Message);
                 }
             });
