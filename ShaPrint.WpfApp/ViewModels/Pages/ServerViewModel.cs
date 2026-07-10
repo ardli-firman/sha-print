@@ -51,6 +51,12 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
     {
         public List<string> ExposedPrinters { get; set; } = new();
         public List<string> ExposedScanners { get; set; } = new();
+
+        /// <summary>
+        /// Stable server identity UUID. Generated once on first save, persisted forever.
+        /// Null for servers that pre-date this feature. Broadcast in discovery responses.
+        /// </summary>
+        public string? ServerId { get; set; }
     }
 
     public partial class ServerViewModel : ObservableObject, IDisposable
@@ -85,6 +91,11 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public List<string> ExposedScanners { get; private set; } = new();
 
         public DiscoveryServer DiscoveryServer => _discoveryServer;
+
+        /// <summary>
+        /// Stable server identity. Null until the first <see cref="SaveConfiguration"/> call.
+        /// </summary>
+        public string? ServerId { get; private set; }
 
         [ObservableProperty]
         private bool _isRunning;
@@ -331,6 +342,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     {
                         savedPrinters = savedConfig.ExposedPrinters;
                         savedScanners = savedConfig.ExposedScanners;
+                        ServerId = savedConfig.ServerId;
                     }
                 }
                 catch
@@ -374,10 +386,16 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             if (IsUnitTest) return;
             try
             {
+                if (string.IsNullOrEmpty(ServerId))
+                {
+                    ServerId = Guid.NewGuid().ToString("N");
+                }
+
                 var config = new ServerSavedConfig
                 {
                     ExposedPrinters = printers,
-                    ExposedScanners = scanners
+                    ExposedScanners = scanners,
+                    ServerId = ServerId
                 };
                 string json = JsonSerializer.Serialize(config);
                 string wrapped = CryptoHelper.WrapConfigWithHmac(json);
