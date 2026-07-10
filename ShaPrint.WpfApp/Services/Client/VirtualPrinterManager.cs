@@ -81,26 +81,62 @@ namespace ShaPrint.Client
 
                     ShaPrint.Core.AppLogger.Log($"[CLIENT] Attempting to remove printer '{safePrinterName}'...");
 
-                    // Step 1: Aggressively clear all stuck print jobs
+                    // Step 1: Clear all stuck print jobs
                     ShaPrint.Core.AppLogger.Log($"[CLIENT] Clearing print jobs for '{safePrinterName}'...");
                     RunPowerShell($"Get-PrintJob -PrinterName '{safePrinterName}' -ErrorAction SilentlyContinue | Remove-PrintJob -ErrorAction SilentlyContinue");
-
-                    // Small delay to let Windows process job removal
                     System.Threading.Thread.Sleep(500);
 
-                    // Step 2: Remove the printer
-                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Removing printer '{safePrinterName}'...");
-                    var removeResult = RunPowerShell($"Remove-Printer -Name '{safePrinterName}' -ErrorAction SilentlyContinue");
+                    // Step 2: Check if printer is the default printer, if so set another as default
+                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Checking if printer is default printer...");
+                    var checkDefaultScript = $@"
+$printer = Get-WmiObject -Class Win32_Printer | Where-Object {{ $_.Name -eq '{safePrinterName}' }};
+if ($printer -and $printer.Default -eq $true) {{
+    Write-Output 'IsDefault';
+    $otherPrinter = Get-WmiObject -Class Win32_Printer | Where-Object {{ $_.Name -ne '{safePrinterName}' }} | Select-Object -First 1;
+    if ($otherPrinter) {{ $otherPrinter.SetDefaultPrinter() | Out-Null; Write-Output 'DefaultChanged' }}
+}}";
+                    var defaultCheckResult = RunPowerShell(checkDefaultScript);
+                    if (defaultCheckResult.ErrorMessage.Contains("IsDefault"))
+                    {
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Printer was default printer. Changed default to another printer.");
+                    }
 
-                    // Step 3: Remove the printer port
+                    // Step 3: Use WMI Delete() method (more reliable than Remove-Printer cmdlet)
+                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Removing printer using WMI Delete() method...");
+                    var wmiDeleteScript = $@"
+$printer = Get-WmiObject -Class Win32_Printer | Where-Object {{ $_.Name -eq '{safePrinterName}' }};
+if ($printer) {{
+    $result = $printer.Delete();
+    if ($result.ReturnValue -eq 0) {{ Write-Output 'Success' }}
+    else {{ Write-Output ""Failed:$($result.ReturnValue)"" }}
+}} else {{
+    Write-Output 'NotFound'
+}}";
+                    var wmiDeleteResult = RunPowerShell(wmiDeleteScript);
+
+                    if (wmiDeleteResult.ErrorMessage.Contains("Failed:"))
+                    {
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] WMI Delete() failed: {wmiDeleteResult.ErrorMessage}");
+                    }
+                    else if (wmiDeleteResult.ErrorMessage.Contains("NotFound"))
+                    {
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Printer not found (already removed).");
+                    }
+                    else
+                    {
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] WMI Delete() completed.");
+                    }
+
+                    System.Threading.Thread.Sleep(500);
+
+                    // Step 4: Remove the printer port
                     if (!string.IsNullOrEmpty(safePipeName))
                     {
                         ShaPrint.Core.AppLogger.Log($"[CLIENT] Removing printer port '{safePipeName}'...");
                         RunPowerShell($"Remove-PrinterPort -Name '{safePipeName}' -ErrorAction SilentlyContinue");
                     }
 
-                    // Step 4: ALWAYS restart Print Spooler to force release all handles
-                    // This prevents "Pending Deletion" ghost printers from staying in the system
+                    // Step 5: Restart Print Spooler to force release all handles
                     ShaPrint.Core.AppLogger.Log($"[CLIENT] Restarting Print Spooler to ensure complete removal...");
 
                     var stopSpooler = RunPowerShell("Stop-Service -Name Spooler -Force -ErrorAction SilentlyContinue");
@@ -109,26 +145,35 @@ namespace ShaPrint.Client
                         ShaPrint.Core.AppLogger.Log($"[CLIENT] Warning: Failed to stop Print Spooler: {stopSpooler.ErrorMessage}");
                     }
 
-                    System.Threading.Thread.Sleep(2000); // Wait for spooler to fully stop
+                    System.Threading.Thread.Sleep(2000);
 
                     var startSpooler = RunPowerShell("Start-Service -Name Spooler -ErrorAction SilentlyContinue");
                     if (!startSpooler.Success)
                     {
                         ShaPrint.Core.AppLogger.Error($"[CLIENT] Failed to start Print Spooler: {startSpooler.ErrorMessage}");
-                        return (false, "Failed to restart Print Spooler. Please restart it manually via Services (services.msc).");
+                        return (false, "Failed to restart Print Spooler. Please restart it manually via Services (services.msc). You may need to run this application as Administrator.");
                     }
 
-                    System.Threading.Thread.Sleep(2000); // Wait for spooler to fully start
+                    System.Threading.Thread.Sleep(2000);
 
-                    // Step 5: Final verification using WMI (more reliable than Get-Printer)
+                    // Step 6: Final verification
                     ShaPrint.Core.AppLogger.Log($"[CLIENT] Verifying printer removal...");
                     var verifyResult = RunPowerShell($"Get-WmiObject -Class Win32_Printer | Where-Object {{ $_.Name -eq '{safePrinterName}' }}");
 
                     if (verifyResult.Success && !string.IsNullOrWhiteSpace(verifyResult.ErrorMessage))
                     {
-                        // Printer still exists even after spooler restart!
-                        ShaPrint.Core.AppLogger.Error($"[CLIENT] Printer still exists after spooler restart!");
-                        return (false, $"Printer removal failed. The printer '{printerName}' is stuck in the system. Please manually delete it from Control Panel > Devices and Printers, then restart Print Spooler service.");
+                        // Printer STILL exists! Last resort: try Remove-Printer cmdlet as fallback
+                        ShaPrint.Core.AppLogger.Error($"[CLIENT] Printer still exists after WMI Delete and spooler restart! Trying Remove-Printer as last resort...");
+                        RunPowerShell($"Remove-Printer -Name '{safePrinterName}' -ErrorAction SilentlyContinue");
+                        System.Threading.Thread.Sleep(1000);
+
+                        // Final final verification
+                        var finalVerify = RunPowerShell($"Get-WmiObject -Class Win32_Printer | Where-Object {{ $_.Name -eq '{safePrinterName}' }}");
+                        if (finalVerify.Success && !string.IsNullOrWhiteSpace(finalVerify.ErrorMessage))
+                        {
+                            ShaPrint.Core.AppLogger.Error($"[CLIENT] All removal attempts failed. Printer is stuck in the system.");
+                            return (false, $"Printer removal failed. The printer is stuck in the system.\n\nPlease try:\n1. Run this application as Administrator\n2. Manually delete '{printerName}' from Control Panel > Devices and Printers\n3. If it shows 'Pending Deletion', restart your computer");
+                        }
                     }
 
                     ShaPrint.Core.AppLogger.Log($"[CLIENT] Printer '{safePrinterName}' removed successfully.");
