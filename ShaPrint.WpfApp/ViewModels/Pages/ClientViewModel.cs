@@ -43,6 +43,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public string PipeName { get; set; } = string.Empty;
         public string ServerIp { get; set; } = string.Empty;
         public string TargetPrinterName { get; set; } = string.Empty;
+        public string DriverName { get; set; } = string.Empty;
     }
 
     public partial class ClientViewModel : ObservableObject, IDisposable
@@ -196,7 +197,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         VirtualPrinterName = virtualPrinterName,
                         PipeName = pipeName,
                         ServerIp = serverIp,
-                        TargetPrinterName = printerName
+                        TargetPrinterName = printerName,
+                        DriverName = driverName
                     });
                     SaveConfiguration();
 

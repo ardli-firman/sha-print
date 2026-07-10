@@ -103,20 +103,20 @@ namespace ShaPrint.WpfApp.Services.Server
                                 });
                             }
                         }
-                        catch (Exception ex)
+                        catch (Exception)
                         {
                             printerStatuses.Add(new PrinterStatus
                             {
                                 Name = printerName,
                                 Status = "error",
                                 QueueLength = 0,
-                                ErrorDescription = $"Offline or unreachable: {ex.Message}"
+                                ErrorDescription = "Printer unreachable"
                             });
                         }
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 // Failed to query print server
                 foreach (var printerName in _serverViewModel.ExposedPrinters)
@@ -126,7 +126,7 @@ namespace ShaPrint.WpfApp.Services.Server
                         Name = printerName,
                         Status = "error",
                         QueueLength = 0,
-                        ErrorDescription = $"Print Server query error: {ex.Message}"
+                        ErrorDescription = "Print server query failed"
                     });
                 }
             }

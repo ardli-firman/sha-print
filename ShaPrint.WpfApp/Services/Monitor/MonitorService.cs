@@ -20,7 +20,9 @@ namespace ShaPrint.WpfApp.Services.Monitor
         private readonly MonitorViewModel _monitorViewModel;
         private readonly DiscoveryClient _discoveryClient;
         private CancellationTokenSource? _cts;
-        private bool _isRefreshing = false;
+        private int _isRefreshing = 0;
+        private readonly List<Task> _inFlightTasks = new();
+        private readonly object _inFlightLock = new();
 
         public MonitorService(MonitorViewModel monitorViewModel)
         {
@@ -42,22 +44,42 @@ namespace ShaPrint.WpfApp.Services.Monitor
             if (_cts == null) return;
             _cts.Cancel();
             _cts = null;
+
+            Task? waitTask;
+            lock (_inFlightLock)
+            {
+                waitTask = _inFlightTasks.Count > 0
+                    ? Task.WhenAll(_inFlightTasks.ToArray())
+                    : null;
+            }
+            if (waitTask != null)
+            {
+                try { waitTask.Wait(TimeSpan.FromSeconds(10)); }
+                catch (AggregateException) { /* expected */ }
+                catch (Exception ex)
+                {
+                    AppLogger.Error("[MONITOR SERVICE] Error awaiting in-flight tasks during stop", ex);
+                }
+            }
+
             AppLogger.Log("[MONITOR SERVICE] Service stopped.");
         }
 
         public async Task TriggerManualRefreshAsync()
         {
-            if (_isRefreshing) return;
-            _isRefreshing = true;
+            if (Interlocked.CompareExchange(ref _isRefreshing, 1, 0) == 1) return;
             AppLogger.Log("[MONITOR SERVICE] Triggering manual full refresh (with unicast sweep)...");
             try
             {
+                var cts = _cts;
+                var token = cts?.Token ?? CancellationToken.None;
+
                 // Unicast sweep allowed on manual refresh to find AP isolated servers
                 var discovered = await _discoveryClient.DiscoverServersAsync(
                     skipUnicastSweep: false, 
                     requestMessage: Constants.MonitorDiscoveryRequestMessage);
                 
-                await QueryAllServersStaggeredAsync(discovered, _cts?.Token ?? CancellationToken.None);
+                await QueryAllServersStaggeredAsync(discovered, token);
             }
             catch (Exception ex)
             {
@@ -65,23 +87,37 @@ namespace ShaPrint.WpfApp.Services.Monitor
             }
             finally
             {
-                _isRefreshing = false;
+                Interlocked.Exchange(ref _isRefreshing, 0);
             }
         }
 
         private async Task PollLoopAsync(CancellationToken token)
         {
+            // --- Wait for any ongoing manual refresh to complete ---
+            while (Interlocked.CompareExchange(ref _isRefreshing, 0, 0) == 1 && !token.IsCancellationRequested)
+            {
+                try { await Task.Delay(500, token); } catch (OperationCanceledException) { return; }
+            }
+
             // Initial poll at startup
             try
             {
-                var initialDiscovered = await _discoveryClient.DiscoverServersAsync(
-                    skipUnicastSweep: false, 
-                    requestMessage: Constants.MonitorDiscoveryRequestMessage);
-                await QueryAllServersStaggeredAsync(initialDiscovered, token);
+                if (Interlocked.CompareExchange(ref _isRefreshing, 1, 0) == 0)
+                {
+                    var initialDiscovered = await _discoveryClient.DiscoverServersAsync(
+                        skipUnicastSweep: false, 
+                        requestMessage: Constants.MonitorDiscoveryRequestMessage);
+                    await QueryAllServersStaggeredAsync(initialDiscovered, token);
+                }
             }
+            catch (OperationCanceledException) { /* Graceful shutdown */ }
             catch (Exception ex)
             {
                 AppLogger.Error("[MONITOR SERVICE] Initial discovery failed", ex);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _isRefreshing, 0);
             }
 
             while (!token.IsCancellationRequested)
@@ -90,13 +126,20 @@ namespace ShaPrint.WpfApp.Services.Monitor
                 {
                     await Task.Delay(TimeSpan.FromSeconds(15), token);
 
-                    if (_isRefreshing) continue;
+                    if (Interlocked.CompareExchange(ref _isRefreshing, 1, 0) == 1) continue;
 
-                    var discovered = await _discoveryClient.DiscoverServersAsync(
-                        skipUnicastSweep: true, 
-                        requestMessage: Constants.MonitorDiscoveryRequestMessage);
+                    try
+                    {
+                        var discovered = await _discoveryClient.DiscoverServersAsync(
+                            skipUnicastSweep: true, 
+                            requestMessage: Constants.MonitorDiscoveryRequestMessage);
 
-                    await QueryAllServersStaggeredAsync(discovered, token);
+                        await QueryAllServersStaggeredAsync(discovered, token);
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _isRefreshing, 0);
+                    }
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
@@ -113,10 +156,19 @@ namespace ShaPrint.WpfApp.Services.Monitor
 
             foreach (var server in discoveredServers)
             {
-                if (token.IsCancellationRequested) break;
+                Task queryTask;
+                lock (_inFlightLock)
+                {
+                    if (token.IsCancellationRequested) break;
 
-                // Fire and forget status check for each server
-                _ = QueryServerStatusAsync(server.ServerName, server.IpAddress, token);
+                    queryTask = QueryServerStatusAsync(server.ServerName, server.IpAddress, token);
+                    _inFlightTasks.Add(queryTask);
+                }
+
+                _ = queryTask.ContinueWith(t => 
+                { 
+                    lock (_inFlightLock) _inFlightTasks.Remove(queryTask); 
+                }, TaskContinuationOptions.ExecuteSynchronously);
 
                 // Stagger requests by 1 second to avoid network and CPU spikes
                 try
@@ -143,6 +195,8 @@ namespace ShaPrint.WpfApp.Services.Monitor
                 await tcpClient.ConnectAsync(ipAddress, Constants.MonitorTcpPort, timeoutCts.Token);
 
                 using var stream = tcpClient.GetStream();
+                stream.ReadTimeout = 5000;
+                stream.WriteTimeout = 5000;
                 
                 // Write GET_STATUS request encrypted
                 byte[] requestBytes = Encoding.UTF8.GetBytes("GET_STATUS");
@@ -181,10 +235,29 @@ namespace ShaPrint.WpfApp.Services.Monitor
                     _monitorViewModel.UpdateServerStatus(payload, ipAddress, isOnline: true);
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Graceful cancellation on service stop, ignore
+            }
+            catch (System.Security.Cryptography.CryptographicException ex)
+            {
+                AppLogger.Log($"[MONITOR SERVICE] Server '{hostName}' ({ipAddress}) auth mismatch: {ex.Message}");
+                _monitorViewModel.UpdateServerFailure(hostName, ipAddress, "AuthMismatch");
+            }
+            catch (Exception ex) when (ex is IOException || ex is SocketException || ex is TimeoutException)
             {
                 AppLogger.Log($"[MONITOR SERVICE] Server '{hostName}' ({ipAddress}) is unreachable: {ex.Message}");
-                _monitorViewModel.UpdateServerOffline(hostName, ipAddress);
+                _monitorViewModel.UpdateServerFailure(hostName, ipAddress, "Unreachable");
+            }
+            catch (Exception ex) when (ex is JsonException || ex is InvalidDataException)
+            {
+                AppLogger.Log($"[MONITOR SERVICE] Server '{hostName}' ({ipAddress}) protocol error: {ex.Message}");
+                _monitorViewModel.UpdateServerFailure(hostName, ipAddress, "Unreachable");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Log($"[MONITOR SERVICE] Server '{hostName}' ({ipAddress}) unexpected error: {ex.Message}");
+                _monitorViewModel.UpdateServerFailure(hostName, ipAddress, "Unreachable");
             }
         }
     }

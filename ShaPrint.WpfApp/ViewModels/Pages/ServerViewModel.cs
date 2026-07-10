@@ -371,6 +371,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         private void SaveConfiguration(List<string> printers, List<string> scanners)
         {
+            if (IsUnitTest) return;
             try
             {
                 var config = new ServerSavedConfig
