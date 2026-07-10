@@ -343,6 +343,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         savedPrinters = savedConfig.ExposedPrinters;
                         savedScanners = savedConfig.ExposedScanners;
                         ServerId = savedConfig.ServerId;
+                        _discoveryServer.SetServerId(ServerId);
                     }
                 }
                 catch
@@ -390,6 +391,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 {
                     ServerId = Guid.NewGuid().ToString("N");
                 }
+                _discoveryServer.SetServerId(ServerId);
 
                 var config = new ServerSavedConfig
                 {

@@ -21,6 +21,9 @@ namespace ShaPrint.Server
         private List<string> _exposedPrinters = new List<string>();
         private List<string> _exposedScanners = new List<string>();
         private readonly INotificationService _notificationService;
+        private string? _serverId;
+
+        public void SetServerId(string? serverId) => _serverId = serverId;
 
         // Client tracking for connect/disconnect notifications
         private readonly HashSet<string> _connectedClients = new();
@@ -158,7 +161,8 @@ namespace ShaPrint.Server
                         ServerName = Environment.MachineName,
                         IpAddress = GetLocalIPAddress(),
                         ExposedPrinters = exposedInfos,
-                        ExposedScanners = _exposedScanners.Count > 0 ? new List<ScannerInfo>() : null
+                        ExposedScanners = _exposedScanners.Count > 0 ? new List<ScannerInfo>() : null,
+                        ServerId = _serverId
                     };
 
                     if (response.ExposedScanners != null)
