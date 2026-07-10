@@ -116,15 +116,19 @@ if ($printer) {{
 
                     if (wmiDeleteResult.ErrorMessage.Contains("Failed:"))
                     {
-                        ShaPrint.Core.AppLogger.Log($"[CLIENT] WMI Delete() failed: {wmiDeleteResult.ErrorMessage}");
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] WMI Delete() returned non-zero ({wmiDeleteResult.ErrorMessage}). Will be handled by spooler restart.");
                     }
                     else if (wmiDeleteResult.ErrorMessage.Contains("NotFound"))
                     {
                         ShaPrint.Core.AppLogger.Log($"[CLIENT] Printer not found (already removed).");
                     }
+                    else if (wmiDeleteResult.ErrorMessage.Contains("Success"))
+                    {
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] WMI Delete() completed successfully.");
+                    }
                     else
                     {
-                        ShaPrint.Core.AppLogger.Log($"[CLIENT] WMI Delete() completed.");
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] WMI Delete() executed.");
                     }
 
                     System.Threading.Thread.Sleep(500);
