@@ -32,11 +32,6 @@
 
             <!-- Left Pane: Branding, Info, and Network Channel Setup -->
             <StackPanel Grid.Column="0" VerticalAlignment="Top" Opacity="1">
-                <!-- Branding Header -->
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
-                    <TextBlock Text="ShaPrint" FontSize="26" FontWeight="Black" Foreground="#0F172A" VerticalAlignment="Center"/>
-                </StackPanel>
-
                 <TextBlock Text="Get Started" FontSize="32" FontWeight="ExtraBold" Foreground="#0F172A" Margin="0,0,0,10"/>
                 <TextBlock Text="Share and access local printers across your network instantly. No complex server setups, just seamless printing." 
                            FontSize="13.5" Foreground="#475569" TextWrapping="Wrap" Margin="0,0,0,24" LineHeight="20"/>
