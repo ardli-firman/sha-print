@@ -44,6 +44,13 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public string ServerIp { get; set; } = string.Empty;
         public string TargetPrinterName { get; set; } = string.Empty;
         public string DriverName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Stable per-server UUID captured from the discovery response at install time.
+        /// Null for installs from pre-ServerId servers. Used by ServerReachabilityTracker
+        /// to match this entry against a discovered server whose IP may have changed.
+        /// </summary>
+        public string? ServerId { get; set; }
     }
 
     public partial class ClientViewModel : ObservableObject, IDisposable
@@ -198,7 +205,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         PipeName = pipeName,
                         ServerIp = serverIp,
                         TargetPrinterName = printerName,
-                        DriverName = driverName
+                        DriverName = driverName,
+                        ServerId = item.Server.ServerId
                     });
                     SaveConfiguration();
 
