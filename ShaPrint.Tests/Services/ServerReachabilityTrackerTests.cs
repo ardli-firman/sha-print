@@ -95,5 +95,96 @@ namespace ShaPrint.Tests.Services
             Assert.True(oldListener.Stopped);
             Assert.Single(h.Listeners.Where(l => l.Started && !l.Stopped));
         }
+
+        [Fact]
+        public async Task RequestRescan_FallsBackToName_WhenServerIdMissingInConfig()
+        {
+            var h = new Harness();
+            var cfg = new InstalledPrinterConfig
+            {
+                VirtualPrinterName = "ShaPrint [HomePC] - Printer1",
+                PipeName = "pipe-B",
+                ServerIp = "1.1.1.1",
+                TargetPrinterName = "Printer1",
+                DriverName = "Generic / Text Only",
+                ServerId = null
+            };
+            h.Configs.Add(cfg);
+
+            h.NextScanResult.Add(new DiscoveryResponseMessage
+            {
+                ServerName = "HomePC",
+                IpAddress = "9.9.9.9",
+                ExposedPrinters = new List<PrinterInfo> { new() { Name = "Printer1" } }
+            });
+
+            var tracker = h.BuildTracker();
+            await tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.ClientPageOpen, CancellationToken.None);
+
+            Assert.Equal("9.9.9.9", cfg.ServerIp);
+            Assert.Single(h.ChangedEvents);
+        }
+
+        [Fact]
+        public async Task RequestRescan_EmitsSuspicious_WhenServerIdDiffers()
+        {
+            var h = new Harness();
+            var cfg = new InstalledPrinterConfig
+            {
+                VirtualPrinterName = "ShaPrint [HomePC] - Printer1",
+                PipeName = "pipe-C",
+                ServerIp = "1.1.1.1",
+                TargetPrinterName = "Printer1",
+                DriverName = "Generic / Text Only",
+                ServerId = "OLD-ID"
+            };
+            h.Configs.Add(cfg);
+
+            h.NextScanResult.Add(new DiscoveryResponseMessage
+            {
+                ServerName = "HomePC",
+                IpAddress = "1.1.1.1", // same IP, different ServerId
+                ServerId = "NEW-ID",
+                ExposedPrinters = new List<PrinterInfo> { new() { Name = "Printer1" } }
+            });
+
+            var tracker = h.BuildTracker();
+            await tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
+
+            Assert.Empty(h.ChangedEvents);
+            Assert.Single(h.SuspiciousEvents);
+            Assert.Equal("1.1.1.1", cfg.ServerIp); // unchanged
+        }
+
+        [Fact]
+        public async Task RequestRescan_NoMatch_DoesNotChange()
+        {
+            var h = new Harness();
+            var cfg = new InstalledPrinterConfig
+            {
+                VirtualPrinterName = "ShaPrint [HomePC] - Printer1",
+                PipeName = "pipe-D",
+                ServerIp = "1.1.1.1",
+                TargetPrinterName = "Printer1",
+                DriverName = "Generic / Text Only",
+                ServerId = "S1"
+            };
+            h.Configs.Add(cfg);
+
+            h.NextScanResult.Add(new DiscoveryResponseMessage
+            {
+                ServerName = "OtherServer",
+                IpAddress = "5.5.5.5",
+                ServerId = "S9",
+                ExposedPrinters = new List<PrinterInfo>()
+            });
+
+            var tracker = h.BuildTracker();
+            await tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
+
+            Assert.Equal("1.1.1.1", cfg.ServerIp);
+            Assert.Empty(h.ChangedEvents);
+            Assert.Empty(h.SuspiciousEvents);
+        }
     }
 }
