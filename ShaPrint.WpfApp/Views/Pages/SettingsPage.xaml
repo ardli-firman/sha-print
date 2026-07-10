@@ -33,6 +33,10 @@
                 </ui:CardControl.Header>
                 <ui:TextBox Text="{Binding ViewModel.ChannelName, UpdateSourceTrigger=PropertyChanged}" Width="180" />
             </ui:CardControl>
+            <ui:InfoBar IsOpen="True" Severity="Warning" Title="Weak Channel"
+                        Message="Please use at least 8 characters. Default or short channels offer minimal security."
+                        Visibility="{Binding ViewModel.IsWeakChannel, Converter={StaticResource BoolToVis}}"
+                        Margin="0,0,0,16"/>
             
             <!-- Startup Setting -->
             <ui:CardControl Margin="0,0,0,8" Icon="{ui:SymbolIcon Play24}">

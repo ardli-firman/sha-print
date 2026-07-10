@@ -36,6 +36,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             {
                 _lastCheckedText = $"Last checked: {settings.LastUpdateCheck:g}";
             }
+
+            EvaluateChannelStrength(_channelName);
         }
  
         [ObservableProperty]
@@ -96,9 +98,19 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 return;
             }
 
+            EvaluateChannelStrength(value);
+
             AppSettings.Current.NetworkChannel = value;
             AppSettings.Save();
             ShaPrint.Core.Constants.SetNetworkChannel(value);
+        }
+
+        [ObservableProperty]
+        private bool _isWeakChannel;
+
+        private void EvaluateChannelStrength(string channel)
+        {
+            IsWeakChannel = channel == "DefaultChannel" || string.IsNullOrWhiteSpace(channel) || channel.Trim().Length < 8;
         }
 
         [ObservableProperty]

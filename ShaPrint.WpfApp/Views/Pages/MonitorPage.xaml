@@ -394,29 +394,29 @@
 
             <Setter Property="FontSize" Value="12"/>
 
-            <Setter Property="FontWeight" Value="SemiBold"/>
-
-            <Setter Property="VerticalAlignment" Value="Center"/>
-
-        </Style>
-
-    </Page.Resources>
-
-    <Grid Margin="24,20,24,16">
-
-        <Grid.RowDefinitions>
-
-            <RowDefinition Height="Auto"/>
-
-            <RowDefinition Height="Auto"/>
-
-            <RowDefinition Height="Auto"/>
-
-            <RowDefinition Height="*"/>
-
+            <Setter Property="FontWeight" Value="SemiBold"/>
+
+            <Setter Property="VerticalAlignment" Value="Center"/>
+
+        </Style>
+
+    </Page.Resources>
+
+    <Grid Margin="24,20,24,16">
+
+        <Grid.RowDefinitions>
+
+            <RowDefinition Height="Auto"/>
+
+            <RowDefinition Height="Auto"/>
+
+            <RowDefinition Height="Auto"/>
+
+            <RowDefinition Height="Auto"/>
+
+            <RowDefinition Height="*"/>
+
         </Grid.RowDefinitions>
-
-
 
         <!-- ═══════════════════════════════════════════════════════════ -->
 
@@ -488,7 +488,17 @@
 
         <!-- ═══════════════════════════════════════════════════════════ -->
 
-        <UniformGrid Grid.Row="1" Columns="4" Rows="1" Margin="0,0,0,16">
+        <StackPanel Grid.Row="1" Margin="0,0,0,16">
+            <ui:InfoBar IsOpen="True" Severity="Error" Title="Authentication Mismatch"
+                        Message="{Binding ViewModel.AuthMismatchCount, StringFormat='\{0\} server(s) have a channel mismatch. Please check your Network Channel settings.'}"
+                        Visibility="{Binding ViewModel.AuthMismatchCount, Converter={StaticResource IntToVis}}"
+                        Margin="0,0,0,8"/>
+            <ui:InfoBar IsOpen="True" Severity="Warning" Title="Weak Channel"
+                        Message="Your Network Channel is weak or default. Others on the LAN can read monitor status."
+                        Visibility="{Binding ViewModel.IsWeakChannel, Converter={StaticResource BoolToVis}}"
+                        Margin="0,0,0,8"/>
+        </StackPanel>
+        <UniformGrid Grid.Row="2" Columns="5" Rows="1" Margin="0,0,0,16">
 
 
 
@@ -700,6 +710,41 @@
 
 
 
+            <!-- Unreachable -->
+            <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Unreachable" Margin="0,0,12,0" ToolTip="Filter by Unreachable">
+                <ui:CardAction.Style>
+                    <Style TargetType="ui:CardAction" BasedOn="{StaticResource StatCard}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ViewModel.ActiveStatusFilter}" Value="Unreachable">
+                                <Setter Property="BorderBrush" Value="{DynamicResource SystemFillColorCautionBrush}"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ui:CardAction.Style>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Unreachable" 
+                               FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding ViewModel.UnreachableCount}" 
+                               FontSize="32" FontWeight="Bold" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
+
+                    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="40" Height="40" CornerRadius="10" 
+                            VerticalAlignment="Center">
+                        <Border.Background><SolidColorBrush Color="#1AF59E0B"/></Border.Background>
+                        <ui:SymbolIcon Symbol="WifiWarning24" FontSize="20" Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
+                    </Border>
+                </Grid>
+            </ui:CardAction>
+
             <!-- Offline -->
 
             <ui:CardAction Command="{Binding ViewModel.SetStatusFilterCommand}" CommandParameter="Offline" Margin="0" ToolTip="Filter by Offline">
@@ -780,7 +825,7 @@
 
         <!-- ═══════════════════════════════════════════════════════════ -->
 
-        <Grid Grid.Row="2" Margin="0,0,0,16">
+        <Grid Grid.Row="3" Margin="0,0,0,16">
 
             <Grid.ColumnDefinitions>
 
@@ -858,7 +903,7 @@
 
         <!-- ═══════════════════════════════════════════════════════════ -->
 
-        <Grid Grid.Row="3">
+        <Grid Grid.Row="4">
 
 
 

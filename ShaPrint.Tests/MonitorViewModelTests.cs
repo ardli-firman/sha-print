@@ -14,11 +14,13 @@ namespace ShaPrint.Tests
         // ── ServerNode Tests ──────────────────────────────────────────
 
         [Theory]
-        [InlineData("Online", 3)]
-        [InlineData("Warning", 2)]
         [InlineData("Offline", 1)]
-        [InlineData("Unknown", 4)]
-        [InlineData("SomeRandomState", 4)]
+        [InlineData("AuthMismatch", 2)]
+        [InlineData("Unreachable", 3)]
+        [InlineData("Warning", 4)]
+        [InlineData("Online", 5)]
+        [InlineData("Unknown", 6)]
+        [InlineData("SomeRandomState", 6)]
         public void ServerNode_StatusSortOrder_ReturnsCorrectOrder(string status, int expectedOrder)
         {
             var node = new ServerNode { Status = status };
@@ -29,6 +31,8 @@ namespace ShaPrint.Tests
         [InlineData("Online")]
         [InlineData("Warning")]
         [InlineData("Offline")]
+        [InlineData("AuthMismatch")]
+        [InlineData("Unreachable")]
         [InlineData("Unknown")]
         public void ServerNode_Brushes_ReturnFallbackColorsInUnitTest(string status)
         {
@@ -43,6 +47,8 @@ namespace ShaPrint.Tests
                 "Online" => Colors.Green,
                 "Warning" => Colors.Orange,
                 "Offline" => Colors.Red,
+                "AuthMismatch" => Colors.Red,
+                "Unreachable" => Colors.Orange,
                 _ => Colors.Gray
             };
 
@@ -156,20 +162,26 @@ namespace ShaPrint.Tests
             var s2 = new ServerNode { HostName = "S2", Status = "Warning" };
             var s3 = new ServerNode { HostName = "S3", Status = "Offline" };
             var s4 = new ServerNode { HostName = "S4", Status = "Unknown" };
+            var s5 = new ServerNode { HostName = "S5", Status = "AuthMismatch" };
+            var s6 = new ServerNode { HostName = "S6", Status = "Unreachable" };
 
             vm.Servers.Add(s1);
             vm.Servers.Add(s2);
             vm.Servers.Add(s3);
             vm.Servers.Add(s4);
+            vm.Servers.Add(s5);
+            vm.Servers.Add(s6);
 
             TriggerUpdateSummary();
 
             Assert.False(vm.IsEmpty);
-            Assert.Equal(4, vm.TotalServers);
+            Assert.Equal(6, vm.TotalServers);
             Assert.Equal(1, vm.OnlineCount);
             Assert.Equal(1, vm.WarningCount);
             Assert.Equal(1, vm.OfflineCount);
             Assert.Equal(1, vm.UnknownCount);
+            Assert.Equal(1, vm.AuthMismatchCount);
+            Assert.Equal(1, vm.UnreachableCount);
             Assert.False(vm.HasAnyErrors);
 
             // Add payload errors to check HasAnyErrors
@@ -300,16 +312,42 @@ namespace ShaPrint.Tests
         }
 
         [Fact]
-        public void UpdateServerOffline_SetsOfflineImmediately()
+        public void UpdateServerFailure_GracePolicy_SetsUnreachableThenOffline()
         {
             var vm = new MonitorViewModel();
-            var node = new ServerNode { HostName = "SRV-X", Status = "Online", Payload = new ServerStatusPayload() };
+            var now = DateTime.UtcNow;
+            
+            // Server seen recently (<30s)
+            var nodeRecent = new ServerNode { HostName = "SRV-RECENT", Status = "Online", LastSeen = now.AddSeconds(-10), Payload = new ServerStatusPayload() };
+            vm.Servers.Add(nodeRecent);
+            
+            vm.UpdateServerFailure("SRV-RECENT", "10.0.0.1", "Unreachable");
+            
+            // Should be downgraded to Unreachable, payload intact
+            Assert.Equal("Unreachable", nodeRecent.Status);
+            Assert.NotNull(nodeRecent.Payload);
+
+            // Server seen long ago (>30s)
+            var nodeOld = new ServerNode { HostName = "SRV-OLD", Status = "Unreachable", LastSeen = now.AddSeconds(-35), Payload = new ServerStatusPayload() };
+            vm.Servers.Add(nodeOld);
+
+            vm.UpdateServerFailure("SRV-OLD", "10.0.0.2", "Unreachable");
+
+            // Should be downgraded to Offline, payload cleared
+            Assert.Equal("Offline", nodeOld.Status);
+            Assert.Null(nodeOld.Payload);
+        }
+
+        [Fact]
+        public void UpdateServerFailure_AuthMismatch_SetsAuthMismatchAndClearsPayload()
+        {
+            var vm = new MonitorViewModel();
+            var node = new ServerNode { HostName = "SRV-AUTH", Status = "Online", Payload = new ServerStatusPayload() };
             vm.Servers.Add(node);
 
-            vm.UpdateServerOffline("SRV-X", "10.10.10.10");
+            vm.UpdateServerFailure("SRV-AUTH", "10.0.0.3", "AuthMismatch");
 
-            Assert.Equal("Offline", node.Status);
-            Assert.Equal("10.10.10.10", node.IpAddress);
+            Assert.Equal("AuthMismatch", node.Status);
             Assert.Null(node.Payload);
         }
 

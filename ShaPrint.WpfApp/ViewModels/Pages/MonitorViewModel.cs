@@ -54,9 +54,11 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public int StatusSortOrder => Status switch
         {
             "Offline" => 1,
-            "Warning" => 2,
-            "Online" => 3,
-            _ => 4
+            "AuthMismatch" => 2,
+            "Unreachable" => 3,
+            "Warning" => 4,
+            "Online" => 5,
+            _ => 6
         };
 
         public Brush StatusBrush
@@ -70,6 +72,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         "Online" => "SystemFillColorSuccessBrush",
                         "Warning" => "SystemFillColorCautionBrush",
                         "Offline" => "SystemFillColorCriticalBrush",
+                        "AuthMismatch" => "SystemFillColorCriticalBrush",
+                        "Unreachable" => "SystemFillColorCautionBrush",
                         _ => "TextFillColorDisabledBrush"
                     };
                     return (Brush)Application.Current.FindResource(resourceKey);
@@ -82,6 +86,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         "Online" => Brushes.Green,
                         "Warning" => Brushes.Orange,
                         "Offline" => Brushes.Red,
+                        "AuthMismatch" => Brushes.Red,
+                        "Unreachable" => Brushes.Orange,
                         _ => Brushes.Gray
                     };
                 }
@@ -181,9 +187,12 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         [ObservableProperty] private int _totalServers;
         [ObservableProperty] private int _onlineCount;
         [ObservableProperty] private int _warningCount;
+        [ObservableProperty] private int _unreachableCount;
+        [ObservableProperty] private int _authMismatchCount;
         [ObservableProperty] private int _offlineCount;
         [ObservableProperty] private int _unknownCount;
         [ObservableProperty] private bool _hasAnyErrors;
+        [ObservableProperty] private bool _isWeakChannel;
         [ObservableProperty] private bool _isEmpty = true;
         [ObservableProperty] private bool _isFilterNoResults;
         [ObservableProperty] private bool _isLoading = true;
@@ -238,9 +247,14 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             TotalServers = Servers.Count;
             OnlineCount = Servers.Count(s => s.Status == "Online");
             WarningCount = Servers.Count(s => s.Status == "Warning");
+            UnreachableCount = Servers.Count(s => s.Status == "Unreachable");
+            AuthMismatchCount = Servers.Count(s => s.Status == "AuthMismatch");
             OfflineCount = Servers.Count(s => s.Status == "Offline");
             UnknownCount = Servers.Count(s => s.Status == "Unknown");
             HasAnyErrors = Servers.Any(s => s.Payload?.Errors?.Count > 0);
+            IsWeakChannel = ShaPrint.WpfApp.Models.AppSettings.Current.NetworkChannel == "DefaultChannel" || 
+                            string.IsNullOrWhiteSpace(ShaPrint.WpfApp.Models.AppSettings.Current.NetworkChannel) || 
+                            ShaPrint.WpfApp.Models.AppSettings.Current.NetworkChannel.Trim().Length < 8;
             IsEmpty = Servers.Count == 0;
             
             // If we have servers but filtered view is empty, and filter is not empty
@@ -447,17 +461,32 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             });
         }
 
-        public void UpdateServerOffline(string hostName, string ipAddress)
+        public void UpdateServerFailure(string hostName, string ipAddress, string category)
         {
             RunOnDispatcher(() =>
             {
                 var server = Servers.FirstOrDefault(s => s.HostName.Equals(hostName, StringComparison.OrdinalIgnoreCase));
                 if (server != null)
                 {
-                    // Only mark offline if last seen was > 30s ago, or if TCP connection failed (TCP failure is immediate)
-                    server.Status = "Offline";
                     server.IpAddress = ipAddress;
-                    server.Payload = null;
+
+                    if (category == "AuthMismatch")
+                    {
+                        server.Status = "AuthMismatch";
+                        server.Payload = null;
+                    }
+                    else
+                    {
+                        if (DateTime.UtcNow - server.LastSeen > TimeSpan.FromSeconds(30))
+                        {
+                            server.Status = "Offline";
+                            server.Payload = null;
+                        }
+                        else
+                        {
+                            server.Status = "Unreachable";
+                        }
+                    }
                 }
                 SafeRefreshView();
             });
