@@ -16,7 +16,14 @@ namespace ShaPrint.Client
         private string _serverIp;
         private string _targetPrinterName;
         private CancellationTokenSource? _cts;
-        private string _localPrinterName;
+        private string _localPrinterName;
+
+        /// <summary>
+        /// Fires when SendToServerAsync cannot reach the server. Parameterless by design —
+        /// the unreachable IP is captured in the log line for diagnostics. Subscribed by
+        /// ServerReachabilityTracker. NOT fired on a successful send.
+        /// </summary>
+        public event Action? OnServerUnreachable;
 
         public PipeListener(string pipeName, string serverIp, string targetPrinterName, string localPrinterName)
         {
@@ -133,7 +140,8 @@ namespace ShaPrint.Client
             }
             catch (Exception ex)
             {
-                ShaPrint.Core.AppLogger.Error($"[CLIENT] Failed to send print job to server: " + ex.Message);
+                ShaPrint.Core.AppLogger.Error($"[CLIENT] Failed to send print job to server {_serverIp}: " + ex.Message);
+                OnServerUnreachable?.Invoke();
             }
         }
     }
