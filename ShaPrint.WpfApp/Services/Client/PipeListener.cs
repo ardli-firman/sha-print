@@ -181,7 +181,7 @@ namespace ShaPrint.Client
 
                 }
 
-                catch (OperationCanceledException) { break; }
+                catch (OperationCanceledException) { IsListening = false; break; }
 
                 catch (Exception ex)
                 {
