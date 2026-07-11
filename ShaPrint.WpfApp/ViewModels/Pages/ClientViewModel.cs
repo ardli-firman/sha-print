@@ -62,7 +62,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         private List<InstalledPrinterConfig> _installedPrinters = new();
         private List<PipeListener> _activeListeners = new();
-        private ServerReachabilityTracker? _tracker;
+        private volatile ServerReachabilityTracker? _tracker;
 
         [ObservableProperty]
         private string _targetIp = "";
@@ -116,37 +116,48 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _ = _tracker?.RequestRescanAsync(ServerReachabilityTracker.RescanReason.PrintFailed, CancellationToken.None);
         }
 
-        private void RestartListener(InstalledPrinterConfig cfg)
+        private async Task RestartListenerAsync(InstalledPrinterConfig cfg)
         {
+            // P2.3: Must run on UI Thread!
+            if (Application.Current?.Dispatcher != null && !Application.Current.Dispatcher.CheckAccess())
+            {
+                await Application.Current.Dispatcher.InvokeAsync(() => RestartListenerAsync(cfg));
+                return;
+            }
+
             var oldListener = _activeListeners.FirstOrDefault(l => l.PipeName == cfg.PipeName);
             if (oldListener != null)
             {
                 oldListener.OnServerUnreachable -= TriggerTrackerRescan;
                 oldListener.Stop();
+                _activeListeners.Remove(oldListener);
             }
 
-            // 200ms grace for the OS to release the named pipe handle.
-            Thread.Sleep(200);
+            // P2.1: 200ms grace using async await Task.Delay to avoid blocking UI thread
+            await Task.Delay(200);
+
+            // Re-check if another listener was started for this pipe name during the delay
+            var concurrentListener = _activeListeners.FirstOrDefault(l => l.PipeName == cfg.PipeName);
+            if (concurrentListener != null)
+            {
+                concurrentListener.OnServerUnreachable -= TriggerTrackerRescan;
+                concurrentListener.Stop();
+                _activeListeners.Remove(concurrentListener);
+            }
 
             var fresh = new PipeListener(cfg.PipeName, cfg.ServerIp, cfg.TargetPrinterName, cfg.VirtualPrinterName);
             fresh.OnServerUnreachable += TriggerTrackerRescan;
             fresh.Start();
-
-            if (oldListener != null)
-            {
-                int idx = _activeListeners.IndexOf(oldListener);
-                _activeListeners[idx] = fresh;
-            }
-            else
-            {
-                _activeListeners.Add(fresh);
-            }
+            _activeListeners.Add(fresh);
         }
 
         private void OnServerIdentityChanged(ServerIdentityChangedArgs args)
         {
             var cfg = _installedPrinters.FirstOrDefault(c => c.PipeName == args.PipeName);
-            if (cfg != null) RestartListener(cfg);
+            if (cfg != null)
+            {
+                _ = RestartListenerAsync(cfg);
+            }
 
             SaveConfiguration();
             Application.Current?.Dispatcher.InvokeAsync(() =>
@@ -266,7 +277,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     cfg.ServerIp = match.IpAddress;
                     SaveConfiguration();
                     
-                    RestartListener(cfg);
+                    await RestartListenerAsync(cfg);
 
                     _snackbarService.Show(
                         "Server IP updated",
