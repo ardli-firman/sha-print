@@ -1,3 +1,4 @@
+.omp/
 # Agent & Pi
 .agents/
 .pi/

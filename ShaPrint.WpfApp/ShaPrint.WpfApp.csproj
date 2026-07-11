@@ -9,6 +9,7 @@
     <PackageReference Include="FontAwesome.Sharp" Version="6.6.0" />
     <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.0.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
     <PackageReference Include="System.IO.Pipes.AccessControl" Version="5.0.0" />
     <PackageReference Include="WPF-UI" Version="4.3.0" />
   </ItemGroup>
@@ -16,7 +17,8 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <AssemblyName>ShaPrint</AssemblyName>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.17763</TargetFramework>
+    <WindowsSdkPackageVersion>10.0.17763.56</WindowsSdkPackageVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
@@ -27,6 +29,8 @@
 
   <ItemGroup>
     <Resource Include="icon.ico" />
+    <Resource Include="Assets\Icons\Logo_rounded.png" />
+    <Resource Include="Assets\Icons\Logo_circle.png" />
   </ItemGroup>
 
   <ItemGroup>

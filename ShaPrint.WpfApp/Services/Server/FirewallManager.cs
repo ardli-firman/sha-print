@@ -27,8 +27,9 @@ namespace ShaPrint.Server
                 {
                     bool tcpExists = CheckRuleExists("ShaPrint Server TCP");
                     bool udpExists = CheckRuleExists("ShaPrint Server UDP");
+                    bool monitorTcpExists = CheckRuleExists("ShaPrint Monitor TCP");
 
-                    if (tcpExists && udpExists)
+                    if (tcpExists && udpExists && monitorTcpExists)
                     {
                         AppLogger.Log("[SERVER] Firewall rules verified — ports are open.");
                         return;
@@ -39,7 +40,7 @@ namespace ShaPrint.Server
                     try
                     {
                         result = MessageBox.Show(
-                            "ShaPrint Server needs to open network ports (TCP 9877 & UDP 9876) in Windows Firewall.\n\n" +
+                            "ShaPrint Server needs to open network ports (TCP 9877, UDP 9876 & Monitor TCP 9878) in Windows Firewall.\n\n" +
                             "This is a one-time setup. After the rules are added, you will NOT be prompted again on future starts.\n\n" +
                             "Configure now?", 
                             "Firewall Configuration (one-time)", 
@@ -55,6 +56,7 @@ namespace ShaPrint.Server
                     {
                         if (!tcpExists) AddRule("ShaPrint Server TCP", "TCP", Constants.PrintTcpPort);
                         if (!udpExists) AddRule("ShaPrint Server UDP", "UDP", Constants.DiscoveryUdpPort);
+                        if (!monitorTcpExists) AddRule("ShaPrint Monitor TCP", "TCP", Constants.MonitorTcpPort);
                         AppLogger.Log("[SERVER] Firewall rules added successfully (persistent).");
                     }
                     else

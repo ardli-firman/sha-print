@@ -19,6 +19,7 @@ public class PrintJobPayloadTests
         var original = new PrintJobPayload
         {
             TargetPrinterName = "Epson L3210 Series",
+            DocumentName = "Invoice.pdf",
             SpoolData = Encoding.UTF8.GetBytes("RAW spool data for the printer")
         };
 
@@ -30,6 +31,7 @@ public class PrintJobPayloadTests
         var recovered = await PrintJobPayload.ReadAsync(ms);
 
         Assert.Equal(original.TargetPrinterName, recovered.TargetPrinterName);
+        Assert.Equal(original.DocumentName, recovered.DocumentName);
         Assert.Equal(original.SpoolData, recovered.SpoolData);
     }
 
@@ -41,6 +43,7 @@ public class PrintJobPayloadTests
         var original = new PrintJobPayload
         {
             TargetPrinterName = "SecretPrinter",
+            DocumentName = "Classified.docx",
             SpoolData = Encoding.UTF8.GetBytes("CLASSIFIED DOCUMENT")
         };
 
@@ -166,6 +169,7 @@ public class PrintJobPayloadTests
         var original = new PrintJobPayload
         {
             TargetPrinterName = "Large Job Printer",
+            DocumentName = "HugeReport.xlsx",
             SpoolData = largeData
         };
 
@@ -176,6 +180,7 @@ public class PrintJobPayloadTests
         var recovered = await PrintJobPayload.ReadAsync(ms);
 
         Assert.Equal(original.TargetPrinterName, recovered.TargetPrinterName);
+        Assert.Equal(original.DocumentName, recovered.DocumentName);
         Assert.Equal(original.SpoolData, recovered.SpoolData);
     }
 
@@ -187,6 +192,7 @@ public class PrintJobPayloadTests
         var original = new PrintJobPayload
         {
             TargetPrinterName = "Target",
+            DocumentName = "secret.txt",
             SpoolData = Encoding.UTF8.GetBytes("secret print data")
         };
 
@@ -203,5 +209,66 @@ public class PrintJobPayloadTests
         using var tamperedStream = new MemoryStream(buffer);
         await Assert.ThrowsAsync<InvalidDataException>(
             () => PrintJobPayload.ReadAsync(tamperedStream));
+    }
+
+    [Fact]
+    public async Task ReadAsync_DocumentNameTooLong_TruncatesTo1024Characters()
+    {
+        var original = new PrintJobPayload
+        {
+            TargetPrinterName = "Printer",
+            DocumentName = new string('A', 2000), // 2000 characters
+            SpoolData = Encoding.UTF8.GetBytes("Data")
+        };
+
+        using var ms = new MemoryStream();
+        await PrintJobPayload.WriteAsync(ms, original);
+        ms.Position = 0;
+
+        var recovered = await PrintJobPayload.ReadAsync(ms);
+
+        Assert.Equal(1024, recovered.DocumentName.Length);
+        Assert.Equal(new string('A', 1024), recovered.DocumentName);
+    }
+
+    [Fact]
+    public async Task ReadAsync_LegacyPayloadWithoutDocumentName_ParsesSuccessfullyWithEmptyDocumentName()
+    {
+        var printerName = "LegacyPrinter";
+        var spoolData = Encoding.UTF8.GetBytes("Legacy Spool Data");
+
+        // Manually build legacy inner payload
+        byte[] innerPayload;
+        using (var ms = new MemoryStream())
+        using (var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
+        {
+            bw.Write(printerName);
+            bw.Write(spoolData.Length);
+            bw.Write(spoolData);
+            bw.Flush();
+            innerPayload = ms.ToArray();
+        }
+
+        // Encrypt with AES-GCM
+        byte[] encryptedBlob = CryptoHelper.EncryptAesGcm(innerPayload);
+
+        // Build the wire payload
+        using var wireMs = new MemoryStream();
+        using (var bw = new BinaryWriter(wireMs, Encoding.UTF8, leaveOpen: true))
+        {
+            bw.Write(encryptedBlob.Length);
+            bw.Write(encryptedBlob);
+            bw.Flush();
+        }
+
+        wireMs.Position = 0;
+
+        // Act
+        var payload = await PrintJobPayload.ReadAsync(wireMs);
+
+        // Assert
+        Assert.Equal(printerName, payload.TargetPrinterName);
+        Assert.Equal(string.Empty, payload.DocumentName);
+        Assert.Equal(spoolData, payload.SpoolData);
     }
 }

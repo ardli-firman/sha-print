@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using ShaPrint.Core;
 using Wpf.Ui;
 using ShaPrint.WpfApp.Models;
+using ShaPrint.WpfApp.Services;
 
 namespace ShaPrint.WpfApp.Services.Server
 {
@@ -13,11 +14,13 @@ namespace ShaPrint.WpfApp.Services.Server
     {
         private CancellationTokenSource? _cts;
         private readonly ISnackbarService _snackbarService;
+        private readonly INotificationService _notificationService;
         private List<string> _monitoredPrinters = new List<string>();
 
-        public PrintMonitorService(ISnackbarService snackbarService)
+        public PrintMonitorService(ISnackbarService snackbarService, INotificationService notificationService)
         {
             _snackbarService = snackbarService;
+            _notificationService = notificationService;
         }
 
         public void SetMonitoredPrinters(List<string> printers)
@@ -89,6 +92,8 @@ namespace ShaPrint.WpfApp.Services.Server
                             {
                                 AppLogger.Error($"[MONITOR] Failed to cancel job {job.JobIdentifier}.", ex);
                             }
+                            _notificationService.ShowPrinterError(queue.Name,
+                                $"Auto-purged job {job.JobIdentifier}: {job.JobStatus}");
                         }
                     }
                 }
@@ -105,7 +110,7 @@ namespace ShaPrint.WpfApp.Services.Server
 
         private void ShowAlert(string printerName, string jobName)
         {
-            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 _snackbarService.Show(
                     "Print Job Failed",

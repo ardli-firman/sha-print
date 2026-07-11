@@ -100,7 +100,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
             if (result == MessageBoxResult.Yes)
             {
-                _updateService.LaunchUpdaterAndExit(SelectedRelease.DownloadUrl);
+                _updateService.LaunchUpdater(SelectedRelease.DownloadUrl);
             }
         }
     }

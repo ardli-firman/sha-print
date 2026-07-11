@@ -5,12 +5,21 @@
       Title="Settings"
       ScrollViewer.VerticalScrollBarVisibility="Disabled">
 
-    <ScrollViewer x:Name="RootScrollViewer" 
-                  VerticalScrollBarVisibility="Auto" 
-                  HorizontalScrollBarVisibility="Disabled"
-                  CanContentScroll="False"
-                  PanningMode="VerticalOnly"
-                  PreviewMouseWheel="RootScrollViewer_PreviewMouseWheel">
+    <Grid ClipToBounds="True">
+        <!-- Background Ornaments -->
+        <Ellipse Width="200" Height="200" Fill="#FFF9E6" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-60,-50,0" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="170" Height="170" Fill="#EDF2FF" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-50,0,0,-50" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="16" Height="16" Fill="#FFF9E6" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,80,60" IsHitTestVisible="False" Opacity="0.6"/>
+
+        <ui:SymbolIcon Symbol="Settings24" FontSize="44" Foreground="#D97706" Opacity="0.04" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,40,40,0" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="ShieldKeyhole24" FontSize="36" Foreground="#D97706" Opacity="0.04" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="40,0,0,40" IsHitTestVisible="False"/>
+
+        <ScrollViewer x:Name="RootScrollViewer" 
+                      VerticalScrollBarVisibility="Auto" 
+                      HorizontalScrollBarVisibility="Disabled"
+                      CanContentScroll="False"
+                      PanningMode="VerticalOnly"
+                      PreviewMouseWheel="RootScrollViewer_PreviewMouseWheel">
         <StackPanel Margin="24,20,24,24" MaxWidth="700">
             
             <!-- Header -->
@@ -33,6 +42,10 @@
                 </ui:CardControl.Header>
                 <ui:TextBox Text="{Binding ViewModel.ChannelName, UpdateSourceTrigger=PropertyChanged}" Width="180" />
             </ui:CardControl>
+            <ui:InfoBar IsOpen="True" Severity="Warning" Title="Weak Channel"
+                        Message="Please use at least 8 characters. Default or short channels offer minimal security."
+                        Visibility="{Binding ViewModel.IsWeakChannel, Converter={StaticResource BoolToVis}}"
+                        Margin="0,0,0,16"/>
             
             <!-- Startup Setting -->
             <ui:CardControl Margin="0,0,0,8" Icon="{ui:SymbolIcon Play24}">
@@ -66,7 +79,38 @@
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                 </StackPanel>
             </ui:CardAction>
-
+ 
+            <!-- Scanner Section -->
+            <TextBlock Text="SCANNER" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,10" 
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            
+            <!-- Auto-Save Scans -->
+            <ui:CardControl Margin="0,0,0,8" Icon="{ui:SymbolIcon Save24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Auto-Save Scans" FontSize="14" FontWeight="Medium"/>
+                        <TextBlock Text="Save remote scans automatically upon completion" FontSize="12" 
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:ToggleSwitch IsChecked="{Binding ViewModel.AutoSaveScans}" />
+            </ui:CardControl>
+ 
+            <!-- Default Folder Path -->
+            <ui:CardControl Margin="0,0,0,28" Icon="{ui:SymbolIcon Folder24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Default Scans Folder" FontSize="14" FontWeight="Medium"/>
+                        <TextBlock Text="Directory where auto-saved scans are stored" FontSize="12" 
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <StackPanel Orientation="Horizontal" Width="300" HorizontalAlignment="Right">
+                    <ui:TextBox Text="{Binding ViewModel.DefaultScansFolder, Mode=TwoWay}" Width="230" Margin="0,0,6,0" IsReadOnly="True" />
+                    <ui:Button Content="Browse..." Command="{Binding ViewModel.BrowseFolderCommand}" Width="64" />
+                </StackPanel>
+            </ui:CardControl>
+ 
             <!-- Updates Section -->
             <TextBlock Text="UPDATES" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,10" 
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
@@ -123,4 +167,5 @@
 
         </StackPanel>
     </ScrollViewer>
+    </Grid>
 </Page>

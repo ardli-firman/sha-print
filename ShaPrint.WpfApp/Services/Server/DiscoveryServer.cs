@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using ShaPrint.Core;
+using ShaPrint.WpfApp.Services;
 using ShaPrint.Core.Network;
 
 namespace ShaPrint.Server
@@ -18,6 +19,20 @@ namespace ShaPrint.Server
         private UdpClient? _udpClient;
         private CancellationTokenSource? _cts;
         private List<string> _exposedPrinters = new List<string>();
+        private List<string> _exposedScanners = new List<string>();
+        private readonly INotificationService _notificationService;
+        private volatile string? _serverId;
+
+        public void SetServerId(string? serverId) => _serverId = serverId;
+
+        // Client tracking for connect/disconnect notifications
+        private readonly HashSet<string> _connectedClients = new();
+        private readonly ConcurrentDictionary<string, DateTime> _lastSeenByClient = new();
+        private readonly ConcurrentDictionary<string, DateTime> _connectionStartTime = new();
+        private readonly HashSet<string> _monitorClients = new();
+        private int _requestCount;
+
+        private readonly ScannerService _scannerService = new ScannerService();
 
         // Rate limiting: max 5 requests per second per IP
         private readonly ConcurrentDictionary<string, RateLimitEntry> _rateLimits = new();
@@ -29,10 +44,37 @@ namespace ShaPrint.Server
             public int Count;
             public long WindowStart;
         }
+        public DiscoveryServer(INotificationService notificationService)
+        {
+            _notificationService = notificationService;
+        }
+
+        public Dictionary<string, DateTime> GetActiveClientsWithConnectionTimes()
+        {
+            var result = new Dictionary<string, DateTime>();
+            lock (_connectedClients)
+            {
+                foreach (var ip in _connectedClients)
+                {
+                    if (!_monitorClients.Contains(ip))
+                    {
+                        _connectionStartTime.TryGetValue(ip, out var startTime);
+                        result[ip] = startTime == default ? DateTime.UtcNow : startTime;
+                    }
+                }
+            }
+            return result;
+        }
+
 
         public void SetExposedPrinters(List<string> printers)
         {
             _exposedPrinters = printers;
+        }
+
+        public void SetExposedScanners(List<string> scanners)
+        {
+            _exposedScanners = scanners;
         }
 
         public void Start()
@@ -87,7 +129,8 @@ namespace ShaPrint.Server
                     string request = Encoding.UTF8.GetString(result.Buffer);
                     string remoteIp = result.RemoteEndPoint.Address.ToString();
 
-                    if (request != Constants.DiscoveryRequestMessage)
+                    bool isMonitorRequest = (request == Constants.MonitorDiscoveryRequestMessage);
+                    if (request != Constants.DiscoveryRequestMessage && !isMonitorRequest)
                         continue;
 
                     if (IsRateLimited(remoteIp))
@@ -117,8 +160,31 @@ namespace ShaPrint.Server
                     {
                         ServerName = Environment.MachineName,
                         IpAddress = GetLocalIPAddress(),
-                        ExposedPrinters = exposedInfos
+                        ExposedPrinters = exposedInfos,
+                        ExposedScanners = _exposedScanners.Count > 0 ? new List<ScannerInfo>() : null,
+                        ServerId = _serverId
                     };
+
+                    if (response.ExposedScanners != null)
+                    {
+                        try
+                        {
+                            var allLocalScanners = _scannerService.GetLocalScanners();
+                            foreach (var s in _exposedScanners)
+                            {
+                                var found = allLocalScanners.FirstOrDefault(x => x.Name == s);
+                                response.ExposedScanners.Add(new ScannerInfo
+                                {
+                                    Name = s,
+                                    Description = found?.Description ?? "WIA Scanner"
+                                });
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLogger.Error("[DISCOVERY] Error loading exposed scanners detail", ex);
+                        }
+                    }
 
                     // Enforce response size limit
                     string jsonResponse = JsonSerializer.Serialize(response);
@@ -137,6 +203,52 @@ namespace ShaPrint.Server
                     response.HmacSignature = CryptoHelper.SignHmac(Encoding.UTF8.GetBytes(jsonResponse));
                     jsonResponse = JsonSerializer.Serialize(response);
 
+
+                    // Track client for connect/disconnect notifications
+                    bool isNewClient;
+                    lock (_connectedClients)
+                    {
+                        if (isMonitorRequest)
+                        {
+                            _monitorClients.Add(remoteIp);
+                        }
+                        isNewClient = _connectedClients.Add(remoteIp);
+                        if (isNewClient)
+                        {
+                            _connectionStartTime[remoteIp] = DateTime.UtcNow;
+                        }
+                    }
+
+                    if (isNewClient && !isMonitorRequest)
+                    {
+                        _notificationService.ShowClientConnected(remoteIp);
+                    }
+                    _lastSeenByClient[remoteIp] = DateTime.UtcNow;
+
+                    // Periodic cleanup of disconnected clients (every ~50 requests)
+                    if (++_requestCount % 50 == 0)
+                    {
+                        var cutoff = DateTime.UtcNow.AddMinutes(-5);
+                        foreach (var kvp in _lastSeenByClient)
+                        {
+                            if (kvp.Value < cutoff)
+                            {
+                                var disconnectedIp = kvp.Key;
+                                bool isMonitor;
+                                lock (_connectedClients)
+                                {
+                                    _connectedClients.Remove(disconnectedIp);
+                                    _connectionStartTime.TryRemove(disconnectedIp, out _);
+                                    isMonitor = _monitorClients.Remove(disconnectedIp);
+                                }
+                                _lastSeenByClient.TryRemove(disconnectedIp, out _);
+                                if (!isMonitor)
+                                {
+                                    _notificationService.ShowClientDisconnected(disconnectedIp);
+                                }
+                            }
+                        }
+                    }
                     byte[] responseData = Encoding.UTF8.GetBytes(jsonResponse);
                     await _udpClient.SendAsync(responseData, responseData.Length, result.RemoteEndPoint);
                 }

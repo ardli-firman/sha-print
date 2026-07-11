@@ -17,6 +17,7 @@ namespace ShaPrint.Core.Network
     public class PrintJobPayload
     {
         public string TargetPrinterName { get; set; } = string.Empty;
+        public string DocumentName { get; set; } = string.Empty;
         public byte[] SpoolData { get; set; } = Array.Empty<byte>();
 
         public static async Task WriteAsync(Stream stream, PrintJobPayload payload)
@@ -37,6 +38,7 @@ namespace ShaPrint.Core.Network
                 using (var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
                 {
                     bw.Write(payload.TargetPrinterName);
+                    bw.Write(payload.DocumentName);
                     bw.Write(payload.SpoolData.Length);
                     bw.Write(payload.SpoolData);
                     bw.Flush();
@@ -56,54 +58,102 @@ namespace ShaPrint.Core.Network
 
         public static async Task<PrintJobPayload> ReadAsync(Stream stream)
         {
-            return await Task.Run(() =>
+            var tcs = new TaskCompletionSource<PrintJobPayload>();
+            await Task.Run(() =>
             {
                 using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
-
-                // Read encrypted blob length with validation
                 int encryptedLength = reader.ReadInt32();
-                if (encryptedLength < 0)
-                    throw new InvalidDataException($"Negative encrypted blob length: {encryptedLength}.");
-                if (encryptedLength > Constants.MaxPrintJobBytes + 1024) // allow overhead for encryption
-                    throw new InvalidDataException(
-                        $"Encrypted blob exceeds limit: {encryptedLength} bytes (max ~{Constants.MaxPrintJobBytes + 1024}).");
-
-                byte[] encryptedBlob = reader.ReadBytes(encryptedLength);
-                if (encryptedBlob.Length != encryptedLength)
-                    throw new InvalidDataException($"Truncated payload: expected {encryptedLength}, got {encryptedBlob.Length}.");
-
-                // Decrypt with AES-256-GCM
-                byte[] innerPayload;
-                try
-                {
-                    innerPayload = CryptoHelper.DecryptAesGcm(encryptedBlob);
-                }
-                catch (CryptographicException ex)
-                {
-                    throw new InvalidDataException("AES-GCM authentication failed — payload may have been tampered.", ex);
-                }
-
-                // Deserialize inner payload
-                using var ms = new MemoryStream(innerPayload);
-                using var br = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
-
-                var payload = new PrintJobPayload();
-
-                payload.TargetPrinterName = br.ReadString();
-                if (payload.TargetPrinterName.Length > Constants.MaxTargetPrinterNameBytes)
-                    throw new InvalidDataException(
-                        $"TargetPrinterName too long: {payload.TargetPrinterName.Length} bytes (max {Constants.MaxTargetPrinterNameBytes}).");
-
-                int dataLength = br.ReadInt32();
-                if (dataLength < 0)
-                    throw new InvalidDataException($"Negative spool data length: {dataLength}.");
-                if (dataLength > Constants.MaxPrintJobBytes)
-                    throw new InvalidDataException(
-                        $"Spool data exceeds limit: {dataLength} bytes (max {Constants.MaxPrintJobBytes}).");
-
-                payload.SpoolData = br.ReadBytes(dataLength);
-                return payload;
+                var payload = ReadInternal(reader, encryptedLength);
+                tcs.SetResult(payload);
             });
+            return await tcs.Task;
+        }
+
+        public static PrintJobPayload ReadInternal(BinaryReader reader, int encryptedLength)
+        {
+            if (encryptedLength < 0)
+                throw new InvalidDataException($"Negative encrypted blob length: {encryptedLength}.");
+            if (encryptedLength > Constants.MaxPrintJobBytes + 1024) // allow overhead for encryption
+                throw new InvalidDataException(
+                    $"Encrypted blob exceeds limit: {encryptedLength} bytes (max ~{Constants.MaxPrintJobBytes + 1024}).");
+
+            byte[] encryptedBlob = reader.ReadBytes(encryptedLength);
+            if (encryptedBlob.Length != encryptedLength)
+                throw new InvalidDataException($"Truncated payload: expected {encryptedLength}, got {encryptedBlob.Length}.");
+
+            // Decrypt with AES-256-GCM
+            byte[] innerPayload;
+            try
+            {
+                innerPayload = CryptoHelper.DecryptAesGcm(encryptedBlob);
+            }
+            catch (CryptographicException ex)
+            {
+                throw new InvalidDataException("AES-GCM authentication failed — payload may have been tampered.", ex);
+            }
+
+            // Deserialize inner payload
+            using var ms = new MemoryStream(innerPayload);
+            using var br = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+
+            var payload = new PrintJobPayload();
+
+            payload.TargetPrinterName = br.ReadString();
+            if (payload.TargetPrinterName.Length > Constants.MaxTargetPrinterNameBytes)
+                throw new InvalidDataException(
+                    $"TargetPrinterName too long: {payload.TargetPrinterName.Length} bytes (max {Constants.MaxTargetPrinterNameBytes}).");
+
+            // Detect format version (legacy/v1 vs new/v2 with DocumentName)
+            long posBeforeDetect = ms.Position;
+            bool parsedAsNewFormat = false;
+
+            try
+            {
+                payload.DocumentName = br.ReadString();
+                long remainingAfterDocName = ms.Length - ms.Position;
+                if (remainingAfterDocName >= 4)
+                {
+                    int dataLength = br.ReadInt32();
+                    if (dataLength >= 0 && dataLength <= Constants.MaxPrintJobBytes && dataLength == remainingAfterDocName - 4)
+                    {
+                        payload.SpoolData = br.ReadBytes(dataLength);
+                        if (payload.DocumentName.Length > 1024)
+                        {
+                            payload.DocumentName = payload.DocumentName.Substring(0, 1024);
+                        }
+                        parsedAsNewFormat = true;
+                    }
+                }
+            }
+            catch
+            {
+                // Fallback to legacy parsing below
+            }
+
+            if (!parsedAsNewFormat)
+            {
+                // Reset position to after TargetPrinterName
+                ms.Position = posBeforeDetect;
+                long remainingAfterReset = ms.Length - ms.Position;
+                if (remainingAfterReset >= 4)
+                {
+                    int dataLength = br.ReadInt32();
+                    if (dataLength < 0)
+                        throw new InvalidDataException($"Negative spool data length: {dataLength}.");
+                    if (dataLength > Constants.MaxPrintJobBytes)
+                        throw new InvalidDataException(
+                            $"Spool data exceeds limit: {dataLength} bytes (max {Constants.MaxPrintJobBytes}).");
+
+                    payload.DocumentName = string.Empty;
+                    payload.SpoolData = br.ReadBytes(dataLength);
+                }
+                else
+                {
+                    throw new InvalidDataException("Invalid print job payload format.");
+                }
+            }
+
+            return payload;
         }
     }
 }

@@ -28,7 +28,7 @@ ArchitecturesInstallIn64BitMode=x64
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"
 
 [Files]
-Source: "ShaPrint.WpfApp\bin\Release\net8.0-windows\win-x64\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "ShaPrint.WpfApp\bin\Release\net8.0-windows10.0.17763\win-x64\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "ShaPrint.Updater\bin\Release\net8.0-windows\win-x64\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
@@ -38,3 +38,7 @@ Name: "{commondesktop}\ShaPrint"; Filename: "{app}\ShaPrint.exe"; Tasks: desktop
 
 [Run]
 Filename: "{app}\ShaPrint.exe"; Description: "Launch ShaPrint"; Flags: nowait postinstall shellexec
+
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{0B640367-F3EC-4F81-AF86-B648234F059A}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\ShaPrint.NotificationApp"; Flags: uninsdeletekey

@@ -169,7 +169,7 @@ namespace ShaPrint.WpfApp.Services
                 {
                     if (AppSettings.Current.AutoUpdateEnabled)
                     {
-                        LaunchUpdaterAndExit(latestInChannel.DownloadUrl);
+                        LaunchUpdater(latestInChannel.DownloadUrl);
                     }
                     else
                     {
@@ -180,7 +180,7 @@ namespace ShaPrint.WpfApp.Services
                                 
                             if (result == MessageBoxResult.Yes)
                             {
-                                LaunchUpdaterAndExit(latestInChannel.DownloadUrl);
+                                LaunchUpdater(latestInChannel.DownloadUrl);
                             }
                         });
                     }
@@ -192,7 +192,7 @@ namespace ShaPrint.WpfApp.Services
             }
         }
 
-        public void LaunchUpdaterAndExit(string downloadUrl)
+        public void LaunchUpdater(string downloadUrl)
         {
             string updaterPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ShaPrint.Updater.exe");
             if (File.Exists(updaterPath))
@@ -203,7 +203,6 @@ namespace ShaPrint.WpfApp.Services
                     Arguments = $"--url \"{downloadUrl}\"",
                     UseShellExecute = true
                 });
-                Environment.Exit(0);
             }
             else
             {

@@ -20,10 +20,25 @@ namespace ShaPrint.WpfApp.Views.Windows
 
             // Set WelcomeFrame content
             WelcomeFrame.Content = welcomePage;
+
+            // Handle OS session ending/shutdown to prevent blocking OS shutdown
+            if (Application.Current != null)
+            {
+                Application.Current.SessionEnding += (s, args) =>
+                {
+                    ViewModel.IsExiting = true;
+                };
+            }
         }
 
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
+            if (ViewModel.IsExiting)
+            {
+                base.OnClosing(e);
+                return;
+            }
+
             // Intercept closing to hide instead of exit, creating the system tray stealth mode
             e.Cancel = true;
             this.Hide();

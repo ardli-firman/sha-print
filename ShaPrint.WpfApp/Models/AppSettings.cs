@@ -17,7 +17,10 @@ namespace ShaPrint.WpfApp.Models
         public bool AutoPurgeEnabled { get; set; } = true;
         public DateTime LastUpdateCheck { get; set; } = DateTime.MinValue;
         public UpdateChannel Channel { get; set; } = UpdateChannel.Stable;
-
+ 
+        public bool AutoSaveScans { get; set; } = false;
+        public string DefaultScansFolder { get; set; } = string.Empty;
+ 
         public string EncryptedNetworkChannel { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonIgnore]

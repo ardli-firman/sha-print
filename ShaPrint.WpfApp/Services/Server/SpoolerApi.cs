@@ -60,8 +60,11 @@ namespace ShaPrint.Server
         [DllImport("winspool.Drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
         public static extern bool ClosePrinter(IntPtr hPrinter);
 
+        [DllImport("winspool.Drv", EntryPoint = "SetJob", SetLastError = true, ExactSpelling = false, CallingConvention = CallingConvention.StdCall)]
+        public static extern bool SetJob(IntPtr hPrinter, int JobId, int Level, IntPtr pJob, int Command);
+
         [DllImport("winspool.Drv", EntryPoint = "StartDocPrinter", SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.StdCall)]
-        public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFO di);
+        public static extern int StartDocPrinter(IntPtr hPrinter, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFO di);
 
         [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
         public static extern bool EndDocPrinter(IntPtr hPrinter);
@@ -155,59 +158,93 @@ namespace ShaPrint.Server
             return printers;
         }
 
-        public static bool PrintRawData(string printerName, byte[] data, string documentName)
+        public static async System.Threading.Tasks.Task<bool> PrintRawDataAsync(string printerName, byte[] data, string documentName, TimeSpan? timeout = null)
         {
-            IntPtr pBytes = Marshal.AllocCoTaskMem(data.Length);
-            Marshal.Copy(data, 0, pBytes, data.Length);
-            bool success = false;
-            try
+            TimeSpan actualTimeout = timeout ?? TimeSpan.FromSeconds(120);
+            int jobId = 0;
+
+            var printTask = System.Threading.Tasks.Task.Factory.StartNew(() =>
             {
-                IntPtr hPrinter = new IntPtr(0);
-                ShaPrint.Core.AppLogger.Log($"[SPOOLER] Attempting to open printer: '{printerName}'");
-                if (OpenPrinter(printerName.Normalize(), out hPrinter, IntPtr.Zero))
+                IntPtr pBytes = Marshal.AllocCoTaskMem(data.Length);
+                Marshal.Copy(data, 0, pBytes, data.Length);
+                bool success = false;
+                try
                 {
-                    ShaPrint.Core.AppLogger.Log($"[SPOOLER] Printer opened successfully. Starting document '{documentName}'");
-                    DOCINFO di = new DOCINFO
+                    IntPtr hPrinter = new IntPtr(0);
+                    ShaPrint.Core.AppLogger.Log($"[SPOOLER] Attempting to open printer: '{printerName}'");
+                    if (OpenPrinter(printerName.Normalize(), out hPrinter, IntPtr.Zero))
                     {
-                        pDocName = documentName,
-                        pDatatype = "RAW"
-                    };
-
-                    if (StartDocPrinter(hPrinter, 1, di))
-                    {
-                        if (StartPagePrinter(hPrinter))
+                        ShaPrint.Core.AppLogger.Log($"[SPOOLER] Printer opened successfully. Starting document '{documentName}'");
+                        DOCINFO di = new DOCINFO
                         {
-                            int dwWritten = 0;
-                            success = WritePrinter(hPrinter, pBytes, data.Length, out dwWritten);
-                            if (!success)
-                                ShaPrint.Core.AppLogger.Error($"[SPOOLER] WritePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
-                            else
-                                ShaPrint.Core.AppLogger.Log($"[SPOOLER] WritePrinter wrote {dwWritten} bytes to the spooler.");
+                            pDocName = documentName,
+                            pDatatype = "RAW"
+                        };
 
-                            EndPagePrinter(hPrinter);
+                        int currentJobId = StartDocPrinter(hPrinter, 1, di);
+                        if (currentJobId > 0)
+                        {
+                            System.Threading.Interlocked.Exchange(ref jobId, currentJobId);
+                            if (StartPagePrinter(hPrinter))
+                            {
+                                int dwWritten = 0;
+                                success = WritePrinter(hPrinter, pBytes, data.Length, out dwWritten);
+                                if (!success)
+                                    ShaPrint.Core.AppLogger.Error($"[SPOOLER] WritePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                                else
+                                    ShaPrint.Core.AppLogger.Log($"[SPOOLER] WritePrinter wrote {dwWritten} bytes to the spooler.");
+
+                                EndPagePrinter(hPrinter);
+                            }
+                            else
+                            {
+                                ShaPrint.Core.AppLogger.Error($"[SPOOLER] StartPagePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                            }
+                            EndDocPrinter(hPrinter);
                         }
                         else
                         {
-                            ShaPrint.Core.AppLogger.Error($"[SPOOLER] StartPagePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                            ShaPrint.Core.AppLogger.Error($"[SPOOLER] StartDocPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                         }
-                        EndDocPrinter(hPrinter);
+                        ClosePrinter(hPrinter);
                     }
                     else
                     {
-                        ShaPrint.Core.AppLogger.Error($"[SPOOLER] StartDocPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                        ShaPrint.Core.AppLogger.Error($"[SPOOLER] OpenPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                     }
-                    ClosePrinter(hPrinter);
                 }
-                else
+                finally
                 {
-                    ShaPrint.Core.AppLogger.Error($"[SPOOLER] OpenPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
+                    Marshal.FreeCoTaskMem(pBytes);
                 }
-            }
-            finally
+                return success;
+            }, System.Threading.CancellationToken.None, System.Threading.Tasks.TaskCreationOptions.LongRunning, System.Threading.Tasks.TaskScheduler.Default);
+
+            if (await System.Threading.Tasks.Task.WhenAny(printTask, System.Threading.Tasks.Task.Delay(actualTimeout)) == printTask)
             {
-                Marshal.FreeCoTaskMem(pBytes);
+                return await printTask;
             }
-            return success;
+            else
+            {
+                ShaPrint.Core.AppLogger.Error($"[SPOOLER] PrintRawData timed out after {actualTimeout.TotalSeconds}s for '{printerName}'.");
+                int capturedJobId = System.Threading.Volatile.Read(ref jobId);
+                if (capturedJobId > 0)
+                {
+                    ShaPrint.Core.AppLogger.Log($"[SPOOLER] Attempting to abort stuck Job ID {capturedJobId}...");
+                    IntPtr abortHandle = IntPtr.Zero;
+                    if (OpenPrinter(printerName.Normalize(), out abortHandle, IntPtr.Zero))
+                    {
+                        bool deleted = SetJob(abortHandle, capturedJobId, 0, IntPtr.Zero, 5 /* JOB_CONTROL_DELETE */);
+                        if (deleted)
+                            ShaPrint.Core.AppLogger.Log($"[SPOOLER] Successfully aborted Job ID {capturedJobId}.");
+                        else
+                            ShaPrint.Core.AppLogger.Error($"[SPOOLER] Failed to abort Job ID {capturedJobId}. Win32 Error: {Marshal.GetLastWin32Error()}");
+                        
+                        ClosePrinter(abortHandle);
+                    }
+                }
+                return false;
+            }
         }
     }
 }
