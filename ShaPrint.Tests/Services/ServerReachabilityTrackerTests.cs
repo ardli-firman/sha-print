@@ -30,7 +30,7 @@ namespace ShaPrint.Tests.Services
             public List<ServerIdentityChangedArgs> ChangedEvents { get; } = new();
             public List<SuspiciousMatchArgs> SuspiciousEvents { get; } = new();
 
-            public ServerReachabilityTracker BuildTracker()
+            public ServerReachabilityTracker BuildTracker(TimeSpan? debounceWindow = null)
             {
                 return new ServerReachabilityTracker(
                     configProvider: () => Configs,
@@ -48,7 +48,7 @@ namespace ShaPrint.Tests.Services
                         Listeners.Add(new FakeListener { ServerIp = args.NewIp, Started = true });
                     },
                     onSuspiciousMatch: args => SuspiciousEvents.Add(args),
-                    debounceWindow: TimeSpan.FromMilliseconds(50)
+                    debounceWindow: debounceWindow ?? TimeSpan.FromMilliseconds(50)
                 );
             }
         }
@@ -188,7 +188,23 @@ namespace ShaPrint.Tests.Services
         }
 
         [Fact]
-        public async Task RequestRescan_DebouncesRapidTriggersPerPipe()
+        public async Task RequestRescan_DebouncesRapidTriggersGlobally()
+        {
+            var h = new Harness();
+            var tracker = h.BuildTracker(debounceWindow: TimeSpan.FromMilliseconds(500));
+
+            var t1 = tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
+            var t2 = tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.PrintFailed, CancellationToken.None);
+            var t3 = tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.PrintFailed, CancellationToken.None);
+            await Task.WhenAll(t1, t2, t3);
+
+            // Since debounce is 500ms and they run concurrently, the semaphore and the last scan check will coalesce
+            // them into exactly 1 call.
+            Assert.Equal(1, h.ScanCallCount);
+        }
+
+        [Fact]
+        public async Task RequestRescan_HandlesConfigDeletedMidScan()
         {
             var h = new Harness();
             var cfg = new InstalledPrinterConfig
@@ -202,20 +218,6 @@ namespace ShaPrint.Tests.Services
             };
             h.Configs.Add(cfg);
 
-            var tracker = h.BuildTracker();
-            var t1 = tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
-            var t2 = tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.PrintFailed, CancellationToken.None);
-            var t3 = tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.PrintFailed, CancellationToken.None);
-            await Task.WhenAll(t1, t2, t3);
-
-            // Coalescing and debounce window limits the scan count.
-            Assert.True(h.ScanCallCount <= 3, $"Expected ≤ 3 scan calls, got {h.ScanCallCount}");
-        }
-
-        [Fact]
-        public async Task RequestRescan_HandlesConfigDeletedMidScan()
-        {
-            var h = new Harness();
             h.NextScanResult.Add(new DiscoveryResponseMessage
             {
                 ServerName = "HomePC",
@@ -225,15 +227,20 @@ namespace ShaPrint.Tests.Services
             });
 
             var tracker = new ServerReachabilityTracker(
-                configProvider: () => new List<InstalledPrinterConfig>(), // empty: no configs to apply to
+                configProvider: () =>
+                {
+                    // Mid-scan simulation: remove configuration
+                    h.Configs.Clear();
+                    return h.Configs;
+                },
                 scanner: async () =>
                 {
                     h.ScanCallCount++;
                     await Task.Yield();
                     return h.NextScanResult;
                 },
-                onIdentityChanged: h.ChangedEvents.Add,
-                onSuspiciousMatch: h.SuspiciousEvents.Add,
+                onIdentityChanged: args => h.ChangedEvents.Add(args),
+                onSuspiciousMatch: args => h.SuspiciousEvents.Add(args),
                 debounceWindow: TimeSpan.FromMilliseconds(50)
             );
 
@@ -278,6 +285,108 @@ namespace ShaPrint.Tests.Services
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
                 await tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, cts.Token));
+        }
+
+        [Fact]
+        public async Task RequestRescan_PropagatesCancellationMidScan()
+        {
+            var h = new Harness();
+            var cts = new CancellationTokenSource();
+
+            var tracker = new ServerReachabilityTracker(
+                configProvider: () => h.Configs,
+                scanner: async () =>
+                {
+                    cts.Cancel();
+                    await Task.Delay(10);
+                    cts.Token.ThrowIfCancellationRequested();
+                    return new List<DiscoveryResponseMessage>();
+                },
+                onIdentityChanged: h.ChangedEvents.Add,
+                onSuspiciousMatch: h.SuspiciousEvents.Add,
+                debounceWindow: TimeSpan.FromMilliseconds(50)
+            );
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, cts.Token));
+        }
+
+        [Fact]
+        public async Task RequestRescan_ScannerThrows_PropagatesException()
+        {
+            var h = new Harness();
+            var tracker = new ServerReachabilityTracker(
+                configProvider: () => h.Configs,
+                scanner: () => throw new InvalidOperationException("Scanner fault"),
+                onIdentityChanged: h.ChangedEvents.Add,
+                onSuspiciousMatch: h.SuspiciousEvents.Add,
+                debounceWindow: TimeSpan.FromMilliseconds(50)
+            );
+
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task RequestRescan_IpUnchanged_FiresNoEvents()
+        {
+            var h = new Harness();
+            var cfg = new InstalledPrinterConfig
+            {
+                VirtualPrinterName = "ShaPrint [HomePC] - Printer1",
+                PipeName = "pipe-F",
+                ServerIp = "1.1.1.1",
+                TargetPrinterName = "Printer1",
+                DriverName = "Generic / Text Only",
+                ServerId = "S1"
+            };
+            h.Configs.Add(cfg);
+
+            h.NextScanResult.Add(new DiscoveryResponseMessage
+            {
+                ServerName = "HomePC",
+                IpAddress = "1.1.1.1",
+                ServerId = "S1",
+                ExposedPrinters = new List<PrinterInfo> { new() { Name = "Printer1" } }
+            });
+
+            var tracker = h.BuildTracker();
+            await tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
+
+            Assert.Equal(1, h.ScanCallCount);
+            Assert.Empty(h.ChangedEvents);
+            Assert.Empty(h.SuspiciousEvents);
+        }
+
+        [Fact]
+        public async Task RequestRescan_SuspiciousMatch_WhenConfigHasServerIdButServerReturnsNull()
+        {
+            var h = new Harness();
+            var cfg = new InstalledPrinterConfig
+            {
+                VirtualPrinterName = "ShaPrint [HomePC] - Printer1",
+                PipeName = "pipe-G",
+                ServerIp = "1.1.1.1",
+                TargetPrinterName = "Printer1",
+                DriverName = "Generic / Text Only",
+                ServerId = "SOME-ID"
+            };
+            h.Configs.Add(cfg);
+
+            h.NextScanResult.Add(new DiscoveryResponseMessage
+            {
+                ServerName = "HomePC",
+                IpAddress = "2.2.2.2",
+                ServerId = null,
+                ExposedPrinters = new List<PrinterInfo> { new() { Name = "Printer1" } }
+            });
+
+            var tracker = h.BuildTracker();
+            await tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
+
+            Assert.Empty(h.ChangedEvents);
+            Assert.Single(h.SuspiciousEvents);
+            Assert.Equal("1.1.1.1", cfg.ServerIp);
         }
     }
 }
