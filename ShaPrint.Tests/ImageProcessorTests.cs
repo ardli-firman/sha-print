@@ -326,6 +326,9 @@ namespace ShaPrint.Tests
                 var frame = decoder.Frames[0];
                 Assert.Equal(1, frame.PixelWidth);
                 Assert.Equal(1, frame.PixelHeight);
+                byte[] pixels = new byte[4];
+                frame.CopyPixels(pixels, 4, 0);
+                Assert.True(pixels[3] < 10, "Expected transparent alpha for uniform image due to background normalization");
             }
         }
     }

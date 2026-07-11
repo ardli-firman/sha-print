@@ -96,7 +96,7 @@ namespace ShaPrint.Tests
             }
         }
         [Fact]
-        public async Task DiscoveryClient_Unicast_DiscoversCrossVlanServer()
+        public async Task DiscoveryClient_UnicastToLocalhost_Succeeds()
         {
             var mockNotification = new MockNotificationService();
             var discoveryServer = new DiscoveryServer(mockNotification);

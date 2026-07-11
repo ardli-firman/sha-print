@@ -19,18 +19,27 @@ namespace ShaPrint.Tests
             await Task.Delay(100);
             
             // Trigger restart
-            listener.Stop();
+            await listener.StopAsync();
             
             // Act: the old implementation would silently fail here due to MaxNumberOfServerInstances=1.
             // The fixed implementation awaits cleanup in Stop(), so the new Start() succeeds immediately.
             listener.Start();
             
             await Task.Delay(100);
-            listener.Stop();
+            await listener.StopAsync();
             
-            // If no exceptions were thrown (especially IOException/UnauthorizedAccessException inside the listener loop),
-            // and the test completes, it passes.
-            Assert.True(true);
+            // Verify it is actually listening
+            bool isListening = false;
+            for (int i = 0; i < 20; i++)
+            {
+                if (listener.IsListening)
+                {
+                    isListening = true;
+                    break;
+                }
+                await Task.Delay(100);
+            }
+            Assert.True(isListening, $"Listener failed to start listening. Last Error: {listener.LastError?.Message}");
         }
     }
 }

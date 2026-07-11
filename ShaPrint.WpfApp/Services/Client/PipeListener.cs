@@ -42,6 +42,8 @@ namespace ShaPrint.Client
         /// ServerReachabilityTracker. NOT fired on a successful send.
         /// </summary>
         public event Action? OnServerUnreachable;
+        public bool IsListening { get; private set; }
+        public Exception? LastError { get; private set; }
 
 
 
@@ -66,30 +68,29 @@ namespace ShaPrint.Client
         private Task? _listenTask;
 
         public void Start()
-
         {
-
             if (_listenTask != null && !_listenTask.IsCompleted) return;
+            _cts?.Dispose();
             _cts = new CancellationTokenSource();
             _listenTask = Task.Run(() => ListenLoopAsync(_cts.Token));
-
         }
 
 
 
-        public void Stop()
-
+        public async Task StopAsync()
         {
-
             _cts?.Cancel();
             if (_listenTask != null)
             {
-                try { _listenTask.Wait(TimeSpan.FromSeconds(2)); }
+                try { await Task.WhenAny(_listenTask, Task.Delay(2000)); }
                 catch { }
                 _listenTask = null;
             }
-
+            _cts?.Dispose();
+            _cts = null;
         }
+
+        public void Stop() => _ = StopAsync();
 
 
 
@@ -142,7 +143,12 @@ namespace ShaPrint.Client
 
 
                     using var ctr = token.Register(() => pipeServer.Dispose());
-                    try { await pipeServer.WaitForConnectionAsync(token); }
+                    try 
+                    { 
+                        IsListening = true;
+                        await pipeServer.WaitForConnectionAsync(token); 
+                        IsListening = false;
+                    }
                     catch (ObjectDisposedException) { throw new OperationCanceledException(); }
 
                     string documentName = GetActiveDocumentName();
@@ -178,13 +184,12 @@ namespace ShaPrint.Client
                 catch (OperationCanceledException) { break; }
 
                 catch (Exception ex)
-
                 {
-
-                    ShaPrint.Core.AppLogger.Log("[CLIENT] Pipe error: " + ex.Message);
-
-                    await Task.Delay(1000); // Backoff on error
-
+                    LastError = ex;
+                    IsListening = false;
+                    AppLogger.Error("Pipe listener error", ex);
+                    // Add a tiny delay on error to prevent CPU spin if it repeatedly fails
+                    await Task.Delay(100, token);
                 }
 
             }
@@ -294,7 +299,6 @@ namespace ShaPrint.Client
                 {
                     ShaPrint.Core.AppLogger.Error("[CLIENT] Error invoking OnServerUnreachable: " + invokeEx.Message);
                 }
-
             }
 
         }
