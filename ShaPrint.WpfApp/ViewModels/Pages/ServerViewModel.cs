@@ -51,6 +51,12 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
     {
         public List<string> ExposedPrinters { get; set; } = new();
         public List<string> ExposedScanners { get; set; } = new();
+
+        /// <summary>
+        /// Stable server identity UUID. Null in files written before this feature was added;
+        /// populated and persisted from the first save onward. Broadcast in discovery responses.
+        /// </summary>
+        public string? ServerId { get; set; }
     }
 
     public partial class ServerViewModel : ObservableObject, IDisposable
@@ -85,6 +91,11 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public List<string> ExposedScanners { get; private set; } = new();
 
         public DiscoveryServer DiscoveryServer => _discoveryServer;
+
+        /// <summary>
+        /// Stable server identity. Null until the first <see cref="SaveConfiguration"/> call.
+        /// </summary>
+        public string? ServerId { get; private set; }
 
         [ObservableProperty]
         private bool _isRunning;
@@ -248,6 +259,10 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _discoveryServer.SetExposedPrinters(selectedPrinters);
             _discoveryServer.SetExposedScanners(selectedScanners);
             _printMonitorService?.SetMonitoredPrinters(selectedPrinters);
+
+            // Save configuration before starting so ServerId is persisted and broadcast correctly
+            SaveConfiguration(selectedPrinters, selectedScanners);
+
             _discoveryServer.Start();
             _printReceiver.Start();
             _printMonitorService?.Start();
@@ -265,7 +280,6 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             IsRunning = true;
             StatusText = "Status: Running";
 
-            SaveConfiguration(selectedPrinters, selectedScanners);
             _snackbarService?.Show("Server Started", $"Broadcasting {selectedPrinters.Count} printers and {selectedScanners.Count} scanners.", ControlAppearance.Success, new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Play24), TimeSpan.FromSeconds(3));
         }
 
@@ -331,6 +345,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     {
                         savedPrinters = savedConfig.ExposedPrinters;
                         savedScanners = savedConfig.ExposedScanners;
+                        ServerId = savedConfig.ServerId;
+                        _discoveryServer.SetServerId(ServerId);
                     }
                 }
                 catch
@@ -374,14 +390,25 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             if (IsUnitTest) return;
             try
             {
+                var newServerId = ServerId;
+                if (string.IsNullOrEmpty(newServerId))
+                {
+                    newServerId = Guid.NewGuid().ToString("N");
+                }
+
                 var config = new ServerSavedConfig
                 {
                     ExposedPrinters = printers,
-                    ExposedScanners = scanners
+                    ExposedScanners = scanners,
+                    ServerId = newServerId
                 };
                 string json = JsonSerializer.Serialize(config);
                 string wrapped = CryptoHelper.WrapConfigWithHmac(json);
                 File.WriteAllText(_configFile, wrapped);
+
+                // Commit in-memory property and listener ONLY after successful write to disk
+                ServerId = newServerId;
+                _discoveryServer.SetServerId(ServerId);
             }
             catch (Exception ex) { AppLogger.Error("Failed to save server configuration", ex); }
         }

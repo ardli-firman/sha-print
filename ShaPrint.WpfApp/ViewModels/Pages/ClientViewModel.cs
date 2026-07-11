@@ -44,6 +44,13 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public string ServerIp { get; set; } = string.Empty;
         public string TargetPrinterName { get; set; } = string.Empty;
         public string DriverName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Stable per-server UUID captured from the discovery response at install time.
+        /// Null for installs from pre-ServerId servers. Used by ServerReachabilityTracker
+        /// to match this entry against a discovered server whose IP may have changed.
+        /// </summary>
+        public string? ServerId { get; set; }
     }
 
     public partial class ClientViewModel : ObservableObject, IDisposable
@@ -55,6 +62,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         private List<InstalledPrinterConfig> _installedPrinters = new();
         private List<PipeListener> _activeListeners = new();
+        private volatile ServerReachabilityTracker? _tracker;
 
         [ObservableProperty]
         private string _targetIp = "";
@@ -85,6 +93,107 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             AppLogger.OnLog += AppLogger_OnLog;
 
             LoadConfiguration();
+            InitializeTracker();
+        }
+
+        private void InitializeTracker()
+        {
+            _tracker = new ServerReachabilityTracker(
+                configProvider: () => _installedPrinters,
+                scanner: () => _discoveryClient.DiscoverServersAsync(targetIp: null, timeoutMs: 2000),
+                onIdentityChanged: OnServerIdentityChanged,
+                onSuspiciousMatch: OnSuspiciousMatch,
+                debounceWindow: TimeSpan.FromSeconds(30)
+            );
+
+            // Subscribe every existing + future PipeListener's OnServerUnreachable to the tracker.
+            foreach (var l in _activeListeners) l.OnServerUnreachable += TriggerTrackerRescan;
+        }
+
+        private void TriggerTrackerRescan()
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    if (_tracker != null)
+                    {
+                        await _tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.PrintFailed, CancellationToken.None);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error("[CLIENT] Error during background reachability rescan", ex);
+                }
+            });
+        }
+
+        private async Task RestartListenerAsync(InstalledPrinterConfig cfg)
+        {
+            // P2.3: Must run on UI Thread!
+            if (Application.Current?.Dispatcher != null && !Application.Current.Dispatcher.CheckAccess())
+            {
+                await Application.Current.Dispatcher.InvokeAsync(() => RestartListenerAsync(cfg));
+                return;
+            }
+
+            var oldListener = _activeListeners.FirstOrDefault(l => l.PipeName == cfg.PipeName);
+            if (oldListener != null)
+            {
+                oldListener.OnServerUnreachable -= TriggerTrackerRescan;
+                oldListener.Stop();
+                _activeListeners.Remove(oldListener);
+            }
+
+            // P2.1: 200ms grace using async await Task.Delay to avoid blocking UI thread
+            await Task.Delay(200);
+
+            // Re-check if another listener was started for this pipe name during the delay
+            var concurrentListener = _activeListeners.FirstOrDefault(l => l.PipeName == cfg.PipeName);
+            if (concurrentListener != null)
+            {
+                concurrentListener.OnServerUnreachable -= TriggerTrackerRescan;
+                concurrentListener.Stop();
+                _activeListeners.Remove(concurrentListener);
+            }
+
+            var fresh = new PipeListener(cfg.PipeName, cfg.ServerIp, cfg.TargetPrinterName, cfg.VirtualPrinterName);
+            fresh.OnServerUnreachable += TriggerTrackerRescan;
+            fresh.Start();
+            _activeListeners.Add(fresh);
+        }
+
+        private void OnServerIdentityChanged(ServerIdentityChangedArgs args)
+        {
+            var cfg = _installedPrinters.FirstOrDefault(c => c.PipeName == args.PipeName);
+            if (cfg != null)
+            {
+                _ = RestartListenerAsync(cfg);
+            }
+
+            SaveConfiguration();
+            Application.Current?.Dispatcher.InvokeAsync(() =>
+            {
+                _snackbarService.Show(
+                    "Server IP updated",
+                    $"Server '{args.ServerName}' IP updated: {args.OldIp} → {args.NewIp}",
+                    ControlAppearance.Info,
+                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ArrowSync24),
+                    TimeSpan.FromSeconds(5));
+            });
+        }
+
+        private void OnSuspiciousMatch(SuspiciousMatchArgs args)
+        {
+            Application.Current?.Dispatcher.InvokeAsync(() =>
+            {
+                _snackbarService.Show(
+                    "Server identity changed",
+                    $"Server identity changed for '{args.ExpectedServerName}'. Please remove and reinstall this virtual printer.",
+                    ControlAppearance.Caution,
+                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Warning24),
+                    TimeSpan.FromSeconds(7));
+            });
         }
 
         private void AppLogger_OnLog(string msg)
@@ -153,6 +262,44 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 }
             }
 
+            // Unicast rescan for any saved config entry that wasn't represented in the
+            // broadcast results. This catches the "server IP changed, but we are still
+            // pointed at the old IP via the saved config" case.
+            var matchedVirtualNames = new HashSet<string>(
+                DiscoveredPrinters.Select(p => p.DisplayName),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var cfg in _installedPrinters.ToList())
+            {
+                string displayName = $"[{ServerReachabilityTracker.ExtractServerName(cfg.VirtualPrinterName)}] {cfg.TargetPrinterName}";
+                if (matchedVirtualNames.Contains(displayName)) continue;
+                if (string.IsNullOrEmpty(cfg.ServerIp)) continue;
+
+                var unicast = await _discoveryClient.DiscoverServersAsync(cfg.ServerIp, timeoutMs: 3000);
+                if (unicast.Count == 0) continue;
+
+                var match = unicast.FirstOrDefault(r =>
+                    (!string.IsNullOrEmpty(cfg.ServerId) && r.ServerId == cfg.ServerId) ||
+                    (string.IsNullOrEmpty(cfg.ServerId) && string.Equals(r.ServerName, ServerReachabilityTracker.ExtractServerName(cfg.VirtualPrinterName), StringComparison.OrdinalIgnoreCase)));
+
+                if (match == null) continue;
+
+                if (!string.Equals(match.IpAddress, cfg.ServerIp, StringComparison.Ordinal))
+                {
+                    var oldIp = cfg.ServerIp;
+                    cfg.ServerIp = match.IpAddress;
+                    SaveConfiguration();
+                    
+                    await RestartListenerAsync(cfg);
+
+                    _snackbarService.Show(
+                        "Server IP updated",
+                        $"Server '{match.ServerName}' IP updated: {oldIp} → {match.IpAddress}",
+                        ControlAppearance.Info,
+                        new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ArrowSync24),
+                        TimeSpan.FromSeconds(5));
+                }
+            }
+
             StatusText = $"Found {discoveredServers.Count} server(s).";
             IsScanning = false;
         }
@@ -189,6 +336,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 if (result.Success)
                 {
                     var listener = new PipeListener(pipeName, serverIp, printerName, virtualPrinterName);
+                    listener.OnServerUnreachable += TriggerTrackerRescan;
                     listener.Start();
                     _activeListeners.Add(listener);
 
@@ -198,7 +346,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         PipeName = pipeName,
                         ServerIp = serverIp,
                         TargetPrinterName = printerName,
-                        DriverName = driverName
+                        DriverName = driverName,
+                        ServerId = item.Server.ServerId
                     });
                     SaveConfiguration();
 
@@ -269,6 +418,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     var listener = _activeListeners.FirstOrDefault(l => l.PipeName == config.PipeName);
                     if (listener != null)
                     {
+                        listener.OnServerUnreachable -= TriggerTrackerRescan;
                         listener.Stop();
                         _activeListeners.Remove(listener);
                     }
@@ -320,6 +470,26 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         var listener = new PipeListener(config.PipeName, config.ServerIp, config.TargetPrinterName, config.VirtualPrinterName);
                         listener.Start();
                         _activeListeners.Add(listener);
+                    }
+
+                    if (_installedPrinters.Count > 0)
+                    {
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await Task.Delay(2000);
+                                if (_tracker == null) InitializeTracker();
+                                if (_tracker != null)
+                                {
+                                    await _tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                AppLogger.Error("[CLIENT] Error during startup reachability rescan", ex);
+                            }
+                        });
                     }
                 }
             }
