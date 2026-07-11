@@ -38,3 +38,7 @@ Name: "{commondesktop}\ShaPrint"; Filename: "{app}\ShaPrint.exe"; Tasks: desktop
 
 [Run]
 Filename: "{app}\ShaPrint.exe"; Description: "Launch ShaPrint"; Flags: nowait postinstall shellexec
+
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{0B640367-F3EC-4F81-AF86-B648234F059A}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\ShaPrint.NotificationApp"; Flags: uninsdeletekey

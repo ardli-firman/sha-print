@@ -27,7 +27,7 @@ namespace ShaPrint.Tests
         public void BuildStatus_ServerName_HostName_AreMachineName()
         {
             // Arrange
-            var svm = CreateSvm();
+            using var svm = CreateSvm();
             var provider = new ServerStatusProvider(svm);
 
             // Act
@@ -43,7 +43,7 @@ namespace ShaPrint.Tests
         public void BuildStatus_Uptime_WhenServerNotStarted_ReturnsZero()
         {
             // Arrange — no ServerStartTime set (null)
-            var svm = CreateSvm(null);
+            using var svm = CreateSvm(null);
             var provider = new ServerStatusProvider(svm);
 
             // Act
@@ -58,7 +58,7 @@ namespace ShaPrint.Tests
         {
             // Arrange
             var startTime = DateTime.UtcNow.AddHours(-2);
-            var svm = CreateSvm(startTime);
+            using var svm = CreateSvm(startTime);
             var provider = new ServerStatusProvider(svm);
 
             // Act
@@ -73,7 +73,7 @@ namespace ShaPrint.Tests
         public void BuildStatus_NoExposedPrinters_ReturnsEmptyPrinters()
         {
             // Arrange
-            var svm = CreateSvm(DateTime.UtcNow);
+            using var svm = CreateSvm(DateTime.UtcNow);
             // ExposedPrinters is empty by default
             var provider = new ServerStatusProvider(svm);
 
@@ -89,7 +89,7 @@ namespace ShaPrint.Tests
         public void BuildStatus_NoExposedScanners_ReturnsEmptyScanners()
         {
             // Arrange
-            var svm = CreateSvm(DateTime.UtcNow);
+            using var svm = CreateSvm(DateTime.UtcNow);
             var provider = new ServerStatusProvider(svm);
 
             // Act
@@ -104,7 +104,7 @@ namespace ShaPrint.Tests
         public void BuildStatus_ActiveClients_ReturnsEmptyWhenNoDiscoveryServer()
         {
             // Arrange — DiscoveryServer is null by default
-            var svm = CreateSvm(DateTime.UtcNow);
+            using var svm = CreateSvm(DateTime.UtcNow);
             var provider = new ServerStatusProvider(svm);
 
             // Act
@@ -118,7 +118,7 @@ namespace ShaPrint.Tests
         public void BuildStatus_Version_ReturnsAssemblyVersion()
         {
             // Arrange
-            var svm = CreateSvm(DateTime.UtcNow);
+            using var svm = CreateSvm(DateTime.UtcNow);
             var provider = new ServerStatusProvider(svm);
 
             // Act
@@ -133,7 +133,7 @@ namespace ShaPrint.Tests
         public void BuildStatus_RecentJobs_FromViewModel()
         {
             // Arrange
-            var svm = CreateSvm(DateTime.UtcNow);
+            using var svm = CreateSvm(DateTime.UtcNow);
             svm.RecentJobs.Enqueue(new JobHistoryEntry
             {
                 Type = "print",
@@ -159,7 +159,7 @@ namespace ShaPrint.Tests
         public void BuildStatus_Errors_FromViewModel()
         {
             // Arrange
-            var svm = CreateSvm(DateTime.UtcNow);
+            using var svm = CreateSvm(DateTime.UtcNow);
             svm.Errors.Enqueue(new ServerErrorEntry
             {
                 Source = "PrintMonitor",

@@ -141,7 +141,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             if (oldListener != null)
             {
                 oldListener.OnServerUnreachable -= TriggerTrackerRescan;
-                oldListener.Stop();
+                await oldListener.StopAsync();
                 _activeListeners.Remove(oldListener);
             }
 
@@ -153,7 +153,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             if (concurrentListener != null)
             {
                 concurrentListener.OnServerUnreachable -= TriggerTrackerRescan;
-                concurrentListener.Stop();
+                await concurrentListener.StopAsync();
                 _activeListeners.Remove(concurrentListener);
             }
 

@@ -145,9 +145,9 @@ namespace ShaPrint.Tests
                 // Green and Yellow should become transparent background (Alpha ~0, Color ~0)
                 // Layout for Bgra32 is [B, G, R, A]
                 
-                // Pixel 0 (originally Red -> ink): Red is a mid-gray value (~127 raw) and gets normalized to ~196.
-                // With threshold [180, 240], it maps to ~68 Gray8, which translates to Alpha = 255 - 68 = 187.
-                Assert.True(outputPixels[3] > 180 && outputPixels[3] < 195, $"Expected pixel 0 alpha to be near 187, got {outputPixels[3]}");
+                // Pixel 0 (originally Red -> ink). Because the image is tiny (3x3), the background normalization
+                // averages it with the white pixels. The math yields exactly 187 for Alpha.
+                Assert.Equal(187, outputPixels[3]);
                 Assert.Equal(0, outputPixels[0]); // B
                 Assert.Equal(0, outputPixels[1]); // G
                 Assert.Equal(0, outputPixels[2]); // R
@@ -284,6 +284,51 @@ namespace ShaPrint.Tests
                 Assert.True(outputPixels[centerPixelOffset + 0] >= 127 && outputPixels[centerPixelOffset + 0] <= 131, $"Expected blue channel of center pixel to be near 129, got {outputPixels[centerPixelOffset + 0]}");
                 Assert.True(outputPixels[centerPixelOffset + 1] >= 127 && outputPixels[centerPixelOffset + 1] <= 131, $"Expected green channel of center pixel to be near 129, got {outputPixels[centerPixelOffset + 1]}");
                 Assert.True(outputPixels[centerPixelOffset + 2] >= 127 && outputPixels[centerPixelOffset + 2] <= 131, $"Expected red channel of center pixel to be near 129, got {outputPixels[centerPixelOffset + 2]}");
+            }
+        }
+
+        [Fact]
+        public void ProcessImage_EmptyInput_ReturnsEmptyArray()
+        {
+            var output = ImageProcessor.ProcessImage(new byte[0], 0, "JPEG");
+            Assert.NotNull(output);
+            Assert.Empty(output);
+        }
+
+        [Fact]
+        public void ProcessImage_NullInput_ReturnsEmptyArray()
+        {
+            var output = ImageProcessor.ProcessImage(null!, 0, "JPEG");
+            Assert.NotNull(output);
+            Assert.Empty(output);
+        }
+
+        [Fact]
+        public void ProcessImage_1x1_BlackAndWhite()
+        {
+            var writeableBitmap = new WriteableBitmap(1, 1, 96, 96, PixelFormats.Gray8, null);
+            writeableBitmap.WritePixels(new System.Windows.Int32Rect(0, 0, 1, 1), new byte[] { 50 }, 1, 0);
+
+            byte[] inputBytes;
+            using (var ms = new MemoryStream())
+            {
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(writeableBitmap));
+                encoder.Save(ms);
+                inputBytes = ms.ToArray();
+            }
+
+            var outputBytes = ImageProcessor.ProcessImage(inputBytes, 0, "PNG");
+            
+            using (var ms = new MemoryStream(outputBytes))
+            {
+                var decoder = BitmapDecoder.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                var frame = decoder.Frames[0];
+                Assert.Equal(1, frame.PixelWidth);
+                Assert.Equal(1, frame.PixelHeight);
+                byte[] pixels = new byte[4];
+                frame.CopyPixels(pixels, 4, 0);
+                Assert.True(pixels[3] < 10, "Expected transparent alpha for uniform image due to background normalization");
             }
         }
     }

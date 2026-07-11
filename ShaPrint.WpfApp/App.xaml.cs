@@ -181,6 +181,17 @@ namespace ShaPrint.WpfApp
             }
             catch { }
 
+            try
+            {
+#pragma warning disable CS0618
+                ToastNotificationManagerCompat.Uninstall();
+#pragma warning restore CS0618
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("Failed to uninstall toast notification COM server on exit", ex);
+            }
+
             await _host.StopAsync();
             _host.Dispose();
         }
