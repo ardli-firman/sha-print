@@ -119,14 +119,17 @@
                 </StackPanel.Triggers>
 
                 <!-- App Icon -->
-                <Border Width="46" Height="46" CornerRadius="14"
-                        Background="#0052CC"
+                <Border Width="56" Height="56" CornerRadius="16"
+                        Background="Transparent"
                         HorizontalAlignment="Center" Margin="0,0,0,14">
                     <Border.Effect>
-                        <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.12" Color="#0052CC"/>
+                        <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.12" Color="#000000"/>
                     </Border.Effect>
-                    <ui:SymbolIcon Symbol="Print24" FontSize="22" Foreground="White"
-                                   VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                    <Image Source="pack://application:,,,/Assets/Icons/Logo_rounded.png" 
+                           Width="56" Height="56"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           UseLayoutRounding="True"
+                           SnapsToDevicePixels="True"/>
                 </Border>
 
                 <!-- Title -->

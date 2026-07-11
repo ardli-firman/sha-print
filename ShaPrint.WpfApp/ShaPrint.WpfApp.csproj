@@ -29,6 +29,8 @@
 
   <ItemGroup>
     <Resource Include="icon.ico" />
+    <Resource Include="Assets\Icons\Logo_rounded.png" />
+    <Resource Include="Assets\Icons\Logo_circle.png" />
   </ItemGroup>
 
   <ItemGroup>
