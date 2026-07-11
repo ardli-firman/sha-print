@@ -53,8 +53,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public List<string> ExposedScanners { get; set; } = new();
 
         /// <summary>
-        /// Stable server identity UUID. Generated once on first save, persisted forever.
-        /// Null for servers that pre-date this feature. Broadcast in discovery responses.
+        /// Stable server identity UUID. Null in files written before this feature was added;
+        /// populated and persisted from the first save onward. Broadcast in discovery responses.
         /// </summary>
         public string? ServerId { get; set; }
     }
@@ -259,6 +259,10 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _discoveryServer.SetExposedPrinters(selectedPrinters);
             _discoveryServer.SetExposedScanners(selectedScanners);
             _printMonitorService?.SetMonitoredPrinters(selectedPrinters);
+
+            // Save configuration before starting so ServerId is persisted and broadcast correctly
+            SaveConfiguration(selectedPrinters, selectedScanners);
+
             _discoveryServer.Start();
             _printReceiver.Start();
             _printMonitorService?.Start();
@@ -276,7 +280,6 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             IsRunning = true;
             StatusText = "Status: Running";
 
-            SaveConfiguration(selectedPrinters, selectedScanners);
             _snackbarService?.Show("Server Started", $"Broadcasting {selectedPrinters.Count} printers and {selectedScanners.Count} scanners.", ControlAppearance.Success, new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Play24), TimeSpan.FromSeconds(3));
         }
 
@@ -387,21 +390,25 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             if (IsUnitTest) return;
             try
             {
-                if (string.IsNullOrEmpty(ServerId))
+                var newServerId = ServerId;
+                if (string.IsNullOrEmpty(newServerId))
                 {
-                    ServerId = Guid.NewGuid().ToString("N");
+                    newServerId = Guid.NewGuid().ToString("N");
                 }
-                _discoveryServer.SetServerId(ServerId);
 
                 var config = new ServerSavedConfig
                 {
                     ExposedPrinters = printers,
                     ExposedScanners = scanners,
-                    ServerId = ServerId
+                    ServerId = newServerId
                 };
                 string json = JsonSerializer.Serialize(config);
                 string wrapped = CryptoHelper.WrapConfigWithHmac(json);
                 File.WriteAllText(_configFile, wrapped);
+
+                // Commit in-memory property and listener ONLY after successful write to disk
+                ServerId = newServerId;
+                _discoveryServer.SetServerId(ServerId);
             }
             catch (Exception ex) { AppLogger.Error("Failed to save server configuration", ex); }
         }
