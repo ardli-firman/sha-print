@@ -35,7 +35,7 @@ namespace ShaPrint.Tests
             var dummyNotification = new DummyNotificationService();
 
             // 1. Arrange: Setup and start Server Mode
-            var serverVm = new ServerViewModel(null!, null!, null!, dummyNotification);
+            using var serverVm = new ServerViewModel(null!, null!, null!, dummyNotification);
             
             // Expose a printer and scanner for the status payload
             serverVm.ExposedPrinters.Add("Office-LaserJet");

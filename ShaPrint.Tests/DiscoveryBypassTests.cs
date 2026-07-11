@@ -47,6 +47,7 @@ namespace ShaPrint.Tests
             try
             {
                 discoveryServer1.Start();
+                await Task.Delay(100);
 
                 using (var udpClient = new UdpClient())
                 {
@@ -75,6 +76,7 @@ namespace ShaPrint.Tests
             try
             {
                 discoveryServer2.Start();
+                await Task.Delay(100);
 
                 using (var udpClient = new UdpClient())
                 {
@@ -91,6 +93,29 @@ namespace ShaPrint.Tests
             finally
             {
                 discoveryServer2.Stop();
+            }
+        }
+        [Fact]
+        public async Task DiscoveryClient_Unicast_DiscoversCrossVlanServer()
+        {
+            var mockNotification = new MockNotificationService();
+            var discoveryServer = new DiscoveryServer(mockNotification);
+            
+            try
+            {
+                discoveryServer.Start();
+                await Task.Delay(100);
+                
+                var client = new ShaPrint.Client.DiscoveryClient();
+                // Act: explicitly provide loopback IP
+                var servers = await client.DiscoverServersAsync("127.0.0.1", timeoutMs: 1000);
+                
+                // Assert
+                Assert.NotEmpty(servers);
+            }
+            finally
+            {
+                discoveryServer.Stop();
             }
         }
     }

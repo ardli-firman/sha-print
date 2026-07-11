@@ -36,19 +36,23 @@ public class NotificationActivator : Microsoft.Toolkit.Uwp.Notifications.Notific
 
         System.Diagnostics.Debug.WriteLine($"[ACTIVATOR] Activated: {arguments}");
 
-        // Try to forward activation args to running app via named pipe
-        try
+        // Try to forward activation args to running app via named pipe without blocking the COM STA thread
+        _ = System.Threading.Tasks.Task.Run(async () =>
         {
-            using var client = new NamedPipeClientStream(".", "ShaPrint.ActivationPipe", PipeDirection.Out);
-            client.Connect(1000);
-            using var writer = new StreamWriter(client);
-            writer.Write(arguments);
-        }
-        catch (Exception ex)
-        {
-            // Pipe write failed — app may not be running or pipe not yet created; safe to ignore
-            System.Diagnostics.Debug.WriteLine($"[ACTIVATOR] Pipe write failed: {ex.Message}");
-        }
+            try
+            {
+                using var client = new NamedPipeClientStream(".", "ShaPrint.ActivationPipe", PipeDirection.Out);
+                await client.ConnectAsync(1000);
+                using var writer = new StreamWriter(client);
+                await writer.WriteLineAsync(arguments);
+                await writer.FlushAsync();
+            }
+            catch (Exception ex)
+            {
+                // Pipe write failed — app may not be running or pipe not yet created; safe to ignore
+                System.Diagnostics.Debug.WriteLine($"[ACTIVATOR] Pipe write failed: {ex.Message}");
+            }
+        });
     }
 }
 #pragma warning restore CS0618

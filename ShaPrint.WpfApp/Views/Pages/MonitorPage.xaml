@@ -18,7 +18,7 @@
 
         <converters:IntToVisibilityConverter x:Key="IntToVis" />
 
-        <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
+        <converters:InvertedBoolToVisibilityConverter x:Key="InverseBoolToVis" />
 
         <converters:StatusToBrushConverter x:Key="StatusToBrush" />
 
