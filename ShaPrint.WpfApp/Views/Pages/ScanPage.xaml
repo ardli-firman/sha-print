@@ -10,7 +10,19 @@
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
     </Page.Resources>
 
-    <Grid Margin="24,20,24,16">
+    <Grid ClipToBounds="True">
+        <!-- Background Ornaments -->
+        <Ellipse Width="240" Height="240" Fill="#E0F7FA" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-80,-70,0" IsHitTestVisible="False" Opacity="0.45"/>
+        <Ellipse Width="180" Height="180" Fill="#F0FDF9" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-60,0,0,-60" IsHitTestVisible="False" Opacity="0.45"/>
+        <Ellipse Width="18" Height="18" Fill="#DBEAFE" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="40,0,0,60" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="30" Height="30" Fill="#E0F7FA" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,60,50" IsHitTestVisible="False" Opacity="0.4"/>
+
+        <!-- Themed icon ornaments -->
+        <ui:SymbolIcon Symbol="ScanDash24" FontSize="50" Foreground="#0891B2" Opacity="0.04" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,30,30,0" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="Print24" FontSize="36" Foreground="#0891B2" Opacity="0.04" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="25,0,0,25" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="DocumentSearch24" FontSize="30" Foreground="#0052CC" Opacity="0.04" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,80,70" IsHitTestVisible="False"/>
+
+        <Grid Margin="24,20,24,16">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="4*" MinWidth="260"/> <!-- Left Panel: Settings, Logs, Discovery -->
             <ColumnDefinition Width="20"/>  <!-- Spacer -->
@@ -296,5 +308,6 @@
                 </Grid>
             </Grid>
         </Grid>
+    </Grid>
     </Grid>
 </Page>
