@@ -5,8 +5,18 @@
       Title="Updates"
       ScrollViewer.VerticalScrollBarVisibility="Disabled">
 
-    <Grid Margin="24,20,24,24" MaxWidth="800">
-        <Grid.RowDefinitions>
+    <Grid ClipToBounds="True">
+        <!-- Background Ornaments -->
+        <Ellipse Width="220" Height="220" Fill="#F0FDF9" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-70,-50,0" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="170" Height="170" Fill="#E0F7FA" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-50,0,0,-50" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="20" Height="20" Fill="#EDF2FF" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,80,60" IsHitTestVisible="False" Opacity="0.6"/>
+
+        <ui:SymbolIcon Symbol="ArrowClockwise24" FontSize="44" Foreground="#107C10" Opacity="0.04" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,40,40,0" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="ArrowDownload24" FontSize="36" Foreground="#107C10" Opacity="0.04" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="40,0,0,40" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="History24" FontSize="28" Foreground="#0891B2" Opacity="0.04" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,120,80" IsHitTestVisible="False"/>
+
+        <Grid Margin="24,20,24,24" MaxWidth="800">
+            <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -49,5 +59,6 @@
             
             <ui:Button Grid.Column="1" Command="{Binding ViewModel.InstallSelectedCommand}" Content="Install Selected" Appearance="Primary" Icon="{ui:SymbolIcon ArrowDownload24}" />
         </Grid>
+    </Grid>
     </Grid>
 </Page>

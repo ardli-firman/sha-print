@@ -9,7 +9,19 @@
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
     </Page.Resources>
 
-    <Grid Margin="24,20,24,16">
+    <Grid ClipToBounds="True">
+        <!-- Background Ornaments -->
+        <Ellipse Width="200" Height="200" Fill="#E0F7FA" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-60,-60" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="160" Height="160" Fill="#EDF2FF" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-40,-40,0,0" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="20" Height="20" Fill="#E0F7FA" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="50,0,0,80" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="24" Height="24" Fill="#DBEAFE" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,60,50,0" IsHitTestVisible="False" Opacity="0.4"/>
+
+        <!-- Themed icon ornaments -->
+        <ui:SymbolIcon Symbol="Print24" FontSize="44" Foreground="#0891B2" Opacity="0.04" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="30,0,0,30" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="Desktop24" FontSize="50" Foreground="#0891B2" Opacity="0.04" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,25,25,0" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="ArrowDownload24" FontSize="30" Foreground="#0052CC" Opacity="0.04" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="40,40,0,0" IsHitTestVisible="False"/>
+
+        <Grid Margin="24,20,24,16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/> <!-- Header -->
             <RowDefinition Height="Auto"/> <!-- Card -->
@@ -120,5 +132,6 @@
                  VerticalScrollBarVisibility="Auto"
                  HorizontalScrollBarVisibility="Auto" />
 
+    </Grid>
     </Grid>
 </Page>

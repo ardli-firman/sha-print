@@ -8,33 +8,107 @@
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       mc:Ignorable="d">
 
-    <!-- Page root containing main layout and modal overlay -->
-    <Grid Background="#F8FAFC">
-        <!-- Fluid 2-Column Grid Layout (stretches to window width, fits in 1 screen) -->
-        <Grid HorizontalAlignment="Stretch" VerticalAlignment="Center" MaxWidth="880" Margin="48,24">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="4*" />  <!-- Left Column (fluid) -->
-                <ColumnDefinition Width="48" />  <!-- Gap (wider for breathing room) -->
-                <ColumnDefinition Width="5*" />  <!-- Right Column (fluid) -->
-            </Grid.ColumnDefinitions>
+    <Grid Background="#F8FAFC" ClipToBounds="True">
 
-            <!-- Left Pane: Branding, Info, and Network Channel Setup -->
-            <StackPanel Grid.Column="0" VerticalAlignment="Top" Opacity="0">
-                <!-- Staggered fade-in animation for left pane -->
+        <!-- ════════════════════════════════════════════════════════ -->
+        <!-- BACKGROUND ORNAMENTS — decorative geometric shapes     -->
+        <!-- ════════════════════════════════════════════════════════ -->
+
+        <!-- Top-right: large blue circle -->
+        <Ellipse Width="280" Height="280"
+                 Fill="#EDF2FF"
+                 HorizontalAlignment="Right" VerticalAlignment="Top"
+                 Margin="0,-90,-70,0"
+                 IsHitTestVisible="False"/>
+
+        <!-- Top-right: smaller accent ring -->
+        <Ellipse Width="80" Height="80"
+                 Stroke="#E0EAFF" StrokeThickness="2"
+                 Fill="Transparent"
+                 HorizontalAlignment="Right" VerticalAlignment="Top"
+                 Margin="0,120,60,0"
+                 IsHitTestVisible="False"/>
+
+        <!-- Bottom-left: large purple circle -->
+        <Ellipse Width="240" Height="240"
+                 Fill="#F5F0FF"
+                 HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                 Margin="-80,0,0,-80"
+                 IsHitTestVisible="False"/>
+
+        <!-- Bottom-left: small teal dot -->
+        <Ellipse Width="24" Height="24"
+                 Fill="#E0F7FA"
+                 HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                 Margin="100,0,0,60"
+                 IsHitTestVisible="False"/>
+
+        <!-- Top-left: medium teal circle -->
+        <Ellipse Width="120" Height="120"
+                 Fill="#F0FDF9"
+                 HorizontalAlignment="Left" VerticalAlignment="Top"
+                 Margin="-30,-30,0,0"
+                 IsHitTestVisible="False"/>
+
+        <!-- Center-right: tiny decorative dot -->
+        <Ellipse Width="14" Height="14"
+                 Fill="#EBF2FF"
+                 HorizontalAlignment="Right" VerticalAlignment="Center"
+                 Margin="0,0,50,80"
+                 IsHitTestVisible="False"/>
+
+        <!-- Bottom-right: small purple dot -->
+        <Ellipse Width="32" Height="32"
+                 Fill="#F3E8FF"
+                 HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                 Margin="0,0,40,40"
+                 IsHitTestVisible="False"/>
+
+        <!-- Mid-left: tiny blue dot -->
+        <Ellipse Width="10" Height="10"
+                 Fill="#DBEAFE"
+                 HorizontalAlignment="Left" VerticalAlignment="Center"
+                 Margin="60,40,0,0"
+                 IsHitTestVisible="False"/>
+
+        <!-- Themed Icon Ornaments -->
+        <ui:SymbolIcon Symbol="Print24" FontSize="56" Foreground="#0052CC" Opacity="0.035" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,50,120,0" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="ScanDash24" FontSize="44" Foreground="#0891B2" Opacity="0.03" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="80,80,0,0" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="Pulse24" FontSize="48" Foreground="#7C3AED" Opacity="0.035" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="60,0,0,100" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="ShareAndroid24" FontSize="40" Foreground="#0052CC" Opacity="0.03" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,120,60" IsHitTestVisible="False"/>
+
+        <!-- Account / User Network Ornaments -->
+        <ui:SymbolIcon Symbol="Person24" FontSize="36" Foreground="#0052CC" Opacity="0.035" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="220,110,0,0" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="People24" FontSize="42" Foreground="#7C3AED" Opacity="0.03" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,180,240,0" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="PersonAccounts24" FontSize="32" Foreground="#0891B2" Opacity="0.035" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="180,0,0,80" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="PeopleCommunity24" FontSize="44" Foreground="#0052CC" Opacity="0.03" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,260,110" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="PersonAvailable24" FontSize="28" Foreground="#0891B2" Opacity="0.04" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="30,0,0,120" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="Guest24" FontSize="30" Foreground="#7C3AED" Opacity="0.03" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,60,30,0" IsHitTestVisible="False"/>
+
+
+
+        <!-- ════════════════════════════════════════════════════════ -->
+        <!-- MAIN CONTENT — single centered column                  -->
+        <!-- ════════════════════════════════════════════════════════ -->
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                    MaxWidth="720" Margin="36,10,36,10">
+
+            <!-- ─────────────────────────────────── -->
+            <!-- HERO SECTION                        -->
+            <!-- ─────────────────────────────────── -->
+            <StackPanel HorizontalAlignment="Center" Margin="0,0,0,18" Opacity="0">
                 <StackPanel.Triggers>
                     <EventTrigger RoutedEvent="FrameworkElement.Loaded">
                         <BeginStoryboard>
                             <Storyboard>
                                 <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                 From="0" To="1" Duration="0:0:0.4"
-                                                 BeginTime="0:0:0.05">
+                                                 From="0" To="1" Duration="0:0:0.5">
                                     <DoubleAnimation.EasingFunction>
                                         <CubicEase EasingMode="EaseOut"/>
                                     </DoubleAnimation.EasingFunction>
                                 </DoubleAnimation>
                                 <ThicknessAnimation Storyboard.TargetProperty="Margin"
-                                                    From="0,12,0,0" To="0,0,0,0" Duration="0:0:0.4"
-                                                    BeginTime="0:0:0.05">
+                                                    From="0,12,0,18" To="0,0,0,18" Duration="0:0:0.5">
                                     <ThicknessAnimation.EasingFunction>
                                         <CubicEase EasingMode="EaseOut"/>
                                     </ThicknessAnimation.EasingFunction>
@@ -44,37 +118,81 @@
                     </EventTrigger>
                 </StackPanel.Triggers>
 
-                <!-- App Title -->
-                <TextBlock Text="Get Started"
-                           FontSize="36" FontWeight="ExtraBold"
-                           Foreground="#0F172A"
-                           Margin="0,0,0,8"/>
+                <!-- App Icon -->
+                <Border Width="46" Height="46" CornerRadius="14"
+                        Background="#0052CC"
+                        HorizontalAlignment="Center" Margin="0,0,0,14">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.12" Color="#0052CC"/>
+                    </Border.Effect>
+                    <ui:SymbolIcon Symbol="Print24" FontSize="22" Foreground="White"
+                                   VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                </Border>
+
+                <!-- Title -->
+                <TextBlock Text="Welcome to ShaPrint"
+                           FontSize="26" FontWeight="ExtraBold"
+                           Foreground="#0F172A" TextAlignment="Center"
+                           Margin="0,0,0,5"/>
 
                 <!-- Subtitle -->
-                <TextBlock Text="Share and access local printers across your network instantly. No complex server setups, just seamless printing."
-                           FontSize="14" Foreground="#475569"
-                           TextWrapping="Wrap" Margin="0,0,0,28"
-                           LineHeight="22"/>
+                <TextBlock Text="Share printers across your local network — no complex setup required."
+                           FontSize="13" Foreground="#64748B"
+                           TextAlignment="Center" MaxWidth="420"
+                           TextWrapping="Wrap" LineHeight="19"/>
+            </StackPanel>
 
-                <!-- Network Channel Setting Card -->
-                <Border Background="White"
-                        BorderBrush="#E2E8F0"
-                        BorderThickness="1" CornerRadius="16" Padding="24,22,24,20">
-                    <Border.Effect>
-                        <DropShadowEffect BlurRadius="20" ShadowDepth="2" Opacity="0.035" Color="#0F172A"/>
-                    </Border.Effect>
-                    <StackPanel>
-                        <!-- Card Header with Icon -->
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                            <ui:SymbolIcon Symbol="ShareAndroid24" FontSize="16" Foreground="#0052CC" Margin="0,0,8,0" VerticalAlignment="Center"/>
+            <!-- ─────────────────────────────────── -->
+            <!-- NETWORK CHANNEL BAR                 -->
+            <!-- ─────────────────────────────────── -->
+            <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1"
+                    CornerRadius="12" Padding="18,12,18,10" Margin="0,0,0,18"
+                    Opacity="0">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.03" Color="#0F172A"/>
+                </Border.Effect>
+                <Border.Triggers>
+                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                 From="0" To="1" Duration="0:0:0.45"
+                                                 BeginTime="0:0:0.1">
+                                    <DoubleAnimation.EasingFunction>
+                                        <CubicEase EasingMode="EaseOut"/>
+                                    </DoubleAnimation.EasingFunction>
+                                </DoubleAnimation>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </EventTrigger>
+                </Border.Triggers>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="20"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Left: Icon + Label -->
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                            <Border Width="26" Height="26" CornerRadius="7"
+                                    Background="#EBF2FF" Margin="0,0,8,0"
+                                    VerticalAlignment="Center">
+                                <ui:SymbolIcon Symbol="ShareAndroid24" FontSize="13"
+                                               Foreground="#0052CC"
+                                               VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                            </Border>
                             <TextBlock Text="Network Channel"
-                                       FontWeight="Bold" FontSize="14"
+                                       FontWeight="Bold" FontSize="13"
                                        Foreground="#0F172A" VerticalAlignment="Center"/>
                         </StackPanel>
+                        <TextBlock Text="Same channel connects your devices"
+                                   FontSize="11" Foreground="#94A3B8" Margin="34,0,0,0"/>
+                    </StackPanel>
 
-                        <TextBlock Text="Computers must use the exact same channel name to find each other."
-                                   FontSize="12" Foreground="#94A3B8" Margin="0,2,0,14" TextWrapping="Wrap"/>
-
+                    <!-- Right: Input + Validation -->
+                    <StackPanel Grid.Column="2" VerticalAlignment="Center">
                         <ui:TextBox x:Name="ChannelTextBox"
                                     Text="{Binding ViewModel.ChannelName, UpdateSourceTrigger=PropertyChanged}"
                                     PlaceholderText="e.g. Room302, Office-IT..."
@@ -83,67 +201,69 @@
                                     ToolTip="Unique channel identifier for your local network"
                                     HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
 
-                        <!-- Validation Error Display -->
+                        <!-- Validation Error -->
                         <TextBlock Text="{Binding ViewModel.ValidationError}"
                                    Foreground="{DynamicResource ValidationErrorBrush}"
-                                   FontSize="11.5" FontWeight="SemiBold"
-                                   Margin="0,10,0,0"
-                                   TextWrapping="Wrap"
+                                   FontSize="10.5" FontWeight="SemiBold"
+                                   Margin="0,4,0,0" TextWrapping="Wrap"
                                    Visibility="{Binding ViewModel.HasValidationError, Converter={StaticResource BoolToVis}}"/>
 
-                        <!-- Validation Info Display -->
+                        <!-- Validation Info -->
                         <TextBlock Text="{Binding ViewModel.ValidationInfo}"
                                    Foreground="{DynamicResource ValidationSuccessBrush}"
-                                   FontSize="11.5" FontWeight="SemiBold"
-                                   Margin="0,10,0,0"
-                                   TextWrapping="Wrap"
+                                   FontSize="10.5" FontWeight="SemiBold"
+                                   Margin="0,4,0,0" TextWrapping="Wrap"
                                    Visibility="{Binding ViewModel.HasValidationInfo, Converter={StaticResource BoolToVis}}"/>
                     </StackPanel>
-                </Border>
-            </StackPanel>
+                </Grid>
+            </Border>
 
-            <!-- Right Pane: PC Role Selection -->
-            <StackPanel Grid.Column="2" VerticalAlignment="Top" Opacity="0">
-                <!-- Staggered fade-in animation for right pane (delayed) -->
-                <StackPanel.Triggers>
+            <!-- ─────────────────────────────────── -->
+            <!-- ROLE SECTION LABEL                  -->
+            <!-- ─────────────────────────────────── -->
+            <TextBlock Text="Choose how this computer operates"
+                       FontSize="12" FontWeight="SemiBold"
+                       Foreground="#94A3B8" TextAlignment="Center"
+                       Margin="0,0,0,12"/>
+
+            <!-- ─────────────────────────────────── -->
+            <!-- ROLE CARDS — 3 horizontal columns   -->
+            <!-- ─────────────────────────────────── -->
+            <Grid Opacity="0">
+                <Grid.Triggers>
                     <EventTrigger RoutedEvent="FrameworkElement.Loaded">
                         <BeginStoryboard>
                             <Storyboard>
                                 <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                 From="0" To="1" Duration="0:0:0.4"
-                                                 BeginTime="0:0:0.15">
+                                                 From="0" To="1" Duration="0:0:0.5"
+                                                 BeginTime="0:0:0.2">
                                     <DoubleAnimation.EasingFunction>
                                         <CubicEase EasingMode="EaseOut"/>
                                     </DoubleAnimation.EasingFunction>
                                 </DoubleAnimation>
-                                <ThicknessAnimation Storyboard.TargetProperty="Margin"
-                                                    From="0,12,0,0" To="0,0,0,0" Duration="0:0:0.4"
-                                                    BeginTime="0:0:0.15">
-                                    <ThicknessAnimation.EasingFunction>
-                                        <CubicEase EasingMode="EaseOut"/>
-                                    </ThicknessAnimation.EasingFunction>
-                                </ThicknessAnimation>
                             </Storyboard>
                         </BeginStoryboard>
                     </EventTrigger>
-                </StackPanel.Triggers>
+                </Grid.Triggers>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="12"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="12"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
 
-                <!-- Section Label -->
-                <TextBlock Text="C H O O S E   Y O U R   R O L E"
-                           FontSize="10" FontWeight="Bold"
-                           Foreground="#94A3B8"
-                           Margin="2,0,0,16"/>
-
-                <!-- ═══════════════════════════════════════════ -->
-                <!-- Server Card                                -->
-                <!-- ═══════════════════════════════════════════ -->
-                <Grid Margin="0,0,0,14">
+                <!-- ═══════════════════════ -->
+                <!-- SERVER CARD (Blue)     -->
+                <!-- ═══════════════════════ -->
+                <Grid Grid.Column="0">
                     <ui:CardAction Command="{Binding ViewModel.SelectServerModeCommand}"
-                                   Padding="22,18" MinHeight="94" Height="Auto"
+                                   Padding="14,16,14,12" Height="Auto"
                                    Background="White" BorderBrush="#E2E8F0"
-                                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                   HorizontalContentAlignment="Stretch">
                         <ui:CardAction.Effect>
-                            <DropShadowEffect BlurRadius="16" ShadowDepth="1" Opacity="0.03" Color="#0F172A"/>
+                            <DropShadowEffect BlurRadius="12" ShadowDepth="1" Opacity="0.03" Color="#0F172A"/>
                         </ui:CardAction.Effect>
                         <ui:CardAction.Style>
                             <Style TargetType="ui:CardAction" BasedOn="{StaticResource {x:Type ui:CardAction}}">
@@ -156,115 +276,110 @@
                                             <Condition Binding="{Binding ViewModel.IsProcessing}" Value="True"/>
                                             <Condition Binding="{Binding ViewModel.IsServerProcessing}" Value="False"/>
                                         </MultiDataTrigger.Conditions>
-                                        <Setter Property="Opacity" Value="0.45"/>
+                                        <Setter Property="Opacity" Value="0.4"/>
                                     </MultiDataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </ui:CardAction.Style>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="44" />
-                                <ColumnDefinition Width="16" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <!-- Rounded-Square Icon Container -->
-                            <Grid Grid.Column="0" VerticalAlignment="Top">
-                                <Border Width="44" Height="44" CornerRadius="12"
-                                        Background="#E8F0FE"/>
+                        <StackPanel>
+                            <!-- Icon -->
+                            <Border Width="44" Height="44" CornerRadius="12"
+                                    Background="#EBF2FF"
+                                    HorizontalAlignment="Center" Margin="0,0,0,10">
                                 <ui:SymbolIcon Symbol="Server24" FontSize="20"
                                                Foreground="#0052CC"
                                                VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                            </Grid>
+                            </Border>
 
-                            <!-- Title and Description -->
-                            <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,24,0">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="Server Mode"
-                                               FontSize="15" FontWeight="Bold"
-                                               Foreground="#0F172A"/>
-                                    <!-- Suggested Badge -->
-                                    <Border CornerRadius="10" Padding="8,3" Margin="10,0,0,0"
-                                            VerticalAlignment="Center"
-                                            Background="#ECFDF5" BorderBrush="#A7F3D0" BorderThickness="1">
-                                        <TextBlock Text="RECOMMENDED"
-                                                   FontSize="8" FontWeight="Black"
-                                                   Foreground="#107C10"/>
-                                        <Border.Style>
-                                            <Style TargetType="Border">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding ViewModel.IsServerSuggested}" Value="True">
-                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Border.Style>
-                                    </Border>
-                                </StackPanel>
-
-                                <TextBlock Text="Share this PC's printers with the network channel. Best if printers are connected directly via USB."
-                                           FontSize="12.5" Foreground="#64748B"
-                                           TextWrapping="Wrap" Margin="0,4,0,0" LineHeight="18"/>
-
-                                <!-- Printer Detection Hint -->
-                                <TextBlock Text="{Binding ViewModel.ServerHintText}"
-                                           FontSize="11" FontWeight="SemiBold"
-                                           Foreground="#107C10" Margin="0,5,0,0"
-                                           Visibility="{Binding ViewModel.IsServerSuggested, Converter={StaticResource BoolToVis}}"/>
-
-                                <!-- Modal Help Trigger Link -->
-                                <Button Command="{Binding ViewModel.ShowHelpModalCommand}"
-                                        CommandParameter="Server"
-                                        Content="Learn more"
-                                        Background="Transparent" BorderBrush="Transparent"
-                                        Foreground="#0052CC" Padding="0"
-                                        Margin="0,6,0,0" HorizontalAlignment="Left"
-                                        Cursor="Hand" FontSize="12"/>
+                            <!-- Title + Badge -->
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,4">
+                                <TextBlock Text="Server"
+                                           FontSize="15" FontWeight="Bold"
+                                           Foreground="#0F172A" VerticalAlignment="Center"/>
+                                <Border CornerRadius="7" Padding="6,2" Margin="7,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Background="#ECFDF5" BorderBrush="#A7F3D0" BorderThickness="1">
+                                    <TextBlock Text="RECOMMENDED"
+                                               FontSize="7" FontWeight="Black"
+                                               Foreground="#107C10"/>
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ViewModel.IsServerSuggested}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                </Border>
                             </StackPanel>
-                        </Grid>
+
+                            <!-- Description -->
+                            <TextBlock Text="Share this PC's printers with devices on your channel"
+                                       FontSize="11.5" Foreground="#64748B"
+                                       TextWrapping="Wrap" TextAlignment="Center"
+                                       LineHeight="16" Margin="0,0,0,4"/>
+
+                            <!-- Printer Hint -->
+                            <TextBlock Text="{Binding ViewModel.ServerHintText}"
+                                       FontSize="10" FontWeight="SemiBold"
+                                       Foreground="#107C10" TextAlignment="Center"
+                                       Margin="0,0,0,2"
+                                       Visibility="{Binding ViewModel.IsServerSuggested, Converter={StaticResource BoolToVis}}"/>
+
+                            <!-- Learn more -->
+                            <Button Command="{Binding ViewModel.ShowHelpModalCommand}"
+                                    CommandParameter="Server"
+                                    Content="Learn more →"
+                                    Background="Transparent" BorderBrush="Transparent"
+                                    Foreground="#0052CC" Padding="0"
+                                    HorizontalAlignment="Center"
+                                    Cursor="Hand" FontSize="11"/>
+                        </StackPanel>
                     </ui:CardAction>
 
-                    <!-- Card Loading Overlay -->
+                    <!-- Loading Overlay -->
                     <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1"
-                            CornerRadius="14" Opacity="0.96"
+                            CornerRadius="8" Opacity="0.96"
                             Visibility="{Binding ViewModel.IsServerProcessing, Converter={StaticResource BoolToVis}}">
                         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
                             <ui:ProgressRing IsIndeterminate="True"
                                              Visibility="{Binding ViewModel.ShowSuccess, Converter={StaticResource InvertedBoolToVis}}"
-                                             Margin="0,0,0,8" Height="20" Width="20"/>
+                                             Margin="0,0,0,6" Height="20" Width="20"/>
                             <TextBlock Text="{Binding ViewModel.ProcessingMessage}"
-                                       FontWeight="SemiBold" FontSize="12"
+                                       FontWeight="SemiBold" FontSize="11.5"
                                        TextAlignment="Center" Foreground="#0F172A"/>
                         </StackPanel>
                     </Border>
 
-                    <!-- Card Error Overlay -->
+                    <!-- Error Overlay -->
                     <Border Background="#FEF2F2" BorderBrush="#E81123" BorderThickness="1.5"
-                            CornerRadius="14" Padding="16"
+                            CornerRadius="8" Padding="12"
                             Visibility="{Binding ViewModel.IsServerError, Converter={StaticResource BoolToVis}}">
                         <StackPanel VerticalAlignment="Center">
                             <ui:SymbolIcon Symbol="ErrorCircle24"
-                                           Foreground="#E81123" Margin="0,0,0,6"
+                                           Foreground="#E81123" Margin="0,0,0,4"
                                            HorizontalAlignment="Center"/>
                             <TextBlock Text="{Binding ViewModel.ErrorMessage}"
                                        TextWrapping="Wrap" TextAlignment="Center"
-                                       FontSize="12" FontWeight="SemiBold"
+                                       FontSize="11" FontWeight="SemiBold"
                                        Foreground="#E81123"/>
                         </StackPanel>
                     </Border>
                 </Grid>
 
-                <!-- ═══════════════════════════════════════════ -->
-                <!-- Client Card                                -->
-                <!-- ═══════════════════════════════════════════ -->
-                <Grid Margin="0,0,0,14">
+                <!-- ═══════════════════════ -->
+                <!-- CLIENT CARD (Teal)     -->
+                <!-- ═══════════════════════ -->
+                <Grid Grid.Column="2">
                     <ui:CardAction Command="{Binding ViewModel.SelectClientModeCommand}"
-                                   Padding="22,18" MinHeight="94" Height="Auto"
+                                   Padding="14,16,14,12" Height="Auto"
                                    Background="White" BorderBrush="#E2E8F0"
-                                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                   HorizontalContentAlignment="Stretch">
                         <ui:CardAction.Effect>
-                            <DropShadowEffect BlurRadius="16" ShadowDepth="1" Opacity="0.03" Color="#0F172A"/>
+                            <DropShadowEffect BlurRadius="12" ShadowDepth="1" Opacity="0.03" Color="#0F172A"/>
                         </ui:CardAction.Effect>
                         <ui:CardAction.Style>
                             <Style TargetType="ui:CardAction" BasedOn="{StaticResource {x:Type ui:CardAction}}">
@@ -277,115 +392,110 @@
                                             <Condition Binding="{Binding ViewModel.IsProcessing}" Value="True"/>
                                             <Condition Binding="{Binding ViewModel.IsClientProcessing}" Value="False"/>
                                         </MultiDataTrigger.Conditions>
-                                        <Setter Property="Opacity" Value="0.45"/>
+                                        <Setter Property="Opacity" Value="0.4"/>
                                     </MultiDataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </ui:CardAction.Style>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="44" />
-                                <ColumnDefinition Width="16" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <!-- Rounded-Square Icon Container -->
-                            <Grid Grid.Column="0" VerticalAlignment="Top">
-                                <Border Width="44" Height="44" CornerRadius="12"
-                                        Background="#E8F0FE"/>
+                        <StackPanel>
+                            <!-- Icon (Teal) -->
+                            <Border Width="44" Height="44" CornerRadius="12"
+                                    Background="#E0F7FA"
+                                    HorizontalAlignment="Center" Margin="0,0,0,10">
                                 <ui:SymbolIcon Symbol="Desktop24" FontSize="20"
-                                               Foreground="#0052CC"
+                                               Foreground="#0891B2"
                                                VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                            </Grid>
+                            </Border>
 
-                            <!-- Title and Description -->
-                            <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,24,0">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="Client Mode"
-                                               FontSize="15" FontWeight="Bold"
-                                               Foreground="#0F172A"/>
-                                    <!-- Suggested Badge -->
-                                    <Border CornerRadius="10" Padding="8,3" Margin="10,0,0,0"
-                                            VerticalAlignment="Center"
-                                            Background="#ECFDF5" BorderBrush="#A7F3D0" BorderThickness="1">
-                                        <TextBlock Text="RECOMMENDED"
-                                                   FontSize="8" FontWeight="Black"
-                                                   Foreground="#107C10"/>
-                                        <Border.Style>
-                                            <Style TargetType="Border">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding ViewModel.IsClientSuggested}" Value="True">
-                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Border.Style>
-                                    </Border>
-                                </StackPanel>
-
-                                <TextBlock Text="Connect to printers shared by other computers. Choose this to print documents wirelessly."
-                                           FontSize="12.5" Foreground="#64748B"
-                                           TextWrapping="Wrap" Margin="0,4,0,0" LineHeight="18"/>
-
-                                <!-- Printer Detection Hint -->
-                                <TextBlock Text="{Binding ViewModel.ClientHintText}"
-                                           FontSize="11" FontWeight="SemiBold"
-                                           Foreground="#107C10" Margin="0,5,0,0"
-                                           Visibility="{Binding ViewModel.IsClientSuggested, Converter={StaticResource BoolToVis}}"/>
-
-                                <!-- Modal Help Trigger Link -->
-                                <Button Command="{Binding ViewModel.ShowHelpModalCommand}"
-                                        CommandParameter="Client"
-                                        Content="Learn more"
-                                        Background="Transparent" BorderBrush="Transparent"
-                                        Foreground="#0052CC" Padding="0"
-                                        Margin="0,6,0,0" HorizontalAlignment="Left"
-                                        Cursor="Hand" FontSize="12"/>
+                            <!-- Title + Badge -->
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,4">
+                                <TextBlock Text="Client"
+                                           FontSize="15" FontWeight="Bold"
+                                           Foreground="#0F172A" VerticalAlignment="Center"/>
+                                <Border CornerRadius="7" Padding="6,2" Margin="7,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Background="#ECFDF5" BorderBrush="#A7F3D0" BorderThickness="1">
+                                    <TextBlock Text="RECOMMENDED"
+                                               FontSize="7" FontWeight="Black"
+                                               Foreground="#107C10"/>
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ViewModel.IsClientSuggested}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                </Border>
                             </StackPanel>
-                        </Grid>
+
+                            <!-- Description -->
+                            <TextBlock Text="Print wirelessly through printers shared by other network PCs"
+                                       FontSize="11.5" Foreground="#64748B"
+                                       TextWrapping="Wrap" TextAlignment="Center"
+                                       LineHeight="16" Margin="0,0,0,4"/>
+
+                            <!-- Printer Hint -->
+                            <TextBlock Text="{Binding ViewModel.ClientHintText}"
+                                       FontSize="10" FontWeight="SemiBold"
+                                       Foreground="#107C10" TextAlignment="Center"
+                                       Margin="0,0,0,2"
+                                       Visibility="{Binding ViewModel.IsClientSuggested, Converter={StaticResource BoolToVis}}"/>
+
+                            <!-- Learn more -->
+                            <Button Command="{Binding ViewModel.ShowHelpModalCommand}"
+                                    CommandParameter="Client"
+                                    Content="Learn more →"
+                                    Background="Transparent" BorderBrush="Transparent"
+                                    Foreground="#0891B2" Padding="0"
+                                    HorizontalAlignment="Center"
+                                    Cursor="Hand" FontSize="11"/>
+                        </StackPanel>
                     </ui:CardAction>
 
-                    <!-- Card Loading Overlay -->
+                    <!-- Loading Overlay -->
                     <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1"
-                            CornerRadius="14" Opacity="0.96"
+                            CornerRadius="8" Opacity="0.96"
                             Visibility="{Binding ViewModel.IsClientProcessing, Converter={StaticResource BoolToVis}}">
                         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
                             <ui:ProgressRing IsIndeterminate="True"
                                              Visibility="{Binding ViewModel.ShowSuccess, Converter={StaticResource InvertedBoolToVis}}"
-                                             Margin="0,0,0,8" Height="20" Width="20"/>
+                                             Margin="0,0,0,6" Height="20" Width="20"/>
                             <TextBlock Text="{Binding ViewModel.ProcessingMessage}"
-                                       FontWeight="SemiBold" FontSize="12"
+                                       FontWeight="SemiBold" FontSize="11.5"
                                        TextAlignment="Center" Foreground="#0F172A"/>
                         </StackPanel>
                     </Border>
 
-                    <!-- Card Error Overlay -->
+                    <!-- Error Overlay -->
                     <Border Background="#FEF2F2" BorderBrush="#E81123" BorderThickness="1.5"
-                            CornerRadius="14" Padding="16"
+                            CornerRadius="8" Padding="12"
                             Visibility="{Binding ViewModel.IsClientError, Converter={StaticResource BoolToVis}}">
                         <StackPanel VerticalAlignment="Center">
                             <ui:SymbolIcon Symbol="ErrorCircle24"
-                                           Foreground="#E81123" Margin="0,0,0,6"
+                                           Foreground="#E81123" Margin="0,0,0,4"
                                            HorizontalAlignment="Center"/>
                             <TextBlock Text="{Binding ViewModel.ErrorMessage}"
                                        TextWrapping="Wrap" TextAlignment="Center"
-                                       FontSize="12" FontWeight="SemiBold"
+                                       FontSize="11" FontWeight="SemiBold"
                                        Foreground="#E81123"/>
                         </StackPanel>
                     </Border>
                 </Grid>
 
-                <!-- ═══════════════════════════════════════════ -->
-                <!-- Monitor Card                               -->
-                <!-- ═══════════════════════════════════════════ -->
-                <Grid Margin="0,0,0,0">
+                <!-- ═══════════════════════ -->
+                <!-- MONITOR CARD (Purple)  -->
+                <!-- ═══════════════════════ -->
+                <Grid Grid.Column="4">
                     <ui:CardAction Command="{Binding ViewModel.SelectMonitorModeCommand}"
-                                   Padding="22,18" MinHeight="94" Height="Auto"
+                                   Padding="14,16,14,12" Height="Auto"
                                    Background="White" BorderBrush="#E2E8F0"
-                                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                   HorizontalContentAlignment="Stretch">
                         <ui:CardAction.Effect>
-                            <DropShadowEffect BlurRadius="16" ShadowDepth="1" Opacity="0.03" Color="#0F172A"/>
+                            <DropShadowEffect BlurRadius="12" ShadowDepth="1" Opacity="0.03" Color="#0F172A"/>
                         </ui:CardAction.Effect>
                         <ui:CardAction.Style>
                             <Style TargetType="ui:CardAction" BasedOn="{StaticResource {x:Type ui:CardAction}}">
@@ -398,125 +508,120 @@
                                             <Condition Binding="{Binding ViewModel.IsProcessing}" Value="True"/>
                                             <Condition Binding="{Binding ViewModel.IsMonitorProcessing}" Value="False"/>
                                         </MultiDataTrigger.Conditions>
-                                        <Setter Property="Opacity" Value="0.45"/>
+                                        <Setter Property="Opacity" Value="0.4"/>
                                     </MultiDataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </ui:CardAction.Style>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="44" />
-                                <ColumnDefinition Width="16" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <!-- Rounded-Square Icon Container -->
-                            <Grid Grid.Column="0" VerticalAlignment="Top">
-                                <Border Width="44" Height="44" CornerRadius="12"
-                                        Background="#E8F0FE"/>
+                        <StackPanel>
+                            <!-- Icon (Purple) -->
+                            <Border Width="44" Height="44" CornerRadius="12"
+                                    Background="#F3E8FF"
+                                    HorizontalAlignment="Center" Margin="0,0,0,10">
                                 <ui:SymbolIcon Symbol="Pulse24" FontSize="20"
-                                               Foreground="#0052CC"
+                                               Foreground="#7C3AED"
                                                VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                            </Grid>
+                            </Border>
 
-                            <!-- Title and Description -->
-                            <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,24,0">
-                                <TextBlock Text="Monitor Mode"
-                                           FontSize="15" FontWeight="Bold"
-                                           Foreground="#0F172A"/>
-                                <TextBlock Text="Oversee print jobs, device statuses, and logs in real-time."
-                                           FontSize="12.5" Foreground="#64748B"
-                                           TextWrapping="Wrap" Margin="0,4,0,0" LineHeight="18"/>
+                            <!-- Title -->
+                            <TextBlock Text="Monitor"
+                                       FontSize="15" FontWeight="Bold"
+                                       Foreground="#0F172A"
+                                       HorizontalAlignment="Center" Margin="0,0,0,4"/>
 
-                                <!-- Modal Help Trigger Link -->
-                                <Button Command="{Binding ViewModel.ShowHelpModalCommand}"
-                                        CommandParameter="Monitor"
-                                        Content="Learn more"
-                                        Background="Transparent" BorderBrush="Transparent"
-                                        Foreground="#0052CC" Padding="0"
-                                        Margin="0,6,0,0" HorizontalAlignment="Left"
-                                        Cursor="Hand" FontSize="12"/>
-                            </StackPanel>
-                        </Grid>
+                            <!-- Description -->
+                            <TextBlock Text="Oversee print jobs, device statuses, and logs in real-time"
+                                       FontSize="11.5" Foreground="#64748B"
+                                       TextWrapping="Wrap" TextAlignment="Center"
+                                       LineHeight="16" Margin="0,0,0,4"/>
+
+                            <!-- Learn more -->
+                            <Button Command="{Binding ViewModel.ShowHelpModalCommand}"
+                                    CommandParameter="Monitor"
+                                    Content="Learn more →"
+                                    Background="Transparent" BorderBrush="Transparent"
+                                    Foreground="#7C3AED" Padding="0"
+                                    HorizontalAlignment="Center"
+                                    Cursor="Hand" FontSize="11"/>
+                        </StackPanel>
                     </ui:CardAction>
 
-                    <!-- Card Loading Overlay -->
+                    <!-- Loading Overlay -->
                     <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1"
-                            CornerRadius="14" Opacity="0.96"
+                            CornerRadius="8" Opacity="0.96"
                             Visibility="{Binding ViewModel.IsMonitorProcessing, Converter={StaticResource BoolToVis}}">
                         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
                             <ui:ProgressRing IsIndeterminate="True"
                                              Visibility="{Binding ViewModel.ShowSuccess, Converter={StaticResource InvertedBoolToVis}}"
-                                             Margin="0,0,0,8" Height="20" Width="20"/>
+                                             Margin="0,0,0,6" Height="20" Width="20"/>
                             <TextBlock Text="{Binding ViewModel.ProcessingMessage}"
-                                       FontWeight="SemiBold" FontSize="12"
+                                       FontWeight="SemiBold" FontSize="11.5"
                                        TextAlignment="Center" Foreground="#0F172A"/>
                         </StackPanel>
                     </Border>
 
-                    <!-- Card Error Overlay -->
+                    <!-- Error Overlay -->
                     <Border Background="#FEF2F2" BorderBrush="#E81123" BorderThickness="1.5"
-                            CornerRadius="14" Padding="16"
+                            CornerRadius="8" Padding="12"
                             Visibility="{Binding ViewModel.IsMonitorError, Converter={StaticResource BoolToVis}}">
                         <StackPanel VerticalAlignment="Center">
                             <ui:SymbolIcon Symbol="ErrorCircle24"
-                                           Foreground="#E81123" Margin="0,0,0,6"
+                                           Foreground="#E81123" Margin="0,0,0,4"
                                            HorizontalAlignment="Center"/>
                             <TextBlock Text="{Binding ViewModel.ErrorMessage}"
                                        TextWrapping="Wrap" TextAlignment="Center"
-                                       FontSize="12" FontWeight="SemiBold"
+                                       FontSize="11" FontWeight="SemiBold"
                                        Foreground="#E81123"/>
                         </StackPanel>
                     </Border>
                 </Grid>
-            </StackPanel>
-        </Grid>
+            </Grid>
+        </StackPanel>
 
-        <!-- Modal Dialog Overlay (Popup) -->
+        <!-- ════════════════════════════════════════════════════════ -->
+        <!-- HELP MODAL                                             -->
+        <!-- ════════════════════════════════════════════════════════ -->
         <Grid Visibility="{Binding ViewModel.IsHelpModalOpen, Converter={StaticResource BoolToVis}}"
-              Background="#750F172A">
+              Background="#800F172A">
             <Border Background="White" CornerRadius="16"
                     BorderThickness="1" BorderBrush="#E2E8F0"
-                    Width="440" HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Padding="32">
+                    Width="420" HorizontalAlignment="Center" VerticalAlignment="Center">
                 <Border.Effect>
-                    <DropShadowEffect BlurRadius="40" ShadowDepth="6" Opacity="0.12" Color="#0F172A"/>
+                    <DropShadowEffect BlurRadius="50" ShadowDepth="8" Opacity="0.14" Color="#0F172A"/>
                 </Border.Effect>
                 <StackPanel>
-                    <!-- Header with Icon & Title -->
-                    <Grid Margin="0,0,0,18">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <!-- Icon container -->
-                        <Border Grid.Column="0" Width="36" Height="36"
-                                CornerRadius="10" Background="#E8F0FE"
-                                Margin="0,0,14,0" VerticalAlignment="Center">
-                            <ui:SymbolIcon Symbol="Info24" FontSize="18"
-                                           Foreground="#0052CC"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                        </Border>
-                        <TextBlock Grid.Column="1"
-                                   Text="{Binding ViewModel.HelpModalTitle}"
-                                   FontSize="18" FontWeight="Bold"
-                                   Foreground="#0F172A" VerticalAlignment="Center"/>
-                    </Grid>
+                    <!-- Header -->
+                    <Border Background="#F8FAFC" CornerRadius="16,16,0,0" Padding="24,18,24,14">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Width="38" Height="38"
+                                    CornerRadius="10" Background="#EBF2FF"
+                                    Margin="0,0,14,0" VerticalAlignment="Center">
+                                <ui:SymbolIcon Symbol="Info24" FontSize="18"
+                                               Foreground="#0052CC"
+                                               VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding ViewModel.HelpModalTitle}"
+                                       FontSize="17" FontWeight="Bold"
+                                       Foreground="#0F172A" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
 
-                    <!-- Divider -->
-                    <Border Height="1" Background="#F1F5F9" Margin="0,0,0,18"/>
-
-                    <!-- Body Text -->
-                    <TextBlock Text="{Binding ViewModel.HelpModalBody}"
-                               FontSize="13.5" Foreground="#475569"
-                               TextWrapping="Wrap" Margin="0,0,0,28"
-                               LineHeight="21"/>
-
-                    <!-- Action Close Button -->
-                    <ui:Button Content="Got it"
-                               Command="{Binding ViewModel.CloseHelpModalCommand}"
-                               Appearance="Primary"
-                               HorizontalAlignment="Right" Width="100"/>
+                    <!-- Body -->
+                    <StackPanel Margin="24,16,24,20">
+                        <TextBlock Text="{Binding ViewModel.HelpModalBody}"
+                                   FontSize="13" Foreground="#475569"
+                                   TextWrapping="Wrap" LineHeight="20"
+                                   Margin="0,0,0,20"/>
+                        <ui:Button Content="Got it"
+                                   Command="{Binding ViewModel.CloseHelpModalCommand}"
+                                   Appearance="Primary"
+                                   HorizontalAlignment="Right" Width="96"/>
+                    </StackPanel>
                 </StackPanel>
             </Border>
         </Grid>

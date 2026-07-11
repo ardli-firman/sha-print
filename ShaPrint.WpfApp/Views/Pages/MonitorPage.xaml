@@ -402,6 +402,18 @@
 
     </Page.Resources>
 
+    <Grid ClipToBounds="True">
+        <!-- Background Ornaments -->
+        <Ellipse Width="220" Height="220" Fill="#F3E8FF" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-70,-50,0" IsHitTestVisible="False" Opacity="0.45"/>
+        <Ellipse Width="190" Height="190" Fill="#EDF2FF" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-60,0,0,-60" IsHitTestVisible="False" Opacity="0.45"/>
+        <Ellipse Width="18" Height="18" Fill="#E0F7FA" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,45,90" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="26" Height="26" Fill="#F3E8FF" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="55,55,0,0" IsHitTestVisible="False" Opacity="0.4"/>
+
+        <!-- Themed icon ornaments -->
+        <ui:SymbolIcon Symbol="Pulse24" FontSize="50" Foreground="#7C3AED" Opacity="0.04" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,30,30,0" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="Print24" FontSize="36" Foreground="#7C3AED" Opacity="0.04" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="28,0,0,28" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="Server24" FontSize="30" Foreground="#0052CC" Opacity="0.04" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,75,55" IsHitTestVisible="False"/>
+
     <Grid Margin="24,20,24,16">
 
         <Grid.RowDefinitions>
@@ -2212,7 +2224,9 @@
 
         </Grid>
 
-    </Grid>
-
+    </Grid>
+
+    </Grid>
+
 </Page>
 

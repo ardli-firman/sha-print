@@ -4,8 +4,20 @@
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       Title="Server Dashboard">
 
-    <Grid Margin="24,20,24,16">
-        <Grid.RowDefinitions>
+    <Grid ClipToBounds="True">
+        <!-- Background Ornaments -->
+        <Ellipse Width="220" Height="220" Fill="#EDF2FF" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-70,-50,0" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="180" Height="180" Fill="#F0FDF9" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-50,0,0,-50" IsHitTestVisible="False" Opacity="0.5"/>
+        <Ellipse Width="16" Height="16" Fill="#DBEAFE" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,40,100" IsHitTestVisible="False" Opacity="0.6"/>
+        <Ellipse Width="28" Height="28" Fill="#E0F7FA" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="60,50,0,0" IsHitTestVisible="False" Opacity="0.4"/>
+
+        <!-- Themed icon ornaments -->
+        <ui:SymbolIcon Symbol="Print24" FontSize="50" Foreground="#0052CC" Opacity="0.04" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,30,30,0" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="Server24" FontSize="36" Foreground="#0052CC" Opacity="0.04" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="30,0,0,30" IsHitTestVisible="False"/>
+        <ui:SymbolIcon Symbol="ShareAndroid24" FontSize="28" Foreground="#0891B2" Opacity="0.04" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,80,60" IsHitTestVisible="False"/>
+
+        <Grid Margin="24,20,24,16">
+            <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/> <!-- Header -->
             <RowDefinition Height="3*"/>   <!-- Printer List -->
             <RowDefinition Height="Auto"/> <!-- Controls bar -->
@@ -113,5 +125,6 @@
                  VerticalScrollBarVisibility="Auto"
                  HorizontalScrollBarVisibility="Auto" />
 
+        </Grid>
     </Grid>
 </Page>
