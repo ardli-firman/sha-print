@@ -388,5 +388,36 @@ namespace ShaPrint.Tests.Services
             Assert.Single(h.SuspiciousEvents);
             Assert.Equal("1.1.1.1", cfg.ServerIp);
         }
+
+        [Fact]
+        public async Task RequestRescan_FallsBackToNameWithoutSuspicious_WhenBothConfigAndServerReturnNull()
+        {
+            var h = new Harness();
+            var cfg = new InstalledPrinterConfig
+            {
+                VirtualPrinterName = "ShaPrint [HomePC] - Printer1",
+                PipeName = "pipe-H",
+                ServerIp = "1.1.1.1",
+                TargetPrinterName = "Printer1",
+                DriverName = "Generic / Text Only",
+                ServerId = null // old config
+            };
+            h.Configs.Add(cfg);
+
+            h.NextScanResult.Add(new DiscoveryResponseMessage
+            {
+                ServerName = "HomePC",
+                IpAddress = "2.2.2.2",
+                ServerId = null, // old server
+                ExposedPrinters = new List<PrinterInfo> { new() { Name = "Printer1" } }
+            });
+
+            var tracker = h.BuildTracker();
+            await tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
+
+            Assert.Single(h.ChangedEvents);
+            Assert.Empty(h.SuspiciousEvents);
+            Assert.Equal("2.2.2.2", cfg.ServerIp); // IP updated via name matching fallback!
+        }
     }
 }
