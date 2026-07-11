@@ -25,9 +25,6 @@ namespace ShaPrint.Tests
             // The fixed implementation awaits cleanup in Stop(), so the new Start() succeeds immediately.
             listener.Start();
             
-            await Task.Delay(100);
-            await listener.StopAsync();
-            
             // Verify it is actually listening
             bool isListening = false;
             for (int i = 0; i < 20; i++)
@@ -39,6 +36,10 @@ namespace ShaPrint.Tests
                 }
                 await Task.Delay(100);
             }
+            
+            // Cleanup
+            await listener.StopAsync();
+            
             Assert.True(isListening, $"Listener failed to start listening. Last Error: {listener.LastError?.Message}");
         }
     }
