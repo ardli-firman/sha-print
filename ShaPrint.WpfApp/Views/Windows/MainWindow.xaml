@@ -10,7 +10,9 @@
     WindowStartupLocation="CenterScreen"
     ExtendsContentIntoTitleBar="True"
     WindowBackdropType="Mica"
-    Icon="pack://application:,,,/icon.ico">
+    Icon="pack://application:,,,/icon.ico"
+    UseLayoutRounding="True"
+    TextOptions.TextFormattingMode="Display">
 
     <Grid>
         <Grid.RowDefinitions>
