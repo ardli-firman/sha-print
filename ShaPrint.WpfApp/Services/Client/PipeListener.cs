@@ -141,7 +141,14 @@ namespace ShaPrint.Client
             catch (Exception ex)
             {
                 ShaPrint.Core.AppLogger.Error($"[CLIENT] Failed to send print job to server {_serverIp}: " + ex.Message);
-                OnServerUnreachable?.Invoke();
+                try
+                {
+                    OnServerUnreachable?.Invoke();
+                }
+                catch (Exception invokeEx)
+                {
+                    ShaPrint.Core.AppLogger.Error("[CLIENT] Error invoking OnServerUnreachable: " + invokeEx.Message);
+                }
             }
         }
     }

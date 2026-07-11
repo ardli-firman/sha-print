@@ -112,8 +112,20 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         private void TriggerTrackerRescan()
         {
-            // Fire-and-forget. Tracker handles its own debounce + cancellation.
-            _ = _tracker?.RequestRescanAsync(ServerReachabilityTracker.RescanReason.PrintFailed, CancellationToken.None);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    if (_tracker != null)
+                    {
+                        await _tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.PrintFailed, CancellationToken.None);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error("[CLIENT] Error during background reachability rescan", ex);
+                }
+            });
         }
 
         private async Task RestartListenerAsync(InstalledPrinterConfig cfg)
@@ -464,11 +476,18 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     {
                         _ = Task.Run(async () =>
                         {
-                            await Task.Delay(2000);
-                            if (_tracker == null) InitializeTracker();
-                            if (_tracker != null)
+                            try
                             {
-                                await _tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
+                                await Task.Delay(2000);
+                                if (_tracker == null) InitializeTracker();
+                                if (_tracker != null)
+                                {
+                                    await _tracker.RequestRescanAsync(ServerReachabilityTracker.RescanReason.Startup, CancellationToken.None);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                AppLogger.Error("[CLIENT] Error during startup reachability rescan", ex);
                             }
                         });
                     }

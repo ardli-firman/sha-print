@@ -35,7 +35,7 @@ namespace ShaPrint.Client
         private readonly Action<SuspiciousMatchArgs> _onSuspiciousMatch;
         private readonly TimeSpan _debounceWindow;
         private readonly SemaphoreSlim _scanGate = new(1, 1);
-        private readonly Dictionary<string, DateTime> _lastScanByPipe = new();
+        private DateTime _lastGlobalScan = DateTime.MinValue;
 
         public ServerReachabilityTracker(
             Func<IReadOnlyList<InstalledPrinterConfig>> configProvider,
@@ -53,10 +53,25 @@ namespace ShaPrint.Client
 
         public async Task RequestRescanAsync(RescanReason reason, CancellationToken ct)
         {
+            var now = DateTime.UtcNow;
+            if (now - _lastGlobalScan < _debounceWindow)
+            {
+                ShaPrint.Core.AppLogger.Log($"[TRACKER] Rescan debounced. Reason: {reason}");
+                return;
+            }
+
             await _scanGate.WaitAsync(ct);
             try
             {
+                // Double-check after acquiring the semaphore lock
+                if (DateTime.UtcNow - _lastGlobalScan < _debounceWindow)
+                {
+                    return;
+                }
+
+                ShaPrint.Core.AppLogger.Log($"[TRACKER] Requesting rescan. Reason: {reason}");
                 var results = await _scanner().ConfigureAwait(false);
+                _lastGlobalScan = DateTime.UtcNow;
                 ApplyMatches(results);
             }
             finally
@@ -67,16 +82,8 @@ namespace ShaPrint.Client
 
         private void ApplyMatches(IReadOnlyList<DiscoveryResponseMessage> results)
         {
-            var now = DateTime.UtcNow;
             foreach (var cfg in _configProvider().ToList())
             {
-                if (_lastScanByPipe.TryGetValue(cfg.PipeName, out var last) &&
-                    now - last < _debounceWindow)
-                {
-                    continue;
-                }
-                _lastScanByPipe[cfg.PipeName] = now;
-
                 if (FindMatch(cfg, results) is not { } match) continue;
 
                 if (match.IdentityMismatch)
