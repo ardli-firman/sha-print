@@ -55,6 +55,16 @@ By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TC
 
 ---
 
+## 💻 System Requirements
+
+Before installing ShaPrint, please ensure your system meets the following requirements:
+
+* **Operating System:** Windows 10 or Windows 11 (64-bit / `x64` architecture)
+* **Minimum Version/Build:** Windows 10 Version 1809 (Build `10.0.17763`) or newer (released November 2018)
+* **Pre-requisites:** None. The installation is fully self-contained, meaning you do **not** need to install the .NET Runtime manually.
+
+---
+
 ## 🔒 Security & Safety
 
 ShaPrint implements defense-in-depth security to protect your local network, computer performance, and hardware.
