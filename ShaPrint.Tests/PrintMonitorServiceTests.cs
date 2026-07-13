@@ -79,11 +79,11 @@ namespace ShaPrint.Tests
         private sealed class NoopProbe : IPrintQueueProbe
         {
             public Task<System.Collections.Generic.IReadOnlyList<JobSnapshot>> GetJobsAsync(
-                System.Collections.Generic.IEnumerable<string> monitoredPrinters)
+                System.Collections.Generic.IEnumerable<string> monitoredPrinters, CancellationToken cancellationToken)
                 => Task.FromResult<System.Collections.Generic.IReadOnlyList<JobSnapshot>>(
                     new System.Collections.Generic.List<JobSnapshot>());
 
-            public Task CancelAsync(int jobId, string printerName) => Task.CompletedTask;
+            public Task CancelAsync(int jobId, string printerName, CancellationToken cancellationToken) => Task.CompletedTask;
         }
 
         private sealed class ImmediateDelayProbe : IDelayProbe
@@ -289,17 +289,20 @@ namespace ShaPrint.Tests
             public void Queue(JobSnapshot job, bool throwOnCancel) => _script.Enqueue((new[] { job }, throwOnCancel));
 
             public Task<System.Collections.Generic.IReadOnlyList<JobSnapshot>> GetJobsAsync(
-                System.Collections.Generic.IEnumerable<string> monitoredPrinters)
+                System.Collections.Generic.IEnumerable<string> monitoredPrinters, CancellationToken cancellationToken)
             {
                 if (_script.Count == 0)
+                {
+                    _nextCancelShouldThrow = false;
                     return Task.FromResult<System.Collections.Generic.IReadOnlyList<JobSnapshot>>(
                         new System.Collections.Generic.List<JobSnapshot>());
+                }
                 var (jobs, throwOnCancel) = _script.Dequeue();
                 _nextCancelShouldThrow = throwOnCancel;
                 return Task.FromResult<System.Collections.Generic.IReadOnlyList<JobSnapshot>>(jobs);
             }
 
-            public Task CancelAsync(int jobId, string printerName)
+            public Task CancelAsync(int jobId, string printerName, CancellationToken cancellationToken)
             {
                 CancelCallCount++;
                 if (_nextCancelShouldThrow)

@@ -11,6 +11,13 @@ using ShaPrint.WpfApp.Services;
 
 namespace ShaPrint.WpfApp.Services.Server
 {
+    /// <summary>
+    /// Record kept in the dedup dictionary for every jobId the monitor has
+    /// already cancelled + alerted on. Used to suppress repeat alerts and
+    /// to feed the log path.
+    /// </summary>
+    public record IncidentRecord(string PrinterName, string JobName, DateTime FirstSeenUtc);
+
     public class PrintMonitorService
     {
         private const int StreakCap = 10;
@@ -96,7 +103,7 @@ namespace ShaPrint.WpfApp.Services.Server
             IReadOnlyList<JobSnapshot> jobs;
             try
             {
-                jobs = await _probe.GetJobsAsync(_monitoredPrinters);
+                jobs = await _probe.GetJobsAsync(_monitoredPrinters, token);
             }
             catch (Exception ex)
             {
@@ -146,7 +153,7 @@ namespace ShaPrint.WpfApp.Services.Server
 
                             try
                             {
-                                await _probe.CancelAsync(job.JobId, printer);
+                                await _probe.CancelAsync(job.JobId, printer, token);
                             }
                             catch (Exception ex)
                             {
@@ -201,7 +208,7 @@ namespace ShaPrint.WpfApp.Services.Server
                             TimeSpan.FromSeconds(10));
                     });
                 }
-                else
+                else if (ShaPrint.WpfApp.ViewModels.Pages.ServerViewModel.IsUnitTest)
                 {
                     _snackbarService.Show(
                         "Print Job Failed",
