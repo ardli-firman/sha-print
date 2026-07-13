@@ -59,6 +59,8 @@ namespace ShaPrint.WpfApp
                 services.AddSingleton<UpdateService>();
                 services.AddHostedService(provider => provider.GetRequiredService<UpdateService>());
                 services.AddSingleton<ShaPrint.WpfApp.Services.INotificationService, ShaPrint.WpfApp.Services.NotificationService>();
+                services.AddSingleton<ShaPrint.WpfApp.Services.Server.IPrintQueueProbe, ShaPrint.WpfApp.Services.Server.LocalPrintQueueProbe>();
+                services.AddSingleton<ShaPrint.WpfApp.Services.Server.IDelayProbe, ShaPrint.WpfApp.Services.Server.SystemDelayProbe>();
                 services.AddSingleton<ShaPrint.WpfApp.Services.Server.PrintMonitorService>();
                 services.AddSingleton<MonitorService>();
             }).Build();
