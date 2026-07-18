@@ -1,3 +1,9 @@
+﻿> **This repository is frozen at v2.0.0-community (LTS).**
+> No further releases will be tagged. Self-compiling this source still
+> produces a working Community binary under GPL v3.
+> The Premium edition (Web Print Premium, Email-to-Print, Driver
+> Auto-Install) is distributed separately as an official signed binary.
+> See [docs/RELEASE.md](docs/RELEASE.md) for the full release strategy.
 <div align="center">
   <img src="ShaPrint.WpfApp/Assets/Icons/Logo_rounded.png" width="96" alt="ShaPrint Logo">
   <h1>ShaPrint</h1>
