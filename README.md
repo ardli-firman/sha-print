@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
   <img src="ShaPrint.WpfApp/Assets/Icons/Logo_rounded.png" width="96" alt="ShaPrint Logo">
   <h1>ShaPrint</h1>
   <p><b>The Simplest & Most Reliable LAN / Cross-VLAN Virtual Printer Sharing Solution for Windows</b></p>
