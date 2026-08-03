@@ -32,9 +32,17 @@ namespace ShaPrint.Client
                         ShaPrint.Core.AppLogger.Log("[CLIENT] Add-PrinterPort warning: " + portResult.ErrorMessage);
                     }
 
-                    // Try adding the driver if it's an inbox driver
-                    RunPowerShell($"Add-PrinterDriver -Name '{safeDriverName}'");
-                    
+                    // Try adding the driver if it's an inbox driver (result is no longer swallowed)
+                    var driverResult = RunPowerShell($"Add-PrinterDriver -Name '{safeDriverName}'");
+                    if (!driverResult.Success && !driverResult.ErrorMessage.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Add-PrinterDriver for '{safeDriverName}' reported: {driverResult.ErrorMessage}");
+                    }
+                    else
+                    {
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Add-PrinterDriver for '{safeDriverName}' OK.");
+                    }
+
                     var addPrinterResult = RunPowerShell($"Add-Printer -Name '{safePrinterName}' -DriverName '{safeDriverName}' -PortName '{safePipeName}'");
                     if (!addPrinterResult.Success)
                     {
@@ -196,6 +204,112 @@ if ($printer) {{
             string safePrinterName = printerName.Replace("'", "''");
             var result = RunPowerShell($"Get-Printer -Name '{safePrinterName}'");
             return result.Success;
+        }
+
+        /// <summary>
+        /// Enumerates the printer drivers installed on this machine.
+        /// Primary source: Get-PrinterDriver (via JSON, no truncation, errors captured).
+        /// Fallback source: registry driver store (HKLM\...\Print\Environments\Windows x64\Drivers)
+        /// for drivers that are registered in the store but hidden from Get-PrinterDriver.
+        /// Returns a deduplicated, sorted list. Empty on total failure.
+        ///
+        /// Results are cached for <see cref="DriverCacheTtlSeconds"/> to avoid repeatedly spawning
+        /// powershell.exe when the user toggles/re-runs installation in the same session.
+        /// </summary>
+        private static readonly TimeSpan DriverCacheTtlSeconds = TimeSpan.FromSeconds(30);
+        private static List<string>? _driverCache;
+        private static DateTime? _driverCacheTime;
+
+        public static List<string> GetInstalledDrivers()
+        {
+            // Return fresh cache if present.
+            if (_driverCache != null && _driverCacheTime.HasValue &&
+                (DateTime.UtcNow - _driverCacheTime.Value) < DriverCacheTtlSeconds)
+            {
+                return _driverCache;
+            }
+
+            var drivers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                // Primary: Get-PrinterDriver serialized as JSON — avoids Out-String width
+                // truncation and lets us capture structured output without parsing text.
+                var psResult = RunPowerShell("Get-PrinterDriver | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress");
+                if (psResult.Success)
+                {
+                    var parsed = TryParseJsonStringArray(psResult.ErrorMessage);
+                    foreach (var name in parsed)
+                    {
+                        if (!string.IsNullOrWhiteSpace(name)) drivers.Add(name.Trim());
+                    }
+                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Get-PrinterDriver returned {parsed.Count} driver(s).");
+                }
+                else
+                {
+                    ShaPrint.Core.AppLogger.Log("[CLIENT] Get-PrinterDriver failed: " + psResult.ErrorMessage);
+                }
+            }
+            catch (Exception ex)
+            {
+                ShaPrint.Core.AppLogger.Log("[CLIENT] Get-PrinterDriver exception: " + ex.Message);
+            }
+
+            // Fallback/enrichment: registry driver store (Type 3 / legacy drivers that may
+            // be present in the store but not surfaced by Get-PrinterDriver).
+            try
+            {
+                const string regPath = @"HKLM:\SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Drivers";
+                var regResult = RunPowerShell($"(Get-ChildItem '{regPath}' -ErrorAction SilentlyContinue | ForEach-Object {{ $_.PSChildName }}) | ConvertTo-Json -Compress");
+                if (regResult.Success)
+                {
+                    var parsed = TryParseJsonStringArray(regResult.ErrorMessage);
+                    foreach (var name in parsed)
+                    {
+                        if (!string.IsNullOrWhiteSpace(name)) drivers.Add(name.Trim());
+                    }
+                    if (parsed.Count > 0)
+                    {
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Registry driver store returned {parsed.Count} additional driver entr(ies).");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ShaPrint.Core.AppLogger.Log("[CLIENT] Registry driver store enumeration exception: " + ex.Message);
+            }
+
+            var result = drivers.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList();
+            ShaPrint.Core.AppLogger.Log($"[CLIENT] Total unique installed drivers enumerated: {result.Count}.");
+
+            // Populate cache (even on partial results) so repeat calls don't re-spawn powershell.
+            _driverCache = result;
+            _driverCacheTime = DateTime.UtcNow;
+            return result;
+        }
+
+        /// <summary>
+        /// Parses the output of ConvertTo-Json for a string array (or single string).
+        /// Returns an empty list on any parse failure.
+        /// </summary>
+        private static List<string> TryParseJsonStringArray(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return new List<string>();
+            try
+            {
+                // Single value (one driver) serializes as a bare string, not an array.
+                if (json.TrimStart().StartsWith("["))
+                {
+                    var arr = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json);
+                    return arr ?? new List<string>();
+                }
+                var single = System.Text.Json.JsonSerializer.Deserialize<string>(json);
+                return string.IsNullOrWhiteSpace(single) ? new List<string>() : new List<string> { single };
+            }
+            catch (Exception ex)
+            {
+                ShaPrint.Core.AppLogger.Log("[CLIENT] Driver JSON parse failed: " + ex.Message);
+                return new List<string>();
+            }
         }
 
         private static (bool Success, string ErrorMessage) RunPowerShell(string script)
