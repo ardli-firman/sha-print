@@ -314,8 +314,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             {
                 string serverName = Validators.ValidateServerName(item.Server.ServerName);
                 string printerName = Validators.ValidatePrinterName(item.Printer.Name);
-                string driverName = Validators.ValidateDriverName(
-                    !string.IsNullOrEmpty(item.Printer.DriverName) ? item.Printer.DriverName : "Generic / Text Only");
+                string serverDriverHint = !string.IsNullOrEmpty(item.Printer.DriverName) ? item.Printer.DriverName : "Generic / Text Only";
                 string serverIp = Validators.ValidateIpAddress(item.Server.IpAddress);
 
                 string virtualPrinterName = $"ShaPrint [{serverName}] - {printerName}";
@@ -328,8 +327,22 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
                 StatusText = "Installing...";
 
+                // Resolve the driver against drivers actually installed on THIS machine.
+                // The server-sent name is only a hint (issue #21): exact match → fuzzy match →
+                // driver picker UI → confirmed Generic/Text fallback.
+                string? resolvedDriver = await ResolveDriverNameAsync(serverDriverHint);
+                if (resolvedDriver == null)
+                {
+                    StatusText = "Installation cancelled.";
+                    return;
+                }
+
+                // Validate the resolved driver name (may come from picker / fallback) to ensure
+                // it satisfies the same safety constraints as any other user-supplied input.
+                string driverName = Validators.ValidateDriverName(resolvedDriver);
+
                 string pipeName = $@"\\.\pipe\shaprint_{Guid.NewGuid():N}";
-                AppLogger.Log($"[CLIENT] Installing virtual printer '{virtualPrinterName}' with pipe '{pipeName}'...");
+                AppLogger.Log($"[CLIENT] Installing virtual printer '{virtualPrinterName}' with pipe '{pipeName}' using driver '{driverName}'...");
 
                 var result = await VirtualPrinterManager.InstallPrinterAsync(virtualPrinterName, pipeName, driverName);
 
@@ -369,6 +382,179 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     "Security Warning", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
                 AppLogger.Error($"[CLIENT] Input validation failed: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Resolves the server-advertised driver name to a driver installed on THIS machine.
+        /// Priority (issue #21): exact match → fuzzy match → driver picker UI → confirmed Generic/Text fallback.
+        /// Returns null when the user cancels (installation aborted).
+        /// </summary>
+        private async Task<string?> ResolveDriverNameAsync(string? serverDriverName)
+        {
+            try
+            {
+                // Enumerate drivers installed on this machine.
+                var localDrivers = await Task.Run(() => VirtualPrinterManager.GetInstalledDrivers());
+                if (localDrivers.Count == 0)
+                {
+                    AppLogger.Log("[CLIENT] No locally installed drivers enumerated — falling back to server hint.");
+                }
+
+                string hint = !string.IsNullOrWhiteSpace(serverDriverName) ? serverDriverName.Trim() : "Generic / Text Only";
+
+                // 1. Exact / fuzzy match against local drivers.
+                string? resolved = DriverNameResolver.Resolve(hint, localDrivers);
+                if (resolved != null)
+                {
+                    if (DriverNameResolver.IsDifferentResolvedName(hint, resolved))
+                    {
+                        AppLogger.Log($"[CLIENT] Driver resolved: server hint '{hint}' → local driver '{resolved}'.");
+                        _snackbarService.Show(
+                            "Driver resolved",
+                            $"Server driver '{hint}' mapped to local driver '{resolved}'.",
+                            ControlAppearance.Info,
+                            new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Info24),
+                            TimeSpan.FromSeconds(4));
+                    }
+                    return resolved;
+                }
+
+                // 2. No confident match — show the driver picker (list of locally installed drivers).
+                if (localDrivers.Count > 0)
+                {
+                    var picked = await ShowDriverPickerAsync(hint, localDrivers);
+                    if (picked != null) return picked;
+                    return null; // user cancelled the picker
+                }
+
+                // 3. No local drivers at all — Generic/Text fallback only with explicit confirmation.
+                return await ConfirmGenericFallbackAsync(hint);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[CLIENT] Driver resolution failed: " + ex.Message);
+                // Fail open to the old behavior (server hint) so the user still sees the real error.
+                return !string.IsNullOrWhiteSpace(serverDriverName) ? serverDriverName.Trim() : "Generic / Text Only";
+            }
+        }
+
+        /// <summary>
+        /// Shows a simple modal driver picker built on a ContentDialog. Returns the chosen
+        /// driver name, or null if the user cancels.
+        /// </summary>
+        private async Task<string?> ShowDriverPickerAsync(string hint, List<string> localDrivers)
+        {
+            // Present up to a reasonable number of options, alphabetically sorted.
+            const int maxOptions = 200;
+            var all = localDrivers
+                .Where(d => !string.IsNullOrWhiteSpace(d))
+                .OrderBy(d => d, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var options = all.Take(maxOptions).ToList();
+            int hidden = all.Count - options.Count;
+
+            if (options.Count == 0) return null;
+
+            var picker = new Wpf.Ui.Controls.ContentDialog
+            {
+                Title = "Select Printer Driver",
+                Content = $"The driver '{hint}' advertised by the server was not found on this computer.\n\n" +
+                          "Select a locally installed driver to use for the virtual printer:",
+                PrimaryButtonText = "OK",
+                CloseButtonText = "Cancel",
+                DefaultButton = Wpf.Ui.Controls.ContentDialogButton.Primary,
+            };
+
+            var combo = new System.Windows.Controls.ComboBox
+            {
+                ItemsSource = options,
+                SelectedIndex = 0,
+                Margin = new System.Windows.Thickness(0, 8, 0, 0),
+                MinWidth = 320,
+                IsTextSearchEnabled = false,
+            };
+
+            // Live search box: filters the combo items by substring (case-insensitive).
+            // The underlying list is untouched — clearing the search restores all options.
+            var searchBox = new System.Windows.Controls.TextBox
+            {
+                Margin = new System.Windows.Thickness(0, 8, 0, 0),
+                MinWidth = 320,
+                ToolTip = "Type to filter drivers...",
+            };
+            var comboView = System.Windows.Data.CollectionViewSource.GetDefaultView(options);
+            searchBox.TextChanged += (_, _) =>
+            {
+                string filter = searchBox.Text.Trim();
+                comboView.Filter = string.IsNullOrEmpty(filter)
+                    ? null
+                    : obj => obj is string s && DriverNameResolver.MatchesFilter(s, filter);
+                // Reset selection to first visible item so clicking OK always yields a valid choice.
+                comboView.MoveCurrentToFirst();
+                combo.SelectedIndex = combo.Items.Count > 0 ? 0 : -1;
+            };
+
+            var message = new System.Windows.Controls.TextBlock
+            {
+                Text = (string)picker.Content,
+                TextWrapping = System.Windows.TextWrapping.Wrap
+            };
+            string caption = hidden > 0
+                ? $"{options.Count} installed drivers shown ({(hidden)} more not listed — use Print Management for the full list)."
+                : $"{options.Count} installed driver(s) available.";
+
+            picker.Content = new System.Windows.Controls.StackPanel
+            {
+                Children = { message, searchBox, combo, new System.Windows.Controls.TextBlock { Text = caption, Margin = new System.Windows.Thickness(0, 8, 0, 0), Foreground = System.Windows.Media.Brushes.Gray, FontSize = 11 } }
+            };
+
+            try
+            {
+                var result = await picker.ShowAsync(CancellationToken.None);
+                if (result == Wpf.Ui.Controls.ContentDialogResult.Primary && combo.SelectedItem is string chosen)
+                {
+                    AppLogger.Log($"[CLIENT] User selected driver '{chosen}' from picker.");
+                    return chosen;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[CLIENT] Driver picker dialog failed: " + ex.Message);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Confirms with the user before falling back to Generic / Text Only (never automatic).
+        /// </summary>
+        private async Task<string?> ConfirmGenericFallbackAsync(string hint)
+        {
+            var dialog = new Wpf.Ui.Controls.ContentDialog
+            {
+                Title = "Use Generic / Text Only?",
+                Content = $"No matching printer driver was found on this computer for '{hint}'.\n\n" +
+                          "Continuing with 'Generic / Text Only' may reduce print fidelity (colors, margins, quality) " +
+                          "and the printer may not be detected correctly. It is recommended to install the printer's " +
+                          "official driver first (connect the printer or run the manufacturer's installer).\n\n" +
+                          "Continue with Generic / Text Only?",
+                PrimaryButtonText = "Use Generic / Text Only",
+                CloseButtonText = "Cancel",
+            };
+
+            try
+            {
+                var result = await dialog.ShowAsync(CancellationToken.None);
+                if (result == Wpf.Ui.Controls.ContentDialogResult.Primary)
+                {
+                    AppLogger.Log("[CLIENT] User confirmed Generic / Text Only fallback.");
+                    return "Generic / Text Only";
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[CLIENT] Generic fallback confirmation dialog failed: " + ex.Message);
+            }
+            return null;
         }
 
         [RelayCommand]
