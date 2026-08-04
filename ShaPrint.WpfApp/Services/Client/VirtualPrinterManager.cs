@@ -27,16 +27,16 @@ namespace ShaPrint.Client
                     string safeDriverName = driverName.Replace("'", "''");
 
                     var portResult = RunPowerShell($"Add-PrinterPort -Name '{safePipeName}'");
-                    if (!portResult.Success && !portResult.ErrorMessage.Contains("already exists"))
+                    if (!portResult.Success && !portResult.Output.Contains("already exists"))
                     {
-                        ShaPrint.Core.AppLogger.Log("[CLIENT] Add-PrinterPort warning: " + portResult.ErrorMessage);
+                        ShaPrint.Core.AppLogger.Log("[CLIENT] Add-PrinterPort warning: " + portResult.Output);
                     }
 
                     // Try adding the driver if it's an inbox driver (result is no longer swallowed)
                     var driverResult = RunPowerShell($"Add-PrinterDriver -Name '{safeDriverName}'");
-                    if (!driverResult.Success && !driverResult.ErrorMessage.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                    if (!driverResult.Success && !driverResult.Output.Contains("already exists", StringComparison.OrdinalIgnoreCase))
                     {
-                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Add-PrinterDriver for '{safeDriverName}' reported: {driverResult.ErrorMessage}");
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Add-PrinterDriver for '{safeDriverName}' reported: {driverResult.Output}");
                     }
                     else
                     {
@@ -46,7 +46,7 @@ namespace ShaPrint.Client
                     var addPrinterResult = RunPowerShell($"Add-Printer -Name '{safePrinterName}' -DriverName '{safeDriverName}' -PortName '{safePipeName}'");
                     if (!addPrinterResult.Success)
                     {
-                        string err = addPrinterResult.ErrorMessage;
+                        string err = addPrinterResult.Output;
                         if (err.Contains("The specified driver does not exist", StringComparison.OrdinalIgnoreCase) || err.Contains("was not found", StringComparison.OrdinalIgnoreCase))
                         {
                             return (false, $"Driver '{driverName}' is not installed on this computer. Please install the printer driver first.");
@@ -104,7 +104,7 @@ if ($printer -and $printer.Default -eq $true) {{
     if ($otherPrinter) {{ $otherPrinter.SetDefaultPrinter() | Out-Null; Write-Output 'DefaultChanged' }}
 }}";
                     var defaultCheckResult = RunPowerShell(checkDefaultScript);
-                    if (defaultCheckResult.ErrorMessage.Contains("IsDefault"))
+                    if (defaultCheckResult.Output.Contains("IsDefault"))
                     {
                         ShaPrint.Core.AppLogger.Log($"[CLIENT] Printer was default printer. Changed default to another printer.");
                     }
@@ -122,15 +122,15 @@ if ($printer) {{
 }}";
                     var wmiDeleteResult = RunPowerShell(wmiDeleteScript);
 
-                    if (wmiDeleteResult.ErrorMessage.Contains("Failed:"))
+                    if (wmiDeleteResult.Output.Contains("Failed:"))
                     {
-                        ShaPrint.Core.AppLogger.Log($"[CLIENT] WMI Delete() returned non-zero ({wmiDeleteResult.ErrorMessage}). Will be handled by spooler restart.");
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] WMI Delete() returned non-zero ({wmiDeleteResult.Output}). Will be handled by spooler restart.");
                     }
-                    else if (wmiDeleteResult.ErrorMessage.Contains("NotFound"))
+                    else if (wmiDeleteResult.Output.Contains("NotFound"))
                     {
                         ShaPrint.Core.AppLogger.Log($"[CLIENT] Printer not found (already removed).");
                     }
-                    else if (wmiDeleteResult.ErrorMessage.Contains("Success"))
+                    else if (wmiDeleteResult.Output.Contains("Success"))
                     {
                         ShaPrint.Core.AppLogger.Log($"[CLIENT] WMI Delete() completed successfully.");
                     }
@@ -154,7 +154,7 @@ if ($printer) {{
                     var stopSpooler = RunPowerShell("Stop-Service -Name Spooler -Force -ErrorAction SilentlyContinue");
                     if (!stopSpooler.Success)
                     {
-                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Warning: Failed to stop Print Spooler: {stopSpooler.ErrorMessage}");
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Warning: Failed to stop Print Spooler: {stopSpooler.Output}");
                     }
 
                     System.Threading.Thread.Sleep(2000);
@@ -162,7 +162,7 @@ if ($printer) {{
                     var startSpooler = RunPowerShell("Start-Service -Name Spooler -ErrorAction SilentlyContinue");
                     if (!startSpooler.Success)
                     {
-                        ShaPrint.Core.AppLogger.Error($"[CLIENT] Failed to start Print Spooler: {startSpooler.ErrorMessage}");
+                        ShaPrint.Core.AppLogger.Error($"[CLIENT] Failed to start Print Spooler: {startSpooler.Output}");
                         return (false, "Failed to restart Print Spooler. Please restart it manually via Services (services.msc). You may need to run this application as Administrator.");
                     }
 
@@ -172,7 +172,7 @@ if ($printer) {{
                     ShaPrint.Core.AppLogger.Log($"[CLIENT] Verifying printer removal...");
                     var verifyResult = RunPowerShell($"Get-WmiObject -Class Win32_Printer | Where-Object {{ $_.Name -eq '{safePrinterName}' }}");
 
-                    if (verifyResult.Success && !string.IsNullOrWhiteSpace(verifyResult.ErrorMessage))
+                    if (verifyResult.Success && !string.IsNullOrWhiteSpace(verifyResult.Output))
                     {
                         // Printer STILL exists! Last resort: try Remove-Printer cmdlet as fallback
                         ShaPrint.Core.AppLogger.Error($"[CLIENT] Printer still exists after WMI Delete and spooler restart! Trying Remove-Printer as last resort...");
@@ -181,7 +181,7 @@ if ($printer) {{
 
                         // Final final verification
                         var finalVerify = RunPowerShell($"Get-WmiObject -Class Win32_Printer | Where-Object {{ $_.Name -eq '{safePrinterName}' }}");
-                        if (finalVerify.Success && !string.IsNullOrWhiteSpace(finalVerify.ErrorMessage))
+                        if (finalVerify.Success && !string.IsNullOrWhiteSpace(finalVerify.Output))
                         {
                             ShaPrint.Core.AppLogger.Error($"[CLIENT] All removal attempts failed. Printer is stuck in the system.");
                             return (false, $"Printer removal failed. The printer is stuck in the system.\n\nPlease try:\n1. Run this application as Administrator\n2. Manually delete '{printerName}' from Control Panel > Devices and Printers\n3. If it shows 'Pending Deletion', restart your computer");
@@ -216,75 +216,93 @@ if ($printer) {{
         /// Results are cached for <see cref="DriverCacheTtlSeconds"/> to avoid repeatedly spawning
         /// powershell.exe when the user toggles/re-runs installation in the same session.
         /// </summary>
-        private static readonly TimeSpan DriverCacheTtlSeconds = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan DriverCacheTtl = TimeSpan.FromSeconds(30);
+        // SemaphoreSlim(1,1) ensures only one thread rebuilds the cache at a time.
+        private static readonly SemaphoreSlim _driverCacheLock = new SemaphoreSlim(1, 1);
         private static List<string>? _driverCache;
         private static DateTime? _driverCacheTime;
 
         public static List<string> GetInstalledDrivers()
         {
-            // Return fresh cache if present.
+            // Fast path: check cache without acquiring the lock (reads of reference-type fields
+            // are atomic on x64, so the null check is safe; DateTime? is read under lock below).
             if (_driverCache != null && _driverCacheTime.HasValue &&
-                (DateTime.UtcNow - _driverCacheTime.Value) < DriverCacheTtlSeconds)
+                (DateTime.UtcNow - _driverCacheTime.Value) < DriverCacheTtl)
             {
                 return _driverCache;
             }
 
-            var drivers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            _driverCacheLock.Wait();
             try
             {
-                // Primary: Get-PrinterDriver serialized as JSON — avoids Out-String width
-                // truncation and lets us capture structured output without parsing text.
-                var psResult = RunPowerShell("Get-PrinterDriver | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress");
-                if (psResult.Success)
+                // Double-checked locking: another thread may have populated the cache while we waited.
+                if (_driverCache != null && _driverCacheTime.HasValue &&
+                    (DateTime.UtcNow - _driverCacheTime.Value) < DriverCacheTtl)
                 {
-                    var parsed = TryParseJsonStringArray(psResult.ErrorMessage);
-                    foreach (var name in parsed)
-                    {
-                        if (!string.IsNullOrWhiteSpace(name)) drivers.Add(name.Trim());
-                    }
-                    ShaPrint.Core.AppLogger.Log($"[CLIENT] Get-PrinterDriver returned {parsed.Count} driver(s).");
+                    return _driverCache;
                 }
-                else
-                {
-                    ShaPrint.Core.AppLogger.Log("[CLIENT] Get-PrinterDriver failed: " + psResult.ErrorMessage);
-                }
-            }
-            catch (Exception ex)
-            {
-                ShaPrint.Core.AppLogger.Log("[CLIENT] Get-PrinterDriver exception: " + ex.Message);
-            }
 
-            // Fallback/enrichment: registry driver store (Type 3 / legacy drivers that may
-            // be present in the store but not surfaced by Get-PrinterDriver).
-            try
-            {
-                const string regPath = @"HKLM:\SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Drivers";
-                var regResult = RunPowerShell($"(Get-ChildItem '{regPath}' -ErrorAction SilentlyContinue | ForEach-Object {{ $_.PSChildName }}) | ConvertTo-Json -Compress");
-                if (regResult.Success)
+                var drivers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                try
                 {
-                    var parsed = TryParseJsonStringArray(regResult.ErrorMessage);
-                    foreach (var name in parsed)
+                    // Primary: Get-PrinterDriver serialized as JSON — avoids Out-String width
+                    // truncation and lets us capture structured output without parsing text.
+                    var psResult = RunPowerShell("Get-PrinterDriver | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress");
+                    if (psResult.Success)
                     {
-                        if (!string.IsNullOrWhiteSpace(name)) drivers.Add(name.Trim());
+                        var parsed = TryParseJsonStringArray(psResult.Output);
+                        foreach (var name in parsed)
+                        {
+                            if (!string.IsNullOrWhiteSpace(name)) drivers.Add(name.Trim());
+                        }
+                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Get-PrinterDriver returned {parsed.Count} driver(s).");
                     }
-                    if (parsed.Count > 0)
+                    else
                     {
-                        ShaPrint.Core.AppLogger.Log($"[CLIENT] Registry driver store returned {parsed.Count} additional driver entr(ies).");
+                        ShaPrint.Core.AppLogger.Log("[CLIENT] Get-PrinterDriver failed: " + psResult.Output);
                     }
                 }
+                catch (Exception ex)
+                {
+                    ShaPrint.Core.AppLogger.Log("[CLIENT] Get-PrinterDriver exception: " + ex.Message);
+                }
+
+                // Fallback/enrichment: registry driver store (Type 3 / legacy drivers that may
+                // be present in the store but not surfaced by Get-PrinterDriver).
+                try
+                {
+                    const string regPath = @"HKLM:\SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Drivers";
+                    var regResult = RunPowerShell($"(Get-ChildItem '{regPath}' -ErrorAction SilentlyContinue | ForEach-Object {{ $_.PSChildName }}) | ConvertTo-Json -Compress");
+                    if (regResult.Success)
+                    {
+                        var parsed = TryParseJsonStringArray(regResult.Output);
+                        foreach (var name in parsed)
+                        {
+                            if (!string.IsNullOrWhiteSpace(name)) drivers.Add(name.Trim());
+                        }
+                        if (parsed.Count > 0)
+                        {
+                            ShaPrint.Core.AppLogger.Log($"[CLIENT] Registry driver store returned {parsed.Count} additional driver entr(ies).");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ShaPrint.Core.AppLogger.Log("[CLIENT] Registry driver store enumeration exception: " + ex.Message);
+                }
+
+                var result = drivers.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList();
+                ShaPrint.Core.AppLogger.Log($"[CLIENT] Total unique installed drivers enumerated: {result.Count}.");
+
+                // Populate cache (even on partial results) so repeat calls don't re-spawn powershell.
+                _driverCache = result;
+                _driverCacheTime = DateTime.UtcNow;
+                return result;
             }
-            catch (Exception ex)
+            finally
             {
-                ShaPrint.Core.AppLogger.Log("[CLIENT] Registry driver store enumeration exception: " + ex.Message);
+                _driverCacheLock.Release();
             }
-
-            var result = drivers.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList();
-            ShaPrint.Core.AppLogger.Log($"[CLIENT] Total unique installed drivers enumerated: {result.Count}.");
-
-            // Populate cache (even on partial results) so repeat calls don't re-spawn powershell.
-            _driverCache = result;
-            _driverCacheTime = DateTime.UtcNow;
-            return result;
         }
 
         /// <summary>
@@ -312,7 +330,12 @@ if ($printer) {{
             }
         }
 
-        private static (bool Success, string ErrorMessage) RunPowerShell(string script)
+        /// <summary>
+        /// Runs a PowerShell script and returns the result.
+        /// <para><c>Output</c> contains the merged stdout+stderr stream (2&gt;&amp;1), not an error message.
+        /// It is safe to read on both success and failure paths.</para>
+        /// </summary>
+        private static (bool Success, string Output) RunPowerShell(string script)
         {
             var psi = new System.Diagnostics.ProcessStartInfo
             {
@@ -326,11 +349,11 @@ if ($printer) {{
 
             using var process = System.Diagnostics.Process.Start(psi);
             if (process == null) return (false, "Failed to start powershell.");
-            
+
             process.WaitForExit();
-            // Because of 2>&1, both normal output and errors are merged into StandardOutput without truncation
+            // Because of 2>&1, both normal output and errors are merged into StandardOutput without truncation.
             string output = process.StandardOutput.ReadToEnd().Trim();
-            
+
             return (process.ExitCode == 0, output);
         }
     }
