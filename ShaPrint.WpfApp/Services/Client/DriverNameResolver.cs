@@ -28,10 +28,26 @@ namespace ShaPrint.Client
         /// </summary>
         private static readonly HashSet<string> GenericTokens = new(StringComparer.Ordinal)
         {
+            // ── Vendor names ────────────────────────────────────────────────────────────────
             "epson", "hp", "canon", "brother", "lexmark", "dell", "samsung", "xerox", "ricoh",
+            "kyocera", "konica", "minolta", "fuji", "fujixerox", "oki", "panasonic", "sharp",
+            "toshiba", "zebra", "datacard", "dymo",
+            // ── Product-line / product-family words (not model discriminators) ────────────
+            // Epson: inkjet lines
+            "stylus", "expression", "artisan", "ecotank",
+            // HP: consumer/business lines
+            "laserjet", "deskjet", "officejet", "envy", "pagewide", "designjet", "colorlaserjet",
+            // Canon: inkjet/laser lines
+            "pixma", "imageclass", "imagerunner", "imageprograf", "selphy",
+            // Brother: laser/inkjet lines
+            "mfc", "dcp", "hl",
+            // Lexmark / Xerox / Ricoh: generic product families
+            "phaser", "workcentre", "versalink", "altalink", "aficio",
+            // ── Common descriptor words ──────────────────────────────────────────────────────
             "series", "driver", "printer", "standard", "universal", "photo", "inkjet", "laser",
-            "officejet", "deskjet", "workforce", "ecotank", "color", "colour", "black", "white",
-            "plus", "pro", "mini", "max", "basic", "advanced", "text", "only", "generic",
+            "color", "colour", "black", "white", "plus", "pro", "mini", "max", "basic",
+            "advanced", "text", "only", "generic", "network", "wireless", "multifunction",
+            "all-in-one", "aio",
         };
 
         /// <summary>

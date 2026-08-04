@@ -315,7 +315,6 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 string serverName = Validators.ValidateServerName(item.Server.ServerName);
                 string printerName = Validators.ValidatePrinterName(item.Printer.Name);
                 string serverDriverHint = !string.IsNullOrEmpty(item.Printer.DriverName) ? item.Printer.DriverName : "Generic / Text Only";
-                string driverName = Validators.ValidateDriverName(serverDriverHint);
                 string serverIp = Validators.ValidateIpAddress(item.Server.IpAddress);
 
                 string virtualPrinterName = $"ShaPrint [{serverName}] - {printerName}";
@@ -338,9 +337,9 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     return;
                 }
 
-                // Re-validate the resolved driver before use (it may come from the picker /
-                // generic fallback and must satisfy the same safety constraints as the hint).
-                driverName = Validators.ValidateDriverName(resolvedDriver);
+                // Validate the resolved driver name (may come from picker / fallback) to ensure
+                // it satisfies the same safety constraints as any other user-supplied input.
+                string driverName = Validators.ValidateDriverName(resolvedDriver);
 
                 string pipeName = $@"\\.\pipe\shaprint_{Guid.NewGuid():N}";
                 AppLogger.Log($"[CLIENT] Installing virtual printer '{virtualPrinterName}' with pipe '{pipeName}' using driver '{driverName}'...");
@@ -490,6 +489,9 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 comboView.Filter = string.IsNullOrEmpty(filter)
                     ? null
                     : obj => obj is string s && DriverNameResolver.MatchesFilter(s, filter);
+                // Reset selection to first visible item so clicking OK always yields a valid choice.
+                comboView.MoveCurrentToFirst();
+                combo.SelectedIndex = combo.Items.Count > 0 ? 0 : -1;
             };
 
             var message = new System.Windows.Controls.TextBlock
