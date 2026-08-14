@@ -9,7 +9,12 @@ namespace ShaPrint.WpfApp.Views.Windows
     {
         public MainWindowViewModel ViewModel { get; }
 
-        public MainWindow(MainWindowViewModel viewModel, INavigationService navigationService, ISnackbarService snackbarService, Pages.WelcomePage welcomePage)
+        public MainWindow(
+            MainWindowViewModel viewModel,
+            INavigationService navigationService,
+            ISnackbarService snackbarService,
+            IContentDialogService contentDialogService,
+            Pages.WelcomePage welcomePage)
         {
             ViewModel = viewModel;
             DataContext = this;
@@ -17,6 +22,7 @@ namespace ShaPrint.WpfApp.Views.Windows
             
             navigationService.SetNavigationControl(RootNavigation);
             snackbarService.SetSnackbarPresenter(SnackbarPresenter);
+            contentDialogService.SetDialogHost(RootContentDialogHost);
 
             // Set WelcomeFrame content
             WelcomeFrame.Content = welcomePage;

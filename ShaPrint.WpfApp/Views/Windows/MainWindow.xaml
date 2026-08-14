@@ -69,5 +69,9 @@
 
             <Frame x:Name="WelcomeFrame" Visibility="{Binding ViewModel.WelcomeVisibility}" NavigationUIVisibility="Hidden" />
         </Grid>
+
+        <ui:ContentDialogHost x:Name="RootContentDialogHost"
+                              Grid.RowSpan="2"
+                              Panel.ZIndex="100" />
     </Grid>
 </ui:FluentWindow>

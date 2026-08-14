@@ -58,6 +58,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private readonly DiscoveryClient _discoveryClient;
         private readonly INavigationService _navigationService;
         private readonly ISnackbarService _snackbarService;
+        private readonly IContentDialogService _contentDialogService;
         private readonly string _configFile;
 
         private List<InstalledPrinterConfig> _installedPrinters = new();
@@ -80,10 +81,14 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public ObservableCollection<string> Logs { get; } = new();
         public string LogsText => string.Join(Environment.NewLine, Logs);
 
-        public ClientViewModel(INavigationService navigationService, ISnackbarService snackbarService)
+        public ClientViewModel(
+            INavigationService navigationService,
+            ISnackbarService snackbarService,
+            IContentDialogService contentDialogService)
         {
             _navigationService = navigationService;
             _snackbarService = snackbarService;
+            _contentDialogService = contentDialogService;
             _discoveryClient = new DiscoveryClient();
             
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
@@ -510,7 +515,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
             try
             {
-                var result = await picker.ShowAsync(CancellationToken.None);
+                var result = await _contentDialogService.ShowAsync(picker, CancellationToken.None);
                 if (result == Wpf.Ui.Controls.ContentDialogResult.Primary && combo.SelectedItem is string chosen)
                 {
                     AppLogger.Log($"[CLIENT] User selected driver '{chosen}' from picker.");
@@ -543,7 +548,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
             try
             {
-                var result = await dialog.ShowAsync(CancellationToken.None);
+                var result = await _contentDialogService.ShowAsync(dialog, CancellationToken.None);
                 if (result == Wpf.Ui.Controls.ContentDialogResult.Primary)
                 {
                     AppLogger.Log("[CLIENT] User confirmed Generic / Text Only fallback.");
