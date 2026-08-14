@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ShaPrint.Core;
 using ShaPrint.WpfApp.Services;
+using ShaPrint.WpfApp.Models;
 using ShaPrint.Core.Network;
 
 namespace ShaPrint.Server
@@ -23,7 +24,17 @@ namespace ShaPrint.Server
         private readonly INotificationService _notificationService;
         private volatile string? _serverId;
 
+        // Driver provisioning (injected from server startup)
+        private DriverPackageService? _driverPackageService;
+        private volatile bool _driverSharingEnabled = true;
+
         public void SetServerId(string? serverId) => _serverId = serverId;
+
+        public void SetDriverPackageService(DriverPackageService service)
+            => _driverPackageService = service;
+
+        public void SetDriverSharingEnabled(bool enabled)
+            => _driverSharingEnabled = enabled;
 
         // Client tracking for connect/disconnect notifications
         private readonly HashSet<string> _connectedClients = new();
@@ -148,12 +159,35 @@ namespace ShaPrint.Server
                     foreach (var p in _exposedPrinters)
                     {
                         var detailed = allDetailedPrinters.FirstOrDefault(x => x.Name == p);
-                        exposedInfos.Add(new PrinterInfo 
-                        { 
-                            Name = p, 
+                        string driverName = detailed?.DriverName ?? "Generic / Text Only";
+
+                        var printerInfo = new PrinterInfo
+                        {
+                            Name = p,
                             Description = "Shared via ShaPrint",
-                            DriverName = detailed?.DriverName ?? "Generic / Text Only"
-                        });
+                            DriverName = driverName
+                        };
+
+                        // Populate driver provisioning metadata if sharing is enabled
+                        if (_driverSharingEnabled && _driverPackageService != null)
+                        {
+                            try
+                            {
+                                var pkg = await _driverPackageService.GetDriverPackageAsync(driverName);
+                                if (pkg != null)
+                                {
+                                    printerInfo.DriverAvailable = true;
+                                    printerInfo.DriverPackageId = pkg.Sha256;
+                                    printerInfo.DriverSizeBytes = pkg.TotalSizeBytes;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                AppLogger.Error($"[DISCOVERY] Error getting driver package for '{driverName}'", ex);
+                            }
+                        }
+
+                        exposedInfos.Add(printerInfo);
                     }
 
                     var response = new DiscoveryResponseMessage

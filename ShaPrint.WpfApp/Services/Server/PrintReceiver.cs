@@ -21,6 +21,16 @@ namespace ShaPrint.Server
         private readonly Action<JobHistoryEntry>? _onJobLog;
         private readonly Action<ServerErrorEntry>? _onErrorLog;
 
+        // Driver provisioning (injected from server startup)
+        private DriverPackageService? _driverPackageService;
+        private volatile bool _driverSharingEnabled = true;
+
+        public void SetDriverPackageService(DriverPackageService service)
+            => _driverPackageService = service;
+
+        public void SetDriverSharingEnabled(bool enabled)
+            => _driverSharingEnabled = enabled;
+
         public PrintReceiver(INotificationService notificationService, Action<JobHistoryEntry>? onJobLog = null, Action<ServerErrorEntry>? onErrorLog = null)
         {
             _notificationService = notificationService;
@@ -109,6 +119,10 @@ namespace ShaPrint.Server
                         if (firstInt == Constants.PacketTypeScan) // 0x00000002
                         {
                             await HandleScanRequestAsync(stream, remoteIp, token);
+                        }
+                        else if (firstInt == Constants.PacketTypeDriverPackageRequest) // 0x20
+                        {
+                            await HandleDriverPackageRequestAsync(stream, reader, remoteIp, token);
                         }
                         else
                         {
@@ -263,6 +277,151 @@ namespace ShaPrint.Server
             {
                 AppLogger.Error($"[SERVER] Error reading/writing scan payload from {remoteIp}", ex);
             }
+        }
+
+        /// <summary>
+        /// Handles a client request to download a driver package.
+        /// Reads DriverPackageRequest, then streams chunks (AES-GCM encrypted, HMAC signed) back to client.
+        /// </summary>
+        private async Task HandleDriverPackageRequestAsync(NetworkStream stream, BinaryReader reader, string remoteIp, CancellationToken token)
+        {
+            try
+            {
+                if (!_driverSharingEnabled || _driverPackageService == null)
+                {
+                    await SendDriverPackageErrorAsync(stream, "Driver sharing is disabled on this server.");
+                    return;
+                }
+
+                // Read request: length-prefixed JSON
+                int jsonLength = reader.ReadInt32();
+                if (jsonLength <= 0 || jsonLength > 10240) // max 10KB for the request
+                {
+                    await SendDriverPackageErrorAsync(stream, "Invalid request length.");
+                    return;
+                }
+                byte[] jsonBytes = reader.ReadBytes(jsonLength);
+                var request = System.Text.Json.JsonSerializer.Deserialize<DriverPackageRequest>(
+                    System.Text.Encoding.UTF8.GetString(jsonBytes));
+
+                if (request == null || string.IsNullOrEmpty(request.PrinterName))
+                {
+                    await SendDriverPackageErrorAsync(stream, "Invalid driver package request.");
+                    return;
+                }
+
+                AppLogger.Log($"[SERVER] Driver package request from {remoteIp} for printer '{request.PrinterName}' (PackageId={request.DriverPackageId?[..16]}...)");
+
+                // Get or build the package
+                var manifest = await _driverPackageService.GetDriverPackageAsync(request.PrinterName);
+                if (manifest == null)
+                {
+                    await SendDriverPackageErrorAsync(stream, $"Driver package not found for printer '{request.PrinterName}'.");
+                    return;
+                }
+
+                // Verify requested package ID matches (if provided)
+                if (!string.IsNullOrEmpty(request.DriverPackageId) &&
+                    !request.DriverPackageId.Equals(manifest.Sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    await SendDriverPackageErrorAsync(stream, "Driver package ID mismatch.");
+                    return;
+                }
+
+                // Read package bytes
+                byte[]? packageBytes = await _driverPackageService.ReadPackageBytesAsync(manifest.Sha256);
+                if (packageBytes == null || packageBytes.Length == 0)
+                {
+                    await SendDriverPackageErrorAsync(stream, "Failed to read driver package data.");
+                    return;
+                }
+
+                // Stream chunks
+                int chunkSize = Constants.DriverPackageChunkSize;
+                int totalChunks = (int)Math.Ceiling((double)packageBytes.Length / chunkSize);
+
+                for (int i = 0; i < totalChunks; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    int offset = i * chunkSize;
+                    int length = Math.Min(chunkSize, packageBytes.Length - offset);
+                    byte[] rawChunk = new byte[length];
+                    Buffer.BlockCopy(packageBytes, offset, rawChunk, 0, length);
+
+                    // Encrypt chunk with AES-GCM
+                    byte[] encryptedChunk = CryptoHelper.EncryptAesGcm(rawChunk);
+                    // Sign the raw chunk with HMAC
+                    string chunkHmac = CryptoHelper.SignHmac(rawChunk);
+
+                    var chunkMsg = new DriverPackageChunk
+                    {
+                        ChunkIndex = i,
+                        TotalChunks = totalChunks,
+                        Data = encryptedChunk,
+                        ChunkHmac = chunkHmac
+                    };
+
+                    // Write packet type + length-prefixed JSON
+                    byte[] chunkJson = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(chunkMsg);
+                    using var ms = new MemoryStream();
+                    using (var writer = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
+                    {
+                        writer.Write(Constants.PacketTypeDriverPackageChunk);
+                        writer.Write(chunkJson.Length);
+                        writer.Write(chunkJson);
+                    }
+                    byte[] packet = ms.ToArray();
+                    await stream.WriteAsync(packet, token);
+                    await stream.FlushAsync(token);
+                }
+
+                // Send completion message
+                string manifestHmac = CryptoHelper.SignHmac(
+                    System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(manifest));
+
+                var completeMsg = new DriverPackageComplete
+                {
+                    TotalBytes = packageBytes.Length,
+                    TotalChunks = totalChunks,
+                    ManifestHmac = manifestHmac
+                };
+
+                byte[] completeJson = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(completeMsg);
+                using var completeMs = new MemoryStream();
+                using (var writer = new BinaryWriter(completeMs, System.Text.Encoding.UTF8, leaveOpen: true))
+                {
+                    writer.Write(Constants.PacketTypeDriverPackageComplete);
+                    writer.Write(completeJson.Length);
+                    writer.Write(completeJson);
+                }
+                byte[] completePacket = completeMs.ToArray();
+                await stream.WriteAsync(completePacket, token);
+                await stream.FlushAsync(token);
+
+                AppLogger.Log($"[SERVER] Driver package transfer complete to {remoteIp}: {totalChunks} chunks, {packageBytes.Length} bytes.");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"[SERVER] Driver package transfer error from {remoteIp}", ex);
+                try { await SendDriverPackageErrorAsync(stream, "Server error during driver package transfer."); } catch { }
+            }
+        }
+
+        private async Task SendDriverPackageErrorAsync(NetworkStream stream, string message)
+        {
+            var errorMsg = new DriverPackageError { Message = message };
+            byte[] errorJson = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(errorMsg);
+            using var ms = new MemoryStream();
+            using (var writer = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
+            {
+                writer.Write(Constants.PacketTypeDriverPackageError);
+                writer.Write(errorJson.Length);
+                writer.Write(errorJson);
+            }
+            byte[] packet = ms.ToArray();
+            await stream.WriteAsync(packet);
+            await stream.FlushAsync();
         }
     }
 }

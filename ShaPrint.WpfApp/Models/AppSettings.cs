@@ -11,6 +11,15 @@ namespace ShaPrint.WpfApp.Models
         Beta
     }
 
+    public class DriverSharingSettings
+    {
+        /// <summary>
+        /// Whether driver sharing with clients is enabled. Default: true (opt-out model).
+        /// When false, PrinterInfo.DriverAvailable=false and client falls back to #21 resolver.
+        /// </summary>
+        public bool Enabled { get; set; } = true;
+    }
+
     public class AppSettingsData
     {
         public bool AutoUpdateEnabled { get; set; } = true;
@@ -22,6 +31,8 @@ namespace ShaPrint.WpfApp.Models
         public string DefaultScansFolder { get; set; } = string.Empty;
  
         public string EncryptedNetworkChannel { get; set; } = string.Empty;
+
+        public DriverSharingSettings DriverSharing { get; set; } = new DriverSharingSettings();
 
         [System.Text.Json.Serialization.JsonIgnore]
         public string NetworkChannel
