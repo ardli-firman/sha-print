@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -200,18 +201,20 @@ namespace ShaPrint.WpfApp.Services.Client
                                 };
                             }
 
-                            // Success — move to permanent cache directory
+                            // Success — extract zip to final cache directory
                             string finalDir = Path.Combine(_cacheRoot, expectedPackageId);
                             if (Directory.Exists(finalDir))
                                 Directory.Delete(finalDir, true);
-                            Directory.Move(tempDir, finalDir);
 
-                            // Write the raw package data for later extraction
-                            await File.WriteAllBytesAsync(
-                                Path.Combine(finalDir, "package.dat"), allBytes, cancellationToken);
+                            // Extract zip archive to finalDir
+                            using (var zipStream = new MemoryStream(allBytes))
+                            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Read))
+                            {
+                                archive.ExtractToDirectory(finalDir);
+                            }
 
                             progress?.Report(1.0);
-                            AppLogger.Log($"[DRIVER_PKG_CLIENT] Driver package downloaded and verified: {allBytes.Length} bytes, SHA-256={actualHash[..16]}...");
+                            AppLogger.Log($"[DRIVER_PKG_CLIENT] Driver package downloaded, verified, and extracted: {allBytes.Length} bytes zip, SHA-256={actualHash[..16]}...");
 
                             return new DriverDownloadResult
                             {

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -99,31 +100,28 @@ namespace ShaPrint.Server
         }
 
         /// <summary>
-        /// Reads all file bytes concatenated from the package directory, suitable for chunked transfer.
+        /// Reads the zip archive bytes from the package directory, suitable for chunked transfer.
+        /// The zip is created during ExportDriverAsync and contains all driver files.
         /// </summary>
         public async Task<byte[]?> ReadPackageBytesAsync(string driverPackageId)
         {
             string? dir = GetPackageDirectory(driverPackageId);
             if (dir == null) return null;
 
+            string zipPath = Path.Combine(dir, "package.zip");
+            if (!_fileSystem.FileExists(zipPath))
+            {
+                AppLogger.Error($"[DRIVER_PKG] package.zip not found in {dir}");
+                return null;
+            }
+
             try
             {
-                var files = _fileSystem.GetFiles(dir, "*", SearchOption.TopDirectoryOnly)
-                    .Where(f => !Path.GetFileName(f).Equals("manifest.json", StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-
-                using var ms = new MemoryStream();
-                foreach (var f in files)
-                {
-                    var bytes = await _fileSystem.ReadAllBytesAsync(f);
-                    await ms.WriteAsync(bytes);
-                }
-                return ms.ToArray();
+                return await _fileSystem.ReadAllBytesAsync(zipPath);
             }
             catch (Exception ex)
             {
-                AppLogger.Error($"[DRIVER_PKG] Error reading package bytes for {driverPackageId}", ex);
+                AppLogger.Error($"[DRIVER_PKG] Error reading package.zip for {driverPackageId}", ex);
                 return null;
             }
         }
@@ -183,7 +181,8 @@ namespace ShaPrint.Server
         }
 
         /// <summary>
-        /// Exports a driver package using pnputil /export-driver and builds the manifest.
+        /// Exports a driver package using pnputil /export-driver, creates a zip archive,
+        /// and builds the manifest with SHA-256 computed from the zip bytes.
         /// </summary>
         private async Task<DriverPackageManifest?> ExportDriverAsync(string infPath, string driverName)
         {
@@ -208,34 +207,45 @@ namespace ShaPrint.Server
                 return null;
             }
 
-            // Compute total hash of all exported files (concatenated, sorted by name)
+            // Build a zip archive from the exported files and compute hash from zip bytes
             try
             {
                 var files = _fileSystem.GetFiles(exportDir, "*", SearchOption.TopDirectoryOnly)
                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
 
-                long totalSize = 0;
-                using var sha = SHA256.Create();
-                using var hashStream = new CryptoStream(Stream.Null, sha, CryptoStreamMode.Write);
-
-                foreach (var f in files)
+                // Create zip archive in memory from exported files
+                byte[] zipBytes;
+                using (var zipMs = new MemoryStream())
                 {
-                    var bytes = await _fileSystem.ReadAllBytesAsync(f);
-                    totalSize += bytes.Length;
-                    await hashStream.WriteAsync(bytes);
+                    using (var archive = new ZipArchive(zipMs, ZipArchiveMode.Create, leaveOpen: true))
+                    {
+                        foreach (var f in files)
+                        {
+                            string entryName = Path.GetFileName(f);
+                            var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
+                            using var entryStream = entry.Open();
+                            var fileBytes = await _fileSystem.ReadAllBytesAsync(f);
+                            await entryStream.WriteAsync(fileBytes);
+                        }
+                    }
+                    zipBytes = zipMs.ToArray();
                 }
-                await hashStream.FlushFinalBlockAsync();
 
-                string packageHash = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
+                // Write zip to export dir for caching (ReadPackageBytesAsync reads this)
+                string zipPath = Path.Combine(exportDir, "package.zip");
+                await _fileSystem.WriteAllBytesAsync(zipPath, zipBytes);
 
-                // Build manifest
+                // Compute SHA-256 from zip bytes (this is the canonical package hash)
+                string packageHash = Convert.ToHexString(SHA256.HashData(zipBytes)).ToLowerInvariant();
+
+                // Build manifest — hash and size refer to the zip
                 var manifest = new DriverPackageManifest
                 {
                     InfName = infName,
                     DriverName = driverName,
                     Sha256 = packageHash,
-                    TotalSizeBytes = totalSize,
+                    TotalSizeBytes = zipBytes.Length,
                     FileCount = files.Length,
                     ExportedAt = DateTime.UtcNow.ToString("o"),
                     WindowsVersion = Environment.OSVersion.Version.ToString()
@@ -247,7 +257,7 @@ namespace ShaPrint.Server
                     Path.Combine(exportDir, "manifest.json"),
                     Encoding.UTF8.GetBytes(manifestJson));
 
-                AppLogger.Log($"[DRIVER_PKG] Exported driver '{driverName}' → {files.Length} files, {totalSize} bytes, SHA-256={packageHash[..16]}...");
+                AppLogger.Log($"[DRIVER_PKG] Exported driver '{driverName}' → {files.Length} files, zip {zipBytes.Length} bytes, SHA-256={packageHash[..16]}...");
 
                 return manifest;
             }

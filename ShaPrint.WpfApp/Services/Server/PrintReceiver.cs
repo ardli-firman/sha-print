@@ -2,6 +2,7 @@ using ShaPrint.WpfApp.Services;
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -312,11 +313,26 @@ namespace ShaPrint.Server
 
                 AppLogger.Log($"[SERVER] Driver package request from {remoteIp} for printer '{request.PrinterName}' (PackageId={request.DriverPackageId?[..16]}...)");
 
+                // Resolve printer name → driver name (Bug 2 fix: request.PrinterName may != driver name)
+                string driverName;
+                try
+                {
+                    var allPrinters = SpoolerApi.GetLocalPrintersDetailed();
+                    var match = allPrinters.FirstOrDefault(x =>
+                        x.Name.Equals(request.PrinterName, StringComparison.OrdinalIgnoreCase));
+                    driverName = match?.DriverName ?? request.PrinterName; // fallback to printer name
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error($"[SERVER] Error resolving driver name for printer '{request.PrinterName}', falling back to printer name", ex);
+                    driverName = request.PrinterName;
+                }
+
                 // Get or build the package
-                var manifest = await _driverPackageService.GetDriverPackageAsync(request.PrinterName);
+                var manifest = await _driverPackageService.GetDriverPackageAsync(driverName);
                 if (manifest == null)
                 {
-                    await SendDriverPackageErrorAsync(stream, $"Driver package not found for printer '{request.PrinterName}'.");
+                    await SendDriverPackageErrorAsync(stream, $"Driver package not found for printer '{request.PrinterName}' (driver: '{driverName}').");
                     return;
                 }
 
@@ -377,14 +393,10 @@ namespace ShaPrint.Server
                 }
 
                 // Send completion message
-                string manifestHmac = CryptoHelper.SignHmac(
-                    System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(manifest));
-
                 var completeMsg = new DriverPackageComplete
                 {
                     TotalBytes = packageBytes.Length,
-                    TotalChunks = totalChunks,
-                    ManifestHmac = manifestHmac
+                    TotalChunks = totalChunks
                 };
 
                 byte[] completeJson = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(completeMsg);

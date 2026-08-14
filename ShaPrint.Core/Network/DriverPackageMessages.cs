@@ -36,9 +36,6 @@ namespace ShaPrint.Core.Network
     {
         public long TotalBytes { get; set; }
         public int TotalChunks { get; set; }
-
-        /// <summary>HMAC-SHA256 of the manifest JSON for integrity.</summary>
-        public string ManifestHmac { get; set; } = string.Empty;
     }
 
     /// <summary>
