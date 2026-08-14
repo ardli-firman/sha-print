@@ -6,6 +6,8 @@ public class ContentDialogWiringTests
     public void DriverDialogs_UseConfiguredApplicationDialogHost()
     {
         string repositoryRoot = FindRepositoryRoot();
+        string appCode = File.ReadAllText(Path.Combine(
+            repositoryRoot, "ShaPrint.WpfApp", "App.xaml.cs"));
         string mainWindowXaml = File.ReadAllText(Path.Combine(
             repositoryRoot, "ShaPrint.WpfApp", "Views", "Windows", "MainWindow.xaml"));
         string mainWindowCode = File.ReadAllText(Path.Combine(
@@ -13,6 +15,9 @@ public class ContentDialogWiringTests
         string clientViewModel = File.ReadAllText(Path.Combine(
             repositoryRoot, "ShaPrint.WpfApp", "ViewModels", "Pages", "ClientViewModel.cs"));
 
+        Assert.Contains(
+            "AddSingleton<IContentDialogService, ContentDialogService>()",
+            appCode);
         Assert.Contains("<ui:ContentDialogHost x:Name=\"RootContentDialogHost\"", mainWindowXaml);
         Assert.Contains("IContentDialogService contentDialogService", mainWindowCode);
         Assert.Contains("contentDialogService.SetDialogHost(RootContentDialogHost);", mainWindowCode);

@@ -267,24 +267,37 @@ if ($printer) {{
                     ShaPrint.Core.AppLogger.Log("[CLIENT] Get-PrinterDriver exception: " + ex.Message);
                 }
 
-                // Fallback/enrichment: registry driver store (Type 3 / legacy drivers that may
-                // be present in the store but not surfaced by Get-PrinterDriver).
+                // Fallback/enrichment: read registered Type 3/4 driver names directly from
+                // Environment\Drivers\Version-* registry keys. Reading only the immediate
+                // children of Drivers returns "Version-3"/"Version-4", not driver names.
                 try
                 {
-                    const string regPath = @"HKLM:\SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Drivers";
-                    var regResult = RunPowerShell($"(Get-ChildItem '{regPath}' -ErrorAction SilentlyContinue | ForEach-Object {{ $_.PSChildName }}) | ConvertTo-Json -Compress");
-                    if (regResult.Success)
+                    const string registryRootPath = @"SYSTEM\CurrentControlSet\Control\Print\Environments";
+
+                    IEnumerable<string> ReadSubKeyNames(string relativePath)
                     {
-                        var parsed = TryParseJsonStringArray(regResult.Output);
-                        foreach (var name in parsed)
+                        string keyPath = string.IsNullOrEmpty(relativePath)
+                            ? registryRootPath
+                            : $@"{registryRootPath}\{relativePath}";
+
+                        try
                         {
-                            if (!string.IsNullOrWhiteSpace(name)) drivers.Add(name.Trim());
+                            using RegistryKey? key = Registry.LocalMachine.OpenSubKey(keyPath);
+                            return key?.GetSubKeyNames() ?? Array.Empty<string>();
                         }
-                        if (parsed.Count > 0)
+                        catch (Exception ex)
                         {
-                            ShaPrint.Core.AppLogger.Log($"[CLIENT] Registry driver store returned {parsed.Count} additional driver entr(ies).");
+                            ShaPrint.Core.AppLogger.Log(
+                                $"[CLIENT] Registry driver key '{relativePath}' could not be read: {ex.Message}");
+                            return Array.Empty<string>();
                         }
                     }
+
+                    var registeredDrivers = ReadRegisteredDriverNamesFromRegistry(ReadSubKeyNames);
+                    foreach (var name in registeredDrivers) drivers.Add(name);
+
+                    ShaPrint.Core.AppLogger.Log(
+                        $"[CLIENT] Registry driver store returned {registeredDrivers.Count} registered driver entr(ies).");
                 }
                 catch (Exception ex)
                 {
@@ -303,6 +316,41 @@ if ($printer) {{
             {
                 _driverCacheLock.Release();
             }
+        }
+
+        /// <summary>
+        /// Traverses Print\Environments as Environment -> Drivers -> Version-* -> driver name.
+        /// The delegate makes the traversal deterministic and testable without changing the
+        /// machine registry.
+        /// </summary>
+        private static List<string> ReadRegisteredDriverNamesFromRegistry(
+            Func<string, IEnumerable<string>> readSubKeyNames)
+        {
+            var driverNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string environmentName in readSubKeyNames(string.Empty))
+            {
+                string driversPath = $@"{environmentName}\Drivers";
+
+                foreach (string versionName in readSubKeyNames(driversPath))
+                {
+                    if (!versionName.StartsWith("Version-", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    string versionPath = $@"{driversPath}\{versionName}";
+                    foreach (string driverName in readSubKeyNames(versionPath))
+                    {
+                        if (!string.IsNullOrWhiteSpace(driverName))
+                        {
+                            driverNames.Add(driverName.Trim());
+                        }
+                    }
+                }
+            }
+
+            return driverNames.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         /// <summary>
