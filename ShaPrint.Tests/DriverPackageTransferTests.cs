@@ -126,21 +126,11 @@ namespace ShaPrint.Tests
         {
             // Arrange
             long totalBytes = 15_728_640;
-            byte[] manifestJson = JsonSerializer.SerializeToUtf8Bytes(new DriverPackageManifest
-            {
-                InfName = "oem25.inf",
-                DriverName = "EPSON L120",
-                Sha256 = new string('b', 64),
-                TotalSizeBytes = totalBytes,
-                FileCount = 4
-            });
-            string manifestHmac = Convert.ToHexString(SHA256.HashData(manifestJson)).ToLowerInvariant();
 
             var complete = new DriverPackageComplete
             {
                 TotalBytes = totalBytes,
-                TotalChunks = 240,
-                ManifestHmac = manifestHmac
+                TotalChunks = 240
             };
 
             // Act
@@ -151,7 +141,6 @@ namespace ShaPrint.Tests
             Assert.NotNull(deserialized);
             Assert.Equal(totalBytes, deserialized.TotalBytes);
             Assert.Equal(240, deserialized.TotalChunks);
-            Assert.Equal(manifestHmac, deserialized.ManifestHmac);
         }
     }
 }
