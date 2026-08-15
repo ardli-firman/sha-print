@@ -349,10 +349,13 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
                 if (item.Printer.DriverAvailable && !string.IsNullOrEmpty(item.Printer.DriverPackageId))
                 {
-                    // Fast path: check if local driver already exists
-                    resolvedDriver = await ResolveDriverNameAsync(serverDriverHint);
-                    if (resolvedDriver != null)
+                    // Fast path: silently check if local driver already exists without popping up UI
+                    var localDrivers = await Task.Run(() => VirtualPrinterManager.GetInstalledDrivers());
+                    string? existingLocal = DriverNameResolver.Resolve(serverDriverHint, localDrivers);
+
+                    if (existingLocal != null)
                     {
+                        resolvedDriver = existingLocal;
                         AppLogger.Log($"[CLIENT] Local driver already exists ('{resolvedDriver}') — skipping provisioning.");
                     }
                     else
@@ -496,7 +499,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                                                 TimeSpan.FromSeconds(3));
 
                                             // Re-resolve to get the exact driver name
-                                            resolvedDriver = await ResolveDriverNameAsync(serverDriverHint);
+                                            var updatedDrivers = await Task.Run(() => VirtualPrinterManager.GetInstalledDrivers());
+                                            resolvedDriver = DriverNameResolver.Resolve(serverDriverHint, updatedDrivers) ?? serverDriverHint;
                                         }
                                         else
                                         {
