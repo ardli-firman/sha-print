@@ -411,36 +411,87 @@ namespace ShaPrint.WpfApp.Services.Client
         /// </summary>
         public string? ResolveInfPath(string packageDirectory, string? manifestInfName = null)
         {
+            // Windows built-in INF files that pnputil may co-export as dependencies.
+            // These must NEVER be used as the driver INF — they are OS infrastructure.
+            var windowsSystemInfs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "ntprint.inf", "prnms001.inf", "prnms002.inf", "prnms003.inf",
+                "prnms006.inf", "prnms007.inf", "prnms008.inf", "prnms009.inf",
+                "prnms010.inf", "prnms011.inf", "prnms012.inf",
+                "usbprint.inf", "wsdprint.inf", "wsprint.inf",
+                "printqueue.inf", "prnroot.inf"
+            };
+
             try
             {
-                var infFiles = Directory.GetFiles(packageDirectory, "*.inf", SearchOption.AllDirectories);
+                var allInfFiles = Directory.GetFiles(packageDirectory, "*.inf", SearchOption.AllDirectories);
+                AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: found {allInfFiles.Length} .inf file(s): {string.Join(", ", allInfFiles.Select(Path.GetFileName))}");
 
-                if (infFiles.Length == 0)
-                    return null;
-
-                // Priority 1: manifest InfName (if provided and file exists on disk)
-                if (!string.IsNullOrWhiteSpace(manifestInfName))
+                if (allInfFiles.Length == 0)
                 {
-                    var match = infFiles.FirstOrDefault(f =>
-                        string.Equals(Path.GetFileName(f), manifestInfName, StringComparison.OrdinalIgnoreCase));
-                    if (match != null)
-                        return match;
-                    AppLogger.Log($"[DRIVER_PKG_CLIENT] manifest InfName '{manifestInfName}' not found on disk, falling through.");
+                    AppLogger.Error("[DRIVER_PKG_CLIENT] ResolveInfPath: no .inf files found in package directory.");
+                    return null;
                 }
 
-                // Priority 2: exactly one .inf
-                if (infFiles.Length == 1)
-                    return infFiles[0];
+                // Priority 1: manifest InfName (exact match — most reliable)
+                if (!string.IsNullOrWhiteSpace(manifestInfName))
+                {
+                    var manifestMatch = allInfFiles.FirstOrDefault(f =>
+                        string.Equals(Path.GetFileName(f), manifestInfName, StringComparison.OrdinalIgnoreCase));
+                    if (manifestMatch != null)
+                    {
+                        AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: Priority 1 match via manifest InfName → {Path.GetFileName(manifestMatch)}");
+                        return manifestMatch;
+                    }
+                    AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: manifest InfName '{manifestInfName}' not found on disk, continuing.");
+                }
 
-                // Priority 3: ambiguity → fail explicitly (never infFiles[0])
-                AppLogger.Error($"[DRIVER_PKG_CLIENT] Multiple .inf files found, no manifest — ambiguous: {string.Join(", ", infFiles.Select(Path.GetFileName))}");
+                // Priority 2: filter out Windows system INFs, use remaining
+                var driverInfs = allInfFiles
+                    .Where(f => !windowsSystemInfs.Contains(Path.GetFileName(f)))
+                    .ToArray();
+
+                AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: after filtering system INFs → {driverInfs.Length} candidate(s): {string.Join(", ", driverInfs.Select(Path.GetFileName))}");
+
+                if (driverInfs.Length == 1)
+                {
+                    AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: Priority 2 single candidate → {Path.GetFileName(driverInfs[0])}");
+                    return driverInfs[0];
+                }
+
+                if (driverInfs.Length > 1)
+                {
+                    // Priority 3: prefer oem*.inf (pnputil export naming convention)
+                    var oemInf = driverInfs.FirstOrDefault(f =>
+                        Path.GetFileName(f).StartsWith("oem", StringComparison.OrdinalIgnoreCase));
+                    if (oemInf != null)
+                    {
+                        AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: Priority 3 oem*.inf match → {Path.GetFileName(oemInf)}");
+                        return oemInf;
+                    }
+
+                    // Priority 4: if still ambiguous, log all and pick first (best effort)
+                    AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: Priority 4 best-effort first candidate → {Path.GetFileName(driverInfs[0])}");
+                    return driverInfs[0];
+                }
+
+                // All files were system INFs — last resort: use them
+                if (allInfFiles.Length == 1)
+                {
+                    AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: only system INF found, using as last resort → {Path.GetFileName(allInfFiles[0])}");
+                    return allInfFiles[0];
+                }
+
+                AppLogger.Error($"[DRIVER_PKG_CLIENT] ResolveInfPath: ambiguous — all .inf files are system INFs: {string.Join(", ", allInfFiles.Select(Path.GetFileName))}");
                 return null;
             }
-            catch
+            catch (Exception ex)
             {
+                AppLogger.Error($"[DRIVER_PKG_CLIENT] ResolveInfPath: exception — {ex.Message}");
                 return null;
             }
         }
+
 
         /// <summary>
         /// Legacy .inf selection (deprecated — use ResolveInfPath instead).

@@ -270,16 +270,26 @@ namespace ShaPrint.Server
                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
 
-                // Filter: only real driver files, never our own packaging artifacts
+                // Filter: only real driver files, never our own packaging artifacts or Windows system INFs
                 var driverExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                     { ".inf", ".cat", ".dll", ".gpd", ".ppd", ".icm", ".oem" };
                 var metaFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                     { "package.zip", "manifest.json", ".verified.json" };
+                // Windows built-in INFs that pnputil co-exports as dependencies — exclude from package
+                var windowsSystemInfs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "ntprint.inf", "prnms001.inf", "prnms002.inf", "prnms003.inf",
+                    "prnms006.inf", "prnms007.inf", "prnms008.inf", "prnms009.inf",
+                    "prnms010.inf", "prnms011.inf", "prnms012.inf",
+                    "usbprint.inf", "wsdprint.inf", "wsprint.inf",
+                    "printqueue.inf", "prnroot.inf"
+                };
 
                 var files = allFiles
                     .Where(f => !metaFiles.Contains(Path.GetFileName(f))
+                             && !windowsSystemInfs.Contains(Path.GetFileName(f))
                              && (driverExts.Contains(Path.GetExtension(f))
-                                 || allFiles.Length <= 4)) // if very few files, include all (might be unusual format)
+                                 || allFiles.Length <= 4)) // if very few files, include all non-meta
                     .ToArray();
 
                 if (files.Length == 0)
@@ -313,10 +323,28 @@ namespace ShaPrint.Server
                 string packageHash = Convert.ToHexString(SHA256.HashData(zipBytes)).ToLowerInvariant();
                 AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: zip={zipBytes.Length:N0} bytes, SHA-256={packageHash[..16]}...");
 
+                // Resolve actual INF filename from the exported files (NOT the Windows oem*.inf store name).
+                // pnputil exports with the original manufacturer name (e.g., EPSONL3210.inf).
+                // Priority: non-oem-numbered INF > oem-numbered INF > fallback to store name.
+                string actualInfName;
+                var infFiles = files
+                    .Where(f => f.EndsWith(".inf", StringComparison.OrdinalIgnoreCase))
+                    .Select(Path.GetFileName)
+                    .ToArray();
+
+                var nonOemInf = infFiles.FirstOrDefault(n =>
+                    !string.IsNullOrEmpty(n) &&
+                    !n.StartsWith("oem", StringComparison.OrdinalIgnoreCase));
+                actualInfName = nonOemInf
+                    ?? infFiles.FirstOrDefault()
+                    ?? infName; // absolute fallback: Windows store name
+
+                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: resolved INF name for manifest: '{infName}' (store) → '{actualInfName}' (exported)");
+
                 // Build manifest
                 var manifest = new DriverPackageManifest
                 {
-                    InfName = infName,
+                    InfName = actualInfName,
                     DriverName = driverName,
                     Sha256 = packageHash,
                     TotalSizeBytes = zipBytes.Length,

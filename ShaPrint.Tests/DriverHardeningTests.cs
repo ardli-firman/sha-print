@@ -127,9 +127,11 @@ namespace ShaPrint.Tests
         }
 
         [Fact]
-        public void ResolveInfPath_MultipleNoManifest_ReturnsNull()
+        public void ResolveInfPath_MultipleOemInfsNoManifest_PicksFirstOem()
         {
-            // Arrange: 2+ .inf, no manifest
+            // Arrange: 2 oem*.inf files, no manifest
+            // New behavior: Priority 3 picks first oem*.inf (best-effort) rather than failing,
+            // because ambiguity between oem INFs is a known pnputil export pattern.
             string pkgDir = Path.Combine(_tempDir, "pkg_ambiguous");
             Directory.CreateDirectory(pkgDir);
             File.WriteAllText(Path.Combine(pkgDir, "oem25.inf"), "[Version]");
@@ -140,8 +142,9 @@ namespace ShaPrint.Tests
             // Act
             string? result = manager.ResolveInfPath(pkgDir);
 
-            // Assert — should return null (explicit failure, never infFiles[0])
-            Assert.Null(result);
+            // Assert — picks an oem* INF (best-effort), not null
+            Assert.NotNull(result);
+            Assert.StartsWith("oem", Path.GetFileName(result), StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]
@@ -181,7 +184,7 @@ namespace ShaPrint.Tests
         [Fact]
         public void ResolveInfPath_MultipleInfWithManifest_MatchesCorrectly()
         {
-            // Arrange: 3 .inf files, manifest picks one
+            // Arrange: 3 .inf files, manifest picks one (Priority 1 exact match)
             string pkgDir = Path.Combine(_tempDir, "pkg_multi_manifest");
             Directory.CreateDirectory(pkgDir);
             File.WriteAllText(Path.Combine(pkgDir, "aaa.inf"), "[Version]");
@@ -193,9 +196,29 @@ namespace ShaPrint.Tests
             // Act
             string? result = manager.ResolveInfPath(pkgDir, "BBB.inf"); // case-insensitive
 
-            // Assert
+            // Assert — manifest exact match wins regardless of how many INFs exist
             Assert.NotNull(result);
             Assert.Equal("bbb.inf", Path.GetFileName(result));
+        }
+
+        [Fact]
+        public void ResolveInfPath_SystemInfExcluded_ReturnsRealDriverInf()
+        {
+            // Arrange: ntprint.inf (system) + real driver INF, no manifest
+            // pnputil commonly co-exports ntprint.inf as a dependency
+            string pkgDir = Path.Combine(_tempDir, "pkg_system_inf");
+            Directory.CreateDirectory(pkgDir);
+            File.WriteAllText(Path.Combine(pkgDir, "ntprint.inf"), "[Version]");
+            File.WriteAllText(Path.Combine(pkgDir, "EPSONL3210.inf"), "[Version]");
+
+            var manager = new DriverPackageManager();
+
+            // Act — no manifest provided
+            string? result = manager.ResolveInfPath(pkgDir);
+
+            // Assert — ntprint.inf filtered out; EPSONL3210.inf returned
+            Assert.NotNull(result);
+            Assert.Equal("EPSONL3210.inf", Path.GetFileName(result), ignoreCase: true);
         }
 
         // ═══════════════════════════════════════════════════════════════════
