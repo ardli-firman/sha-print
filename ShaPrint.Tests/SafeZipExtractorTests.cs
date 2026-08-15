@@ -212,13 +212,15 @@ namespace ShaPrint.Tests
             {
                 using (var archive = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
                 {
-                    var entry = archive.CreateEntry("driver.inf");
-                    using var writer = new StreamWriter(entry.Open());
-                    writer.Write("[Version]\nSignature=\"$Windows NT$\"");
+                    using (var writer = new StreamWriter(archive.CreateEntry("driver.inf").Open()))
+                    {
+                        writer.Write("[Version]\nSignature=\"$Windows NT$\"");
+                    }
 
-                    var entry2 = archive.CreateEntry("subfolder/driver.sys");
-                    using var writer2 = new StreamWriter(entry2.Open());
-                    writer2.Write("binary content here");
+                    using (var writer2 = new StreamWriter(archive.CreateEntry("subfolder/driver.sys").Open()))
+                    {
+                        writer2.Write("binary content here");
+                    }
                 }
                 zipBytes = ms.ToArray();
             }

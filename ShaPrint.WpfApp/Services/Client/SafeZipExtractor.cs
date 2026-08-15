@@ -37,12 +37,17 @@ namespace ShaPrint.WpfApp.Services.Client
                     throw new InvalidOperationException(
                         $"Driver package rejected: entry name too long ({entry.FullName.Length} > {Constants.DriverExtractMaxEntryNameLength}).");
 
+                // Absolute / rooted path check
+                if (Path.IsPathRooted(entry.FullName) || entry.FullName.StartsWith('/') || entry.FullName.StartsWith('\\'))
+                    throw new InvalidOperationException(
+                        $"Driver package rejected: entry '{entry.FullName}' is an absolute path (zip-slip).");
+
                 // Containment check — resolve the destination path and verify it stays
                 // under targetDirectory. Uses Path.GetRelativePath to avoid prefix-collision
                 // false positives (review-mandated: NOT plain StartsWith).
                 string destinationPath = Path.GetFullPath(Path.Combine(targetDirectory, entry.FullName));
                 string relative = Path.GetRelativePath(normalizedTarget, destinationPath);
-                if (relative.StartsWith("..", StringComparison.Ordinal))
+                if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
                     throw new InvalidOperationException(
                         $"Driver package rejected: entry '{entry.FullName}' escapes target directory (zip-slip).");
 
