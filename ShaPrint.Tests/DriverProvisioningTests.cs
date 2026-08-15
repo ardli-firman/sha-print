@@ -191,12 +191,13 @@ namespace ShaPrint.Tests
             Assert.Null(result);
         }
 
-        // ── T7: ReadPackageBytesAsync reads package.zip (zip framing) ─────
-
+        // ── T7: ReadPackageBytesAsync reads package.zip from disk (disk fallback) ────
         [Fact]
         public async Task ReadPackageBytesAsync_WithZipFile_ReturnsZipBytes()
         {
-            // Arrange — simulate a cached package directory with package.zip
+            // Arrange — simulate a cached package directory with package.zip on disk.
+            // With the disk fallback in GetPackageDirectory(), the service now finds
+            // package.zip even when the in-memory cache is empty (e.g., after server restart).
             var mockFs = new MockFileSystem();
             var mockProcess = new MockProcessRunner();
             var service = new DriverPackageService(mockProcess, mockFs);
@@ -208,19 +209,17 @@ namespace ShaPrint.Tests
             string packageDir = Path.Combine(cacheRoot, packageHash);
             string zipPath = Path.Combine(packageDir, "package.zip");
 
-            // Simulate package.zip exists
+            // Simulate package.zip exists on disk (as if from a previous server session)
             byte[] fakeZip = new byte[] { 0x50, 0x4B, 0x03, 0x04, 0x01, 0x02 }; // ZIP magic bytes
             mockFs.AddFile(zipPath, fakeZip);
             mockFs.AddDirectoryExists(packageDir, true);
 
-            // The cache requires the service to know about this package.
-            // Since we can't directly populate the cache, test ReadPackageBytesAsync
-            // by verifying it returns null when cache is empty (no manifest cached).
+            // Act — disk fallback should find the package.zip by packageHash
             var result = await service.ReadPackageBytesAsync(packageHash);
 
-            // Assert: returns null because the ConcurrentDictionary cache has no entry
-            // (cache is only populated via GetDriverPackageAsync which needs WMI)
-            Assert.Null(result);
+            // Assert: disk fallback returns the bytes even without an in-memory cache entry
+            Assert.NotNull(result);
+            Assert.Equal(fakeZip, result);
         }
 
         // ── T8: ReadPackageBytesAsync returns null when no zip ────────────

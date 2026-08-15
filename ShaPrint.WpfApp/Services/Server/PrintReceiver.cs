@@ -313,14 +313,15 @@ namespace ShaPrint.Server
 
                 AppLogger.Log($"[SERVER] Driver package request from {remoteIp} for printer '{request.PrinterName}' (PackageId={request.DriverPackageId?[..16]}...)");
 
-                // Resolve printer name → driver name (Bug 2 fix: request.PrinterName may != driver name)
+                // Resolve printer name → driver name
                 string driverName;
                 try
                 {
                     var allPrinters = SpoolerApi.GetLocalPrintersDetailed();
                     var match = allPrinters.FirstOrDefault(x =>
                         x.Name.Equals(request.PrinterName, StringComparison.OrdinalIgnoreCase));
-                    driverName = match?.DriverName ?? request.PrinterName; // fallback to printer name
+                    driverName = match?.DriverName ?? request.PrinterName;
+                    AppLogger.Log($"[SERVER] Resolved printer '{request.PrinterName}' → driver '{driverName}' ({(match != null ? "matched" : "fallback to printer name")})");
                 }
                 catch (Exception ex)
                 {
@@ -329,28 +330,35 @@ namespace ShaPrint.Server
                 }
 
                 // Get or build the package
+                AppLogger.Log($"[SERVER] Fetching driver package for driver='{driverName}'...");
                 var manifest = await _driverPackageService.GetDriverPackageAsync(driverName);
                 if (manifest == null)
                 {
+                    AppLogger.Error($"[SERVER] Driver package not found for driver='{driverName}' (requested printer='{request.PrinterName}')");
                     await SendDriverPackageErrorAsync(stream, $"Driver package not found for printer '{request.PrinterName}' (driver: '{driverName}').");
                     return;
                 }
+                AppLogger.Log($"[SERVER] Package manifest found: SHA-256={manifest.Sha256[..16]}..., size={manifest.TotalSizeBytes:N0} bytes, inf={manifest.InfName}");
 
                 // Verify requested package ID matches (if provided)
                 if (!string.IsNullOrEmpty(request.DriverPackageId) &&
                     !request.DriverPackageId.Equals(manifest.Sha256, StringComparison.OrdinalIgnoreCase))
                 {
+                    AppLogger.Error($"[SERVER] PackageId mismatch: client requested '{request.DriverPackageId[..16]}...', server has '{manifest.Sha256[..16]}...'");
                     await SendDriverPackageErrorAsync(stream, "Driver package ID mismatch.");
                     return;
                 }
 
                 // Read package bytes
+                AppLogger.Log($"[SERVER] Reading package bytes for SHA-256={manifest.Sha256[..16]}...");
                 byte[]? packageBytes = await _driverPackageService.ReadPackageBytesAsync(manifest.Sha256);
                 if (packageBytes == null || packageBytes.Length == 0)
                 {
+                    AppLogger.Error($"[SERVER] Failed to read package bytes for SHA-256={manifest.Sha256[..16]}... — aborting transfer.");
                     await SendDriverPackageErrorAsync(stream, "Failed to read driver package data.");
                     return;
                 }
+                AppLogger.Log($"[SERVER] Sending driver package to {remoteIp}: {packageBytes.Length:N0} bytes.");
 
                 // Stream chunks
                 int chunkSize = Constants.DriverPackageChunkSize;

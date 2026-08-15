@@ -90,16 +90,43 @@ namespace ShaPrint.Server
         /// </summary>
         public string? GetPackageDirectory(string driverPackageId)
         {
+            AppLogger.Log($"[DRIVER_PKG] GetPackageDirectory: looking up '{driverPackageId[..16]}...' (cache size={_cache.Count})");
+
+            // 1. Try in-memory cache first
             var entry = _cache.Values.FirstOrDefault(c =>
                 c.Manifest.Sha256.Equals(driverPackageId, StringComparison.OrdinalIgnoreCase));
             if (entry != null)
             {
                 if (!string.IsNullOrEmpty(entry.DirectoryPath) && _fileSystem.DirectoryExists(entry.DirectoryPath))
+                {
+                    AppLogger.Log($"[DRIVER_PKG] GetPackageDirectory: cache hit → {entry.DirectoryPath}");
                     return entry.DirectoryPath;
+                }
 
                 string dir = Path.Combine(_cacheRoot, entry.Manifest.Sha256);
-                if (_fileSystem.DirectoryExists(dir)) return dir;
+                if (_fileSystem.DirectoryExists(dir))
+                {
+                    AppLogger.Log($"[DRIVER_PKG] GetPackageDirectory: cache hit (fallback dir) → {dir}");
+                    return dir;
+                }
+
+                AppLogger.Log($"[DRIVER_PKG] GetPackageDirectory: cache entry found but directory missing — will try disk.");
             }
+            else
+            {
+                AppLogger.Log($"[DRIVER_PKG] GetPackageDirectory: not in memory cache — trying disk fallback.");
+            }
+
+            // 2. Disk fallback: after server restart, cache is empty but files may exist
+            string diskDir = Path.Combine(_cacheRoot, driverPackageId);
+            string diskZip = Path.Combine(diskDir, "package.zip");
+            if (_fileSystem.FileExists(diskZip))
+            {
+                AppLogger.Log($"[DRIVER_PKG] GetPackageDirectory: disk fallback hit → {diskDir}");
+                return diskDir;
+            }
+
+            AppLogger.Error($"[DRIVER_PKG] GetPackageDirectory: '{driverPackageId[..16]}...' not found in cache or on disk.");
             return null;
         }
 
@@ -109,23 +136,32 @@ namespace ShaPrint.Server
         /// </summary>
         public async Task<byte[]?> ReadPackageBytesAsync(string driverPackageId)
         {
+            AppLogger.Log($"[DRIVER_PKG] ReadPackageBytesAsync: requested '{driverPackageId[..16]}...'");
             string? dir = GetPackageDirectory(driverPackageId);
-            if (dir == null) return null;
+            if (dir == null)
+            {
+                AppLogger.Error($"[DRIVER_PKG] ReadPackageBytesAsync: no directory found for '{driverPackageId[..16]}...' — transfer aborted.");
+                return null;
+            }
 
             string zipPath = Path.Combine(dir, "package.zip");
             if (!_fileSystem.FileExists(zipPath))
             {
-                AppLogger.Error($"[DRIVER_PKG] package.zip not found in {dir}");
+                AppLogger.Error($"[DRIVER_PKG] ReadPackageBytesAsync: package.zip not found in {dir}");
                 return null;
             }
 
             try
             {
-                return await _fileSystem.ReadAllBytesAsync(zipPath);
+                long fileSize = _fileSystem.GetFileSize(zipPath);
+                AppLogger.Log($"[DRIVER_PKG] ReadPackageBytesAsync: reading package.zip ({fileSize:N0} bytes) from {dir}");
+                var bytes = await _fileSystem.ReadAllBytesAsync(zipPath);
+                AppLogger.Log($"[DRIVER_PKG] ReadPackageBytesAsync: read {bytes.Length:N0} bytes OK.");
+                return bytes;
             }
             catch (Exception ex)
             {
-                AppLogger.Error($"[DRIVER_PKG] Error reading package.zip for {driverPackageId}", ex);
+                AppLogger.Error($"[DRIVER_PKG] ReadPackageBytesAsync: error reading package.zip for '{driverPackageId[..16]}...'", ex);
                 return null;
             }
         }
@@ -191,6 +227,7 @@ namespace ShaPrint.Server
         private async Task<DriverPackageManifest?> ExportDriverAsync(string infPath, string driverName)
         {
             string infName = Path.GetFileName(infPath);
+            AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: starting export for '{driverName}' (inf={infName})");
 
             // Compute a preliminary hash of the inf content for the cache directory name
             byte[] infBytes = await _fileSystem.ReadAllBytesAsync(infPath);
@@ -198,27 +235,63 @@ namespace ShaPrint.Server
 
             string exportDir = Path.Combine(_cacheRoot, infHash);
             _fileSystem.CreateDirectory(exportDir);
+            AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: exportDir='{exportDir}'");
+
+            // Clean up stale meta-files from previous export runs to avoid them being zipped in
+            foreach (var stale in new[] { "package.zip", "manifest.json" })
+            {
+                string stalePath = Path.Combine(exportDir, stale);
+                if (_fileSystem.FileExists(stalePath))
+                {
+                    _fileSystem.DeleteFile(stalePath);
+                    AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: deleted stale '{stale}' from exportDir.");
+                }
+            }
 
             // Export using pnputil
+            AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: running pnputil /export-driver...");
             var result = await _processRunner.RunAsync("pnputil",
                 $"/export-driver \"{infPath}\" \"{exportDir}\"",
                 TimeSpan.FromMinutes(2));
 
             if (!result.Success)
             {
-                AppLogger.Error($"[DRIVER_PKG] pnputil /export-driver failed for {infName}: {result.Output}");
+                AppLogger.Error($"[DRIVER_PKG] ExportDriverAsync: pnputil /export-driver failed for {infName}: {result.Output}");
                 _fileSystem.DeleteDirectory(exportDir, true);
                 return null;
             }
+            AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: pnputil export succeeded.");
 
-            // Build a zip archive from the exported files and compute hash from zip bytes
+            // Build a zip archive — include only driver files (.inf, .cat, .dll, .gpd, .ppd)
+            // Exclude meta-files we write ourselves (package.zip, manifest.json, .verified.json)
             try
             {
-                var files = _fileSystem.GetFiles(exportDir, "*", SearchOption.TopDirectoryOnly)
+                var allFiles = _fileSystem.GetFiles(exportDir, "*", SearchOption.TopDirectoryOnly)
                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
 
-                // Create zip archive in memory from exported files
+                // Filter: only real driver files, never our own packaging artifacts
+                var driverExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    { ".inf", ".cat", ".dll", ".gpd", ".ppd", ".icm", ".oem" };
+                var metaFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    { "package.zip", "manifest.json", ".verified.json" };
+
+                var files = allFiles
+                    .Where(f => !metaFiles.Contains(Path.GetFileName(f))
+                             && (driverExts.Contains(Path.GetExtension(f))
+                                 || allFiles.Length <= 4)) // if very few files, include all (might be unusual format)
+                    .ToArray();
+
+                if (files.Length == 0)
+                {
+                    AppLogger.Error($"[DRIVER_PKG] ExportDriverAsync: no driver files found in exportDir after filter. allFiles={allFiles.Length}");
+                    _fileSystem.DeleteDirectory(exportDir, true);
+                    return null;
+                }
+
+                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: zipping {files.Length} driver file(s): {string.Join(", ", files.Select(Path.GetFileName))}");
+
+                // Create zip archive in memory from driver files
                 byte[] zipBytes;
                 using (var zipMs = new MemoryStream())
                 {
@@ -236,14 +309,11 @@ namespace ShaPrint.Server
                     zipBytes = zipMs.ToArray();
                 }
 
-                // Write zip to export dir for caching (ReadPackageBytesAsync reads this)
-                string zipPath = Path.Combine(exportDir, "package.zip");
-                await _fileSystem.WriteAllBytesAsync(zipPath, zipBytes);
-
-                // Compute SHA-256 from zip bytes (this is the canonical package hash)
+                // Compute SHA-256 from zip bytes (canonical package hash)
                 string packageHash = Convert.ToHexString(SHA256.HashData(zipBytes)).ToLowerInvariant();
+                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: zip={zipBytes.Length:N0} bytes, SHA-256={packageHash[..16]}...");
 
-                // Build manifest — hash and size refer to the zip
+                // Build manifest
                 var manifest = new DriverPackageManifest
                 {
                     InfName = infName,
@@ -255,16 +325,17 @@ namespace ShaPrint.Server
                     WindowsVersion = Environment.OSVersion.Version.ToString()
                 };
 
-                // Write manifest.json
                 string manifestJson = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
-                await _fileSystem.WriteAllBytesAsync(
-                    Path.Combine(exportDir, "manifest.json"),
-                    Encoding.UTF8.GetBytes(manifestJson));
 
-                // Ensure final directory named with packageHash exists with package.zip and manifest.json
+                // Write to exportDir (infHash-based, for pnputil output)
+                await _fileSystem.WriteAllBytesAsync(Path.Combine(exportDir, "package.zip"), zipBytes);
+                await _fileSystem.WriteAllBytesAsync(Path.Combine(exportDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson));
+
+                // Write to finalDir (packageHash-based, where ReadPackageBytesAsync looks)
                 string finalDir = Path.Combine(_cacheRoot, packageHash);
                 if (!string.Equals(exportDir, finalDir, StringComparison.OrdinalIgnoreCase))
                 {
+                    AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: writing final package to SHA-256 dir → {finalDir}");
                     _fileSystem.CreateDirectory(finalDir);
                     foreach (var f in files)
                     {
@@ -272,20 +343,20 @@ namespace ShaPrint.Server
                         var content = await _fileSystem.ReadAllBytesAsync(f);
                         await _fileSystem.WriteAllBytesAsync(dest, content);
                     }
-                    string finalZipPath = Path.Combine(finalDir, "package.zip");
-                    await _fileSystem.WriteAllBytesAsync(finalZipPath, zipBytes);
-                    await _fileSystem.WriteAllBytesAsync(
-                        Path.Combine(finalDir, "manifest.json"),
-                        Encoding.UTF8.GetBytes(manifestJson));
+                    await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "package.zip"), zipBytes);
+                    await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson));
+                }
+                else
+                {
+                    AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: exportDir matches packageHash dir — no copy needed.");
                 }
 
-                AppLogger.Log($"[DRIVER_PKG] Exported driver '{driverName}' → {files.Length} files, zip {zipBytes.Length} bytes, SHA-256={packageHash[..16]}...");
-
+                AppLogger.Log($"[DRIVER_PKG] Exported driver '{driverName}' → {files.Length} files, zip {zipBytes.Length:N0} bytes, SHA-256={packageHash[..16]}...");
                 return manifest;
             }
             catch (Exception ex)
             {
-                AppLogger.Error($"[DRIVER_PKG] Error building manifest for {driverName}", ex);
+                AppLogger.Error($"[DRIVER_PKG] ExportDriverAsync: error building manifest for '{driverName}'", ex);
                 return null;
             }
         }

@@ -121,12 +121,15 @@ namespace ShaPrint.WpfApp.Services.Client
             try
             {
                 using var client = new TcpClient();
+                AppLogger.Log($"[DRIVER_PKG_CLIENT] Connecting to {serverIp}:{Constants.PrintTcpPort}...");
                 var connectTask = client.ConnectAsync(serverIp, Constants.PrintTcpPort);
                 if (await Task.WhenAny(connectTask, Task.Delay(Constants.DriverPackageTransferTimeoutMs, cancellationToken)) != connectTask)
                 {
+                    AppLogger.Error($"[DRIVER_PKG_CLIENT] Connection timeout to {serverIp}:{Constants.PrintTcpPort}");
                     return new DriverDownloadResult { Success = false, ErrorMessage = "Connection timeout." };
                 }
                 await connectTask;
+                AppLogger.Log($"[DRIVER_PKG_CLIENT] Connected. Sending DriverPackageRequest for printer='{printerName}', PackageId={expectedPackageId[..16]}...");
 
                 using var stream = client.GetStream();
 
@@ -209,6 +212,7 @@ namespace ShaPrint.WpfApp.Services.Client
                             await ms.WriteAsync(rawChunk, cancellationToken);
                             receivedChunks++;
                             totalChunks = chunk.TotalChunks;
+                            AppLogger.Log($"[DRIVER_PKG_CLIENT] Chunk {chunk.ChunkIndex + 1}/{totalChunks} received ({rawChunk.Length:N0} bytes).");
                             progress?.Report((double)receivedChunks / totalChunks);
                         }
                         else if (packetType == Constants.PacketTypeDriverPackageComplete)
@@ -221,10 +225,12 @@ namespace ShaPrint.WpfApp.Services.Client
                             }
 
                             allBytes = ms.ToArray();
+                            AppLogger.Log($"[DRIVER_PKG_CLIENT] All chunks received: {allBytes.Length:N0} bytes total (expected={expectedSize:N0}).");
 
-                            // Verify total size
-                            if (allBytes.Length != expectedSize)
+                            // Verify total size — skip if expectedSize is 0 (stale discovery metadata)
+                            if (expectedSize > 0 && allBytes.Length != expectedSize)
                             {
+                                AppLogger.Error($"[DRIVER_PKG_CLIENT] Size mismatch: expected {expectedSize:N0}, got {allBytes.Length:N0}");
                                 return new DriverDownloadResult
                                 {
                                     Success = false,
@@ -233,8 +239,9 @@ namespace ShaPrint.WpfApp.Services.Client
                             }
 
                             // H5: Cross-check server-reported total bytes
-                            if (completeMessage.TotalBytes != expectedSize)
+                            if (expectedSize > 0 && completeMessage.TotalBytes != expectedSize)
                             {
+                                AppLogger.Error($"[DRIVER_PKG_CLIENT] Server-reported size mismatch: server={completeMessage.TotalBytes:N0}, expected={expectedSize:N0}");
                                 return new DriverDownloadResult
                                 {
                                     Success = false,
@@ -244,14 +251,17 @@ namespace ShaPrint.WpfApp.Services.Client
 
                             // Verify SHA-256
                             string actualHash = Convert.ToHexString(SHA256.HashData(allBytes)).ToLowerInvariant();
+                            AppLogger.Log($"[DRIVER_PKG_CLIENT] SHA-256 verify: expected={expectedPackageId[..16]}..., got={actualHash[..16]}...");
                             if (!actualHash.Equals(expectedPackageId, StringComparison.OrdinalIgnoreCase))
                             {
+                                AppLogger.Error($"[DRIVER_PKG_CLIENT] SHA-256 mismatch!");
                                 return new DriverDownloadResult
                                 {
                                     Success = false,
                                     ErrorMessage = $"SHA-256 mismatch: expected {expectedPackageId}, got {actualHash}"
                                 };
                             }
+                            AppLogger.Log($"[DRIVER_PKG_CLIENT] SHA-256 OK. Extracting package...");
 
                             // H8: Cancel-during-verify (between verify and extract)
                             cancellationToken.ThrowIfCancellationRequested();
