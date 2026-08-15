@@ -77,6 +77,7 @@ namespace ShaPrint.Server
                 _cache[driverName] = new CachedPackage
                 {
                     Manifest = manifest,
+                    DirectoryPath = Path.Combine(_cacheRoot, manifest.Sha256),
                     ExportedAt = DateTime.UtcNow
                 };
             }
@@ -93,6 +94,9 @@ namespace ShaPrint.Server
                 c.Manifest.Sha256.Equals(driverPackageId, StringComparison.OrdinalIgnoreCase));
             if (entry != null)
             {
+                if (!string.IsNullOrEmpty(entry.DirectoryPath) && _fileSystem.DirectoryExists(entry.DirectoryPath))
+                    return entry.DirectoryPath;
+
                 string dir = Path.Combine(_cacheRoot, entry.Manifest.Sha256);
                 if (_fileSystem.DirectoryExists(dir)) return dir;
             }
@@ -257,6 +261,24 @@ namespace ShaPrint.Server
                     Path.Combine(exportDir, "manifest.json"),
                     Encoding.UTF8.GetBytes(manifestJson));
 
+                // Ensure final directory named with packageHash exists with package.zip and manifest.json
+                string finalDir = Path.Combine(_cacheRoot, packageHash);
+                if (!string.Equals(exportDir, finalDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    _fileSystem.CreateDirectory(finalDir);
+                    foreach (var f in files)
+                    {
+                        string dest = Path.Combine(finalDir, Path.GetFileName(f));
+                        var content = await _fileSystem.ReadAllBytesAsync(f);
+                        await _fileSystem.WriteAllBytesAsync(dest, content);
+                    }
+                    string finalZipPath = Path.Combine(finalDir, "package.zip");
+                    await _fileSystem.WriteAllBytesAsync(finalZipPath, zipBytes);
+                    await _fileSystem.WriteAllBytesAsync(
+                        Path.Combine(finalDir, "manifest.json"),
+                        Encoding.UTF8.GetBytes(manifestJson));
+                }
+
                 AppLogger.Log($"[DRIVER_PKG] Exported driver '{driverName}' → {files.Length} files, zip {zipBytes.Length} bytes, SHA-256={packageHash[..16]}...");
 
                 return manifest;
@@ -300,6 +322,7 @@ namespace ShaPrint.Server
         private class CachedPackage
         {
             public DriverPackageManifest Manifest { get; set; } = new();
+            public string DirectoryPath { get; set; } = string.Empty;
             public DateTime ExportedAt { get; set; }
         }
     }
