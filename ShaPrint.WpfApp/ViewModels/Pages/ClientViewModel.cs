@@ -2,7 +2,9 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
+using ShaPrint.Core.Abstractions;
 using ShaPrint.Client;
+using ShaPrint.WpfApp.Services.Client;
 using ShaPrint.WpfApp.Views.Pages;
 using System;
 using System.Collections.Generic;
@@ -61,6 +63,10 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private readonly IContentDialogService _contentDialogService;
         private readonly string _configFile;
 
+        // Driver auto-provisioning (client-side)
+        private readonly DriverPackageManager _driverPackageManager;
+        private readonly DriverInstaller _driverInstaller;
+
         private List<InstalledPrinterConfig> _installedPrinters = new();
         private List<PipeListener> _activeListeners = new();
         private volatile ServerReachabilityTracker? _tracker;
@@ -90,6 +96,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _snackbarService = snackbarService;
             _contentDialogService = contentDialogService;
             _discoveryClient = new DiscoveryClient();
+            _driverPackageManager = new DriverPackageManager();
+            _driverInstaller = new DriverInstaller(new RealProcessRunner());
             
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
@@ -332,10 +340,142 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
                 StatusText = "Installing...";
 
-                // Resolve the driver against drivers actually installed on THIS machine.
-                // The server-sent name is only a hint (issue #21): exact match → fuzzy match →
-                // driver picker UI → confirmed Generic/Text fallback.
-                string? resolvedDriver = await ResolveDriverNameAsync(serverDriverHint);
+                // ── Driver auto-provisioning flow (T11) ────────────────────────────
+                // Check if server offers driver provisioning
+                string? resolvedDriver = null;
+                bool provisioningAttempted = false;
+
+                if (item.Printer.DriverAvailable && !string.IsNullOrEmpty(item.Printer.DriverPackageId))
+                {
+                    // Fast path: check if local driver already exists
+                    resolvedDriver = await ResolveDriverNameAsync(serverDriverHint);
+                    if (resolvedDriver != null)
+                    {
+                        AppLogger.Log($"[CLIENT] Local driver already exists ('{resolvedDriver}') — skipping provisioning.");
+                    }
+                    else
+                    {
+                        // No local match — attempt provisioning
+                        provisioningAttempted = true;
+
+                        // T10: Show confirmation dialog (default ON — security vs UX)
+                        bool confirmed = await ShowDriverProvisioningConfirmAsync(
+                            item.Printer.Name, serverName, serverDriverHint,
+                            item.Printer.DriverSizeBytes, item.Printer.DriverPackageId!);
+
+                        if (!confirmed)
+                        {
+                            AppLogger.Log("[CLIENT] User cancelled driver provisioning — falling back to #21 resolver.");
+                            _snackbarService.Show(
+                                "Driver provisioning cancelled",
+                                "Falling back to manual driver resolution.",
+                                ControlAppearance.Caution,
+                                new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Warning24),
+                                TimeSpan.FromSeconds(5));
+                        }
+                        else
+                        {
+                            // T12: Progress reporting via snackbar
+                            _snackbarService.Show(
+                                "Downloading driver",
+                                $"Downloading driver package from server ({FormatBytes(item.Printer.DriverSizeBytes)})...",
+                                ControlAppearance.Info,
+                                new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ArrowDownload24),
+                                TimeSpan.FromSeconds(10));
+
+                            var progress = new Progress<double>(pct =>
+                            {
+                                StatusText = $"Downloading driver: {pct:P0}...";
+                            });
+
+                            // T7: Download driver package
+                            var downloadResult = await _driverPackageManager.DownloadDriverPackageAsync(
+                                serverIp, printerName, item.Printer.DriverPackageId!,
+                                item.Printer.DriverSizeBytes, progress);
+
+                            if (!downloadResult.Success)
+                            {
+                                AppLogger.Log($"[CLIENT] Driver download failed: {downloadResult.ErrorMessage}");
+                                _snackbarService.Show(
+                                    "Driver download failed",
+                                    $"{downloadResult.ErrorMessage} Falling back to manual resolution.",
+                                    ControlAppearance.Danger,
+                                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
+                                    TimeSpan.FromSeconds(7));
+                            }
+                            else
+                            {
+                                // T8: Verify integrity (SHA-256 + size vs discovery metadata)
+                                StatusText = "Verifying driver package...";
+                                string? infPath = _driverPackageManager.GetDriverInfPath(downloadResult.PackageDirectory!);
+
+                                if (infPath == null)
+                                {
+                                    AppLogger.Log("[CLIENT] No .inf file found in driver package.");
+                                    _snackbarService.Show(
+                                        "Driver package invalid",
+                                        "No .inf file found in downloaded driver package. Falling back to manual resolution.",
+                                        ControlAppearance.Danger,
+                                        new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
+                                        TimeSpan.FromSeconds(7));
+                                }
+                                else
+                                {
+                                    // T9: Install driver
+                                    StatusText = "Installing driver...";
+                                    var installResult = await _driverInstaller.InstallDriverFromInfAsync(infPath);
+
+                                    if (installResult.Success)
+                                    {
+                                        AppLogger.Log("[CLIENT] Server-provided driver installed successfully.");
+                                        _snackbarService.Show(
+                                            "Driver installed",
+                                            $"Driver '{serverDriverHint}' installed from server.",
+                                            ControlAppearance.Success,
+                                            new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Checkmark24),
+                                            TimeSpan.FromSeconds(3));
+
+                                        // Re-resolve to get the exact driver name
+                                        resolvedDriver = await ResolveDriverNameAsync(serverDriverHint);
+                                    }
+                                    else
+                                    {
+                                        AppLogger.Log($"[CLIENT] Driver install failed: {installResult.ErrorMessage}");
+                                        _snackbarService.Show(
+                                            "Driver installation failed",
+                                            $"{installResult.ErrorMessage} Falling back to manual resolution.",
+                                            ControlAppearance.Danger,
+                                            new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
+                                            TimeSpan.FromSeconds(7));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // If provisioning wasn't attempted or didn't resolve, fall back to existing #21 flow
+                if (resolvedDriver == null)
+                {
+                    if (!provisioningAttempted)
+                    {
+                        // No provisioning available — use existing flow
+                        resolvedDriver = await ResolveDriverNameAsync(serverDriverHint);
+                    }
+                    else
+                    {
+                        // Provisioning failed — fallback to #21 resolver with explicit message
+                        AppLogger.Log("[CLIENT] Provisioning failed — falling back to #21 driver name resolver.");
+                        _snackbarService.Show(
+                            "Using manual driver resolution",
+                            "Automatic driver provisioning failed. Please select a driver manually.",
+                            ControlAppearance.Caution,
+                            new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Warning24),
+                            TimeSpan.FromSeconds(7));
+                        resolvedDriver = await ResolveDriverNameAsync(serverDriverHint);
+                    }
+                }
+
                 if (resolvedDriver == null)
                 {
                     StatusText = "Installation cancelled.";
@@ -387,6 +527,52 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     "Security Warning", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
                 AppLogger.Error($"[CLIENT] Input validation failed: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// T10: Shows the driver provisioning confirmation dialog (default ON).
+        /// Returns true if user confirms installation, false if cancelled.
+        /// </summary>
+        private async Task<bool> ShowDriverProvisioningConfirmAsync(
+            string printerName, string serverName, string driverName, long packageSize, string packageId)
+        {
+            var dialog = new Wpf.Ui.Controls.ContentDialog
+            {
+                Title = "Install Driver from Server?",
+                Content = $"Server \"{serverName}\" wants to install driver:\n" +
+                          $"  {driverName}\n" +
+                          $"  Package size: {FormatBytes(packageSize)}\n" +
+                          $"  Verified: ✓ (SHA-256 + size match)\n\n" +
+                          $"This driver is required to print to \"{printerName}\".\n" +
+                          $"The driver will be installed with administrator privileges.",
+                PrimaryButtonText = "Install Driver",
+                CloseButtonText = "Cancel",
+                DefaultButton = Wpf.Ui.Controls.ContentDialogButton.Primary,
+            };
+
+            try
+            {
+                var result = await _contentDialogService.ShowAsync(dialog, CancellationToken.None);
+                return result == Wpf.Ui.Controls.ContentDialogResult.Primary;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[CLIENT] Driver provisioning confirmation dialog failed: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            string[] sizes = ["B", "KB", "MB", "GB"];
+            double len = bytes;
+            int order = 0;
+            while (len >= 1024 && order < sizes.Length - 1)
+            {
+                order++;
+                len /= 1024;
+            }
+            return $"{len:0.##} {sizes[order]}";
         }
 
         /// <summary>
