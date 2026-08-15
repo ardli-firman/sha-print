@@ -50,51 +50,87 @@ namespace ShaPrint.WpfApp.Services.Client
                 };
             }
 
-            AppLogger.Log($"[DRIVER_INSTALL] Installing driver from: {infPath}");
+            AppLogger.Log($"[DRIVER_INSTALL] Installing driver from: {infPath} (target driver='{driverName ?? "<any>"}')");
 
-            // Strategy 1: Add-PrinterDriver -InfPath (preferred for third-party)
             string safeInfPath = infPath.Replace("'", "''");
+
+            // Strategy 1a: Add-PrinterDriver -InfPath -Name (most precise — installs exact model)
+            // This is the correct way to install a specific printer driver from an INF that may
+            // contain multiple printer models (e.g., a vendor INF with 50+ Epson models).
+            if (!string.IsNullOrWhiteSpace(driverName))
+            {
+                string safeName = driverName.Replace("'", "''");
+                AppLogger.Log($"[DRIVER_INSTALL] Strategy 1a: Add-PrinterDriver -InfPath + -Name '{driverName}'");
+                var preciseResult = await _processRunner.RunAsync("powershell.exe",
+                    $"-NoProfile -ExecutionPolicy Bypass -Command \"Add-PrinterDriver -Name '{safeName}' -InfPath '{safeInfPath}' 2>&1 | Out-String -Width 4096\"",
+                    TimeSpan.FromMinutes(2));
+
+                if (preciseResult.Success)
+                {
+                    AppLogger.Log($"[DRIVER_INSTALL] Strategy 1a succeeded: driver '{driverName}' installed.");
+                    return new DriverInstallResult { Success = true, InstalledDriverName = driverName };
+                }
+                AppLogger.Log($"[DRIVER_INSTALL] Strategy 1a failed: {preciseResult.Output.Trim()}");
+            }
+
+            // Strategy 1b: Add-PrinterDriver -InfPath (no name — let Windows pick, works for single-model INFs)
+            AppLogger.Log("[DRIVER_INSTALL] Strategy 1b: Add-PrinterDriver -InfPath (no name)");
             var result = await _processRunner.RunAsync("powershell.exe",
                 $"-NoProfile -ExecutionPolicy Bypass -Command \"Add-PrinterDriver -InfPath '{safeInfPath}' 2>&1 | Out-String -Width 4096\"",
                 TimeSpan.FromMinutes(2));
 
             if (result.Success)
             {
-                AppLogger.Log("[DRIVER_INSTALL] Add-PrinterDriver -InfPath succeeded.");
-                return new DriverInstallResult { Success = true };
+                AppLogger.Log("[DRIVER_INSTALL] Strategy 1b succeeded.");
+                return new DriverInstallResult { Success = true, InstalledDriverName = driverName };
             }
 
             string addPrinterError = result.Output.Trim();
-            AppLogger.Log($"[DRIVER_INSTALL] Add-PrinterDriver -InfPath failed: {addPrinterError}");
+            AppLogger.Log($"[DRIVER_INSTALL] Strategy 1b failed: {addPrinterError}");
 
-            // Strategy 2: pnputil /add-driver (fallback)
+            // Strategy 2: pnputil /add-driver (registers INF into Windows driver store)
+            AppLogger.Log("[DRIVER_INSTALL] Strategy 2: pnputil /add-driver");
             var pnputilResult = await _processRunner.RunAsync("pnputil",
                 $"/add-driver \"{infPath}\" /install",
                 TimeSpan.FromMinutes(2));
 
             if (pnputilResult.Success)
             {
-                AppLogger.Log("[DRIVER_INSTALL] pnputil /add-driver succeeded.");
-                return new DriverInstallResult { Success = true };
+                AppLogger.Log("[DRIVER_INSTALL] Strategy 2 (pnputil) succeeded.");
+                // After pnputil, try Add-PrinterDriver -Name to register with spooler
+                if (!string.IsNullOrWhiteSpace(driverName))
+                {
+                    string safeName = driverName.Replace("'", "''");
+                    AppLogger.Log($"[DRIVER_INSTALL] Strategy 2b: Add-PrinterDriver -Name '{driverName}' (post-pnputil)");
+                    var postPnpResult = await _processRunner.RunAsync("powershell.exe",
+                        $"-NoProfile -ExecutionPolicy Bypass -Command \"Add-PrinterDriver -Name '{safeName}' 2>&1 | Out-String -Width 4096\"",
+                        TimeSpan.FromSeconds(30));
+                    if (postPnpResult.Success)
+                        AppLogger.Log($"[DRIVER_INSTALL] Strategy 2b: spooler registration succeeded.");
+                    else
+                        AppLogger.Log($"[DRIVER_INSTALL] Strategy 2b: spooler registration failed (may already be registered): {postPnpResult.Output.Trim()}");
+                }
+                return new DriverInstallResult { Success = true, InstalledDriverName = driverName };
             }
 
             string pnputilError = pnputilResult.Output.Trim();
-            AppLogger.Log($"[DRIVER_INSTALL] pnputil /add-driver failed: {pnputilError}");
+            AppLogger.Log($"[DRIVER_INSTALL] Strategy 2 failed: {pnputilError}");
 
             string combinedError = $"Driver installation failed.\n" +
-                $"  Add-PrinterDriver -InfPath: {addPrinterError}\n" +
-                $"  pnputil /add-driver: {pnputilError}";
+                $"  Strategy 1a (Add-PrinterDriver -Name + -InfPath): {(string.IsNullOrWhiteSpace(driverName) ? "skipped" : "failed")}\n" +
+                $"  Strategy 1b (Add-PrinterDriver -InfPath): {addPrinterError}\n" +
+                $"  Strategy 2  (pnputil /add-driver): {pnputilError}";
 
             // Strategy 3: Inbox driver fallback (H6)
             if (!string.IsNullOrWhiteSpace(driverName))
             {
-                AppLogger.Log("[DRIVER_INSTALL] Trying inbox driver fallback...");
+                AppLogger.Log("[DRIVER_INSTALL] Strategy 3: inbox driver fallback...");
                 var inboxResult = await InstallInboxDriverAsync(driverName);
                 if (inboxResult.Success)
                 {
                     return inboxResult;
                 }
-                combinedError += $"\n  Add-PrinterDriver -Name (inbox): {inboxResult.ErrorMessage}";
+                combinedError += $"\n  Strategy 3  (Add-PrinterDriver -Name inbox): {inboxResult.ErrorMessage}";
             }
 
             AppLogger.Error("[DRIVER_INSTALL] All install strategies failed.");
