@@ -58,5 +58,6 @@ namespace ShaPrint.Core.Network
         public int FileCount { get; set; }
         public string ExportedAt { get; set; } = string.Empty;
         public string WindowsVersion { get; set; } = string.Empty;
+        public string Architecture { get; set; } = string.Empty;
     }
 }

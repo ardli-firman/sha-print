@@ -50,6 +50,17 @@ namespace ShaPrint.WpfApp.Services.Client
                 };
             }
 
+            // Safety Guard: Validate INF integrity and ensure no dangerous kernel/system definitions
+            if (!DriverSafetyGuard.ValidateInfSafety(infPath, out string? safetyError))
+            {
+                AppLogger.Error($"[DRIVER_INSTALL] Safety Guard rejected driver package: {safetyError}");
+                return new DriverInstallResult
+                {
+                    Success = false,
+                    ErrorMessage = $"Driver safety check failed: {safetyError}"
+                };
+            }
+
             AppLogger.Log($"[DRIVER_INSTALL] Installing driver from: {infPath} (target driver='{driverName ?? "<any>"}')");
 
             string safeInfPath = infPath.Replace("'", "''");
@@ -68,6 +79,7 @@ namespace ShaPrint.WpfApp.Services.Client
                 if (preciseResult.Success)
                 {
                     AppLogger.Log($"[DRIVER_INSTALL] Strategy 1a succeeded: driver '{driverName}' installed.");
+                    await DriverSafetyGuard.EnforceDriverIsolationAsync(_processRunner, driverName);
                     return new DriverInstallResult { Success = true, InstalledDriverName = driverName };
                 }
                 AppLogger.Log($"[DRIVER_INSTALL] Strategy 1a failed: {preciseResult.Output.Trim()}");
@@ -82,6 +94,8 @@ namespace ShaPrint.WpfApp.Services.Client
             if (result.Success)
             {
                 AppLogger.Log("[DRIVER_INSTALL] Strategy 1b succeeded.");
+                if (!string.IsNullOrWhiteSpace(driverName))
+                    await DriverSafetyGuard.EnforceDriverIsolationAsync(_processRunner, driverName);
                 return new DriverInstallResult { Success = true, InstalledDriverName = driverName };
             }
 
@@ -109,6 +123,8 @@ namespace ShaPrint.WpfApp.Services.Client
                         AppLogger.Log($"[DRIVER_INSTALL] Strategy 2b: spooler registration succeeded.");
                     else
                         AppLogger.Log($"[DRIVER_INSTALL] Strategy 2b: spooler registration failed (may already be registered): {postPnpResult.Output.Trim()}");
+
+                    await DriverSafetyGuard.EnforceDriverIsolationAsync(_processRunner, driverName);
                 }
                 return new DriverInstallResult { Success = true, InstalledDriverName = driverName };
             }

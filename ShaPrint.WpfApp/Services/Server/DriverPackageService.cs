@@ -418,7 +418,8 @@ namespace ShaPrint.Server
                     TotalSizeBytes = zipBytes.Length,
                     FileCount = files.Length,
                     ExportedAt = DateTime.UtcNow.ToString("o"),
-                    WindowsVersion = Environment.OSVersion.Version.ToString()
+                    WindowsVersion = Environment.OSVersion.Version.ToString(),
+                    Architecture = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString()
                 };
 
                 string manifestJson = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });

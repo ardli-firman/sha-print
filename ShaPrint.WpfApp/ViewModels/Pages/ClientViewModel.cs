@@ -453,8 +453,9 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                                 else
                                 {
                                     // H4: Resolve .inf path deterministically
-                                    StatusText = "Verifying driver package...";
                                     string? manifestInfName = null;
+                                    bool archValid = true;
+                                    string? archError = null;
                                     try
                                     {
                                         string manifestPath = Path.Combine(downloadResult.PackageDirectory!, "manifest.json");
@@ -463,6 +464,10 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                                             var manifestJson = File.ReadAllText(manifestPath);
                                             var manifest = JsonSerializer.Deserialize<ShaPrint.Core.Network.DriverPackageManifest>(manifestJson);
                                             manifestInfName = manifest?.InfName;
+                                            if (manifest != null && !DriverSafetyGuard.ValidateArchitecture(manifest.Architecture, out archError))
+                                            {
+                                                archValid = false;
+                                            }
                                         }
                                     }
                                     catch (Exception ex)
@@ -470,47 +475,60 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                                         AppLogger.Log($"[CLIENT] Could not read manifest.json for InfName: {ex.Message}");
                                     }
 
-                                    string? infPath = _driverPackageManager.ResolveInfPath(downloadResult.PackageDirectory!, manifestInfName);
-
-                                    if (infPath == null)
+                                    if (!archValid)
                                     {
-                                        AppLogger.Log("[CLIENT] Could not resolve .inf file — ambiguous or missing. Falling back.");
+                                        AppLogger.Log($"[CLIENT] Driver provisioning aborted by Safety Guard: {archError}");
                                         _snackbarService.Show(
-                                            "Driver package invalid",
-                                            "Multiple driver files found or no .inf file in package — manual installation required. Falling back.",
+                                            "Incompatible driver architecture",
+                                            $"{archError} Manual installation required.",
                                             ControlAppearance.Danger,
                                             new SymbolIcon(SymbolRegular.ErrorCircle24),
                                             TimeSpan.FromSeconds(7));
                                     }
                                     else
                                     {
-                                        // H6: Install driver with inbox fallback
-                                        StatusText = "Installing driver...";
-                                        var installResult = await _driverInstaller.InstallDriverFromInfAsync(infPath, serverDriverHint);
+                                        string? infPath = _driverPackageManager.ResolveInfPath(downloadResult.PackageDirectory!, manifestInfName);
 
-                                        if (installResult.Success)
+                                        if (infPath == null)
                                         {
-                                            AppLogger.Log("[CLIENT] Server-provided driver installed successfully.");
+                                            AppLogger.Log("[CLIENT] Could not resolve .inf file — ambiguous or missing. Falling back.");
                                             _snackbarService.Show(
-                                                "Driver installed",
-                                                $"Driver '{serverDriverHint}' installed from server.",
-                                                ControlAppearance.Success,
-                                                new SymbolIcon(SymbolRegular.Checkmark24),
-                                                TimeSpan.FromSeconds(3));
-
-                                            // Re-resolve to get the exact driver name
-                                            var updatedDrivers = await Task.Run(() => VirtualPrinterManager.GetInstalledDrivers());
-                                            resolvedDriver = DriverNameResolver.Resolve(serverDriverHint, updatedDrivers) ?? serverDriverHint;
-                                        }
-                                        else
-                                        {
-                                            AppLogger.Log($"[CLIENT] Driver install failed: {installResult.ErrorMessage}");
-                                            _snackbarService.Show(
-                                                "Driver installation failed",
-                                                $"{installResult.ErrorMessage} Falling back to manual resolution.",
+                                                "Driver package invalid",
+                                                "Multiple driver files found or no .inf file in package — manual installation required. Falling back.",
                                                 ControlAppearance.Danger,
                                                 new SymbolIcon(SymbolRegular.ErrorCircle24),
                                                 TimeSpan.FromSeconds(7));
+                                        }
+                                        else
+                                        {
+                                            // H6: Install driver with inbox fallback
+                                            StatusText = "Installing driver...";
+                                            var installResult = await _driverInstaller.InstallDriverFromInfAsync(infPath, serverDriverHint);
+
+                                            if (installResult.Success)
+                                            {
+                                                AppLogger.Log("[CLIENT] Server-provided driver installed successfully.");
+                                                _snackbarService.Show(
+                                                    "Driver installed",
+                                                    $"Driver '{serverDriverHint}' installed from server.",
+                                                    ControlAppearance.Success,
+                                                    new SymbolIcon(SymbolRegular.Checkmark24),
+                                                    TimeSpan.FromSeconds(3));
+
+                                                // Re-resolve to get the exact driver name
+                                                var updatedDrivers = await Task.Run(() => VirtualPrinterManager.GetInstalledDrivers());
+                                                resolvedDriver = DriverNameResolver.Resolve(serverDriverHint, updatedDrivers) ?? serverDriverHint;
+                                            }
+                                            else
+                                            {
+                                                AppLogger.Log($"[CLIENT] Driver install failed: {installResult.ErrorMessage}");
+                                                _snackbarService.Show(
+                                                    "Driver installation failed",
+                                                    $"{installResult.ErrorMessage} Falling back to manual resolution.",
+                                                    ControlAppearance.Danger,
+                                                    new SymbolIcon(SymbolRegular.ErrorCircle24),
+                                                    TimeSpan.FromSeconds(7));
+                                            }
                                         }
                                     }
                                 }
