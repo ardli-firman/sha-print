@@ -174,5 +174,85 @@ namespace ShaPrint.Tests
             Assert.Null(result.ErrorMessage);
             Assert.Null(result.InstalledDriverName);
         }
+
+        // ── SM9: H6 — All 3 strategies tried, inbox fallback succeeds ──────
+
+        [Fact]
+        public async Task InstallDriver_AllFail_WithInboxFallback_TriesAllThree()
+        {
+            // Arrange: Strategy 1+2 fail, Strategy 3 (inbox) succeeds
+            var mockProcess = new MockProcessRunner();
+            var installer = new DriverInstaller(mockProcess);
+
+            string infPath = Path.Combine(_tempDir, "oem25.inf");
+            await File.WriteAllTextAsync(infPath, "[Version]\nSignature=\"$Windows NT$\"");
+
+            // Strategy 1: Add-PrinterDriver -InfPath fails
+            mockProcess.AddResponse("powershell.exe", result: new ProcessResult
+            {
+                ExitCode = 1,
+                Output = "Add-PrinterDriver failed."
+            });
+
+            // Strategy 2: pnputil fails
+            mockProcess.AddResponse("pnputil", result: new ProcessResult
+            {
+                ExitCode = 1,
+                Output = "pnputil failed."
+            });
+
+            // Strategy 3: Add-PrinterDriver -Name (inbox) — but this is also a powershell.exe call
+            // The MockProcessRunner peeks the next matching prefix, so the second powershell.exe
+            // call (inbox) will use the next queued response. We need to add another response.
+            mockProcess.AddResponse("powershell.exe", result: new ProcessResult
+            {
+                ExitCode = 0,
+                Output = ""
+            });
+
+            // Act — pass driverName to trigger strategy 3
+            var result = await installer.InstallDriverFromInfAsync(infPath, "Generic / Text Only");
+
+            // Assert
+            Assert.True(result.Success);
+            Assert.Equal(2, mockProcess.CallCount("powershell.exe")); // strategy 1 + strategy 3
+            Assert.Equal(1, mockProcess.CallCount("pnputil"));        // strategy 2
+        }
+
+        // ── H6: Without driverName, only 2 strategies tried ────────────────
+
+        [Fact]
+        public async Task InstallDriver_WithoutDriverName_OnlyTwoStrategies()
+        {
+            // Arrange: Strategy 1+2 fail, no driverName → only 2 attempts
+            var mockProcess = new MockProcessRunner();
+            var installer = new DriverInstaller(mockProcess);
+
+            string infPath = Path.Combine(_tempDir, "oem25.inf");
+            await File.WriteAllTextAsync(infPath, "[Version]\nSignature=\"$Windows NT$\"");
+
+            // Strategy 1 fails
+            mockProcess.AddResponse("powershell.exe", result: new ProcessResult
+            {
+                ExitCode = 1,
+                Output = "Add-PrinterDriver failed."
+            });
+
+            // Strategy 2 fails
+            mockProcess.AddResponse("pnputil", result: new ProcessResult
+            {
+                ExitCode = 1,
+                Output = "pnputil failed."
+            });
+
+            // Act — no driverName → only 2 strategies
+            var result = await installer.InstallDriverFromInfAsync(infPath);
+
+            // Assert
+            Assert.False(result.Success);
+            Assert.Equal(1, mockProcess.CallCount("powershell.exe")); // only strategy 1
+            Assert.Equal(1, mockProcess.CallCount("pnputil"));        // only strategy 2
+            // Backward compat: existing callers without driverName still work
+        }
     }
 }

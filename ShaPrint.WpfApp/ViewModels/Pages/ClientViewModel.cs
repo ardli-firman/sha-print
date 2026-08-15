@@ -12,6 +12,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using Wpf.Ui;
@@ -66,6 +67,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         // Driver auto-provisioning (client-side)
         private readonly DriverPackageManager _driverPackageManager;
         private readonly DriverInstaller _driverInstaller;
+        private CancellationTokenSource? _downloadCts;
 
         private List<InstalledPrinterConfig> _installedPrinters = new();
         private List<PipeListener> _activeListeners = new();
@@ -388,65 +390,124 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                                 StatusText = $"Downloading driver: {pct:P0}...";
                             });
 
-                            // T7: Download driver package
-                            var downloadResult = await _driverPackageManager.DownloadDriverPackageAsync(
-                                serverIp, printerName, item.Printer.DriverPackageId!,
-                                item.Printer.DriverSizeBytes, progress);
-
-                            if (!downloadResult.Success)
+                            // H1/H2: Download driver package with cancellation support
+                            bool retryDownload = true;
+                            while (retryDownload)
                             {
-                                AppLogger.Log($"[CLIENT] Driver download failed: {downloadResult.ErrorMessage}");
-                                _snackbarService.Show(
-                                    "Driver download failed",
-                                    $"{downloadResult.ErrorMessage} Falling back to manual resolution.",
-                                    ControlAppearance.Danger,
-                                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
-                                    TimeSpan.FromSeconds(7));
-                            }
-                            else
-                            {
-                                // T8: Verify integrity (SHA-256 + size vs discovery metadata)
-                                StatusText = "Verifying driver package...";
-                                string? infPath = _driverPackageManager.GetDriverInfPath(downloadResult.PackageDirectory!);
+                                retryDownload = false;
+                                _downloadCts?.Dispose();
+                                _downloadCts = new CancellationTokenSource();
 
-                                if (infPath == null)
+                                var downloadResult = await _driverPackageManager.DownloadDriverPackageAsync(
+                                    serverIp, printerName, item.Printer.DriverPackageId!,
+                                    item.Printer.DriverSizeBytes, progress, _downloadCts.Token);
+
+                                _downloadCts.Dispose();
+                                _downloadCts = null;
+
+                                if (!downloadResult.Success)
                                 {
-                                    AppLogger.Log("[CLIENT] No .inf file found in driver package.");
+                                    // H1: Cancel/Retry dialog on timeout
+                                    if (downloadResult.TimedOut)
+                                    {
+                                        var retryDialog = new ContentDialog
+                                        {
+                                            Title = "Driver download timed out",
+                                            Content = "Driver transfer timed out — the server may be unresponsive.\n\nWould you like to retry?",
+                                            PrimaryButtonText = "Retry",
+                                            CloseButtonText = "Cancel",
+                                            DefaultButton = ContentDialogButton.Primary,
+                                        };
+
+                                        try
+                                        {
+                                            var retryResult = await _contentDialogService.ShowAsync(retryDialog, CancellationToken.None);
+                                            if (retryResult == ContentDialogResult.Primary)
+                                            {
+                                                AppLogger.Log("[CLIENT] User chose Retry after download timeout.");
+                                                retryDownload = true;
+                                                continue;
+                                            }
+                                            else
+                                            {
+                                                AppLogger.Log("[CLIENT] User chose Cancel after download timeout — falling back.");
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            AppLogger.Error("[CLIENT] Retry dialog failed: " + ex.Message);
+                                        }
+                                    }
+
+                                    AppLogger.Log($"[CLIENT] Driver download failed: {downloadResult.ErrorMessage}");
                                     _snackbarService.Show(
-                                        "Driver package invalid",
-                                        "No .inf file found in downloaded driver package. Falling back to manual resolution.",
+                                        "Driver download failed",
+                                        $"{downloadResult.ErrorMessage} Falling back to manual resolution.",
                                         ControlAppearance.Danger,
-                                        new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
+                                        new SymbolIcon(SymbolRegular.ErrorCircle24),
                                         TimeSpan.FromSeconds(7));
                                 }
                                 else
                                 {
-                                    // T9: Install driver
-                                    StatusText = "Installing driver...";
-                                    var installResult = await _driverInstaller.InstallDriverFromInfAsync(infPath);
-
-                                    if (installResult.Success)
+                                    // H4: Resolve .inf path deterministically
+                                    StatusText = "Verifying driver package...";
+                                    string? manifestInfName = null;
+                                    try
                                     {
-                                        AppLogger.Log("[CLIENT] Server-provided driver installed successfully.");
-                                        _snackbarService.Show(
-                                            "Driver installed",
-                                            $"Driver '{serverDriverHint}' installed from server.",
-                                            ControlAppearance.Success,
-                                            new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Checkmark24),
-                                            TimeSpan.FromSeconds(3));
+                                        string manifestPath = Path.Combine(downloadResult.PackageDirectory!, "manifest.json");
+                                        if (File.Exists(manifestPath))
+                                        {
+                                            var manifestJson = File.ReadAllText(manifestPath);
+                                            var manifest = JsonSerializer.Deserialize<ShaPrint.Core.Network.DriverPackageManifest>(manifestJson);
+                                            manifestInfName = manifest?.InfName;
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        AppLogger.Log($"[CLIENT] Could not read manifest.json for InfName: {ex.Message}");
+                                    }
 
-                                        // Re-resolve to get the exact driver name
-                                        resolvedDriver = await ResolveDriverNameAsync(serverDriverHint);
+                                    string? infPath = _driverPackageManager.ResolveInfPath(downloadResult.PackageDirectory!, manifestInfName);
+
+                                    if (infPath == null)
+                                    {
+                                        AppLogger.Log("[CLIENT] Could not resolve .inf file — ambiguous or missing. Falling back.");
+                                        _snackbarService.Show(
+                                            "Driver package invalid",
+                                            "Multiple driver files found or no .inf file in package — manual installation required. Falling back.",
+                                            ControlAppearance.Danger,
+                                            new SymbolIcon(SymbolRegular.ErrorCircle24),
+                                            TimeSpan.FromSeconds(7));
                                     }
                                     else
                                     {
-                                        AppLogger.Log($"[CLIENT] Driver install failed: {installResult.ErrorMessage}");
-                                        _snackbarService.Show(
-                                            "Driver installation failed",
-                                            $"{installResult.ErrorMessage} Falling back to manual resolution.",
-                                            ControlAppearance.Danger,
-                                            new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
-                                            TimeSpan.FromSeconds(7));
+                                        // H6: Install driver with inbox fallback
+                                        StatusText = "Installing driver...";
+                                        var installResult = await _driverInstaller.InstallDriverFromInfAsync(infPath, serverDriverHint);
+
+                                        if (installResult.Success)
+                                        {
+                                            AppLogger.Log("[CLIENT] Server-provided driver installed successfully.");
+                                            _snackbarService.Show(
+                                                "Driver installed",
+                                                $"Driver '{serverDriverHint}' installed from server.",
+                                                ControlAppearance.Success,
+                                                new SymbolIcon(SymbolRegular.Checkmark24),
+                                                TimeSpan.FromSeconds(3));
+
+                                            // Re-resolve to get the exact driver name
+                                            resolvedDriver = await ResolveDriverNameAsync(serverDriverHint);
+                                        }
+                                        else
+                                        {
+                                            AppLogger.Log($"[CLIENT] Driver install failed: {installResult.ErrorMessage}");
+                                            _snackbarService.Show(
+                                                "Driver installation failed",
+                                                $"{installResult.ErrorMessage} Falling back to manual resolution.",
+                                                ControlAppearance.Danger,
+                                                new SymbolIcon(SymbolRegular.ErrorCircle24),
+                                                TimeSpan.FromSeconds(7));
+                                        }
                                     }
                                 }
                             }
@@ -884,8 +945,16 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             catch (Exception ex) { AppLogger.Error("Failed to save client configuration", ex); }
         }
 
+        [RelayCommand]
+        private void CancelDownload()
+        {
+            _downloadCts?.Cancel();
+        }
+
         public void StopClient()
         {
+            _downloadCts?.Dispose();
+            _downloadCts = null;
             foreach (var listener in _activeListeners)
             {
                 listener.Stop();
@@ -896,6 +965,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public void Dispose()
         {
             AppLogger.OnLog -= AppLogger_OnLog;
+            _downloadCts?.Dispose();
+            _downloadCts = null;
             foreach (var listener in _activeListeners)
             {
                 listener.Stop();

@@ -37,9 +37,9 @@ namespace ShaPrint.WpfApp.Services.Client
 
         /// <summary>
         /// Installs a driver from the given .inf file path.
-        /// Tries Add-PrinterDriver -InfPath first, then pnputil fallback.
+        /// Tries Add-PrinterDriver -InfPath first, then pnputil fallback, then inbox fallback (H6).
         /// </summary>
-        public async Task<DriverInstallResult> InstallDriverFromInfAsync(string infPath)
+        public async Task<DriverInstallResult> InstallDriverFromInfAsync(string infPath, string? driverName = null)
         {
             if (string.IsNullOrEmpty(infPath) || !File.Exists(infPath))
             {
@@ -81,10 +81,21 @@ namespace ShaPrint.WpfApp.Services.Client
             string pnputilError = pnputilResult.Output.Trim();
             AppLogger.Log($"[DRIVER_INSTALL] pnputil /add-driver failed: {pnputilError}");
 
-            // Both strategies failed
             string combinedError = $"Driver installation failed.\n" +
                 $"  Add-PrinterDriver -InfPath: {addPrinterError}\n" +
                 $"  pnputil /add-driver: {pnputilError}";
+
+            // Strategy 3: Inbox driver fallback (H6)
+            if (!string.IsNullOrWhiteSpace(driverName))
+            {
+                AppLogger.Log("[DRIVER_INSTALL] Trying inbox driver fallback...");
+                var inboxResult = await InstallInboxDriverAsync(driverName);
+                if (inboxResult.Success)
+                {
+                    return inboxResult;
+                }
+                combinedError += $"\n  Add-PrinterDriver -Name (inbox): {inboxResult.ErrorMessage}";
+            }
 
             AppLogger.Error("[DRIVER_INSTALL] All install strategies failed.");
             return new DriverInstallResult

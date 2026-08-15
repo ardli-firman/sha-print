@@ -43,22 +43,52 @@ namespace ShaPrint.WpfApp.Services.Client
             IProgress<double>? progress = null,
             CancellationToken cancellationToken = default)
         {
-            // Check local cache first
+            // H5: Size-cap pre-check
+            if (expectedSize <= 0 || expectedSize > Constants.MaxDriverPackageSize)
+            {
+                return new DriverDownloadResult
+                {
+                    Success = false,
+                    ErrorMessage = $"Driver package size ({expectedSize:N0} bytes) exceeds limit ({Constants.MaxDriverPackageSize / (1024 * 1024)} MB)."
+                };
+            }
+
+            // H3: Cache check with re-verification via .verified.json
             string cachedDir = Path.Combine(_cacheRoot, expectedPackageId);
             if (Directory.Exists(cachedDir))
             {
-                string manifestPath = Path.Combine(cachedDir, "manifest.json");
-                if (File.Exists(manifestPath))
+                string markerPath = Path.Combine(cachedDir, ".verified.json");
+                if (File.Exists(markerPath))
                 {
-                    AppLogger.Log($"[DRIVER_PKG_CLIENT] Using cached driver package: {expectedPackageId[..16]}...");
-                    progress?.Report(1.0);
-                    return new DriverDownloadResult
+                    try
                     {
-                        Success = true,
-                        PackageDirectory = cachedDir,
-                        FromCache = true
-                    };
+                        var markerJson = File.ReadAllText(markerPath);
+                        var marker = JsonSerializer.Deserialize<DriverPackageVerifiedMarker>(markerJson);
+                        if (marker != null &&
+                            marker.Sha256.Equals(expectedPackageId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            AppLogger.Log($"[DRIVER_PKG_CLIENT] Cache verified: {expectedPackageId[..16]}...");
+                            progress?.Report(1.0);
+                            return new DriverDownloadResult
+                            {
+                                Success = true,
+                                PackageDirectory = cachedDir,
+                                FromCache = true
+                            };
+                        }
+                        AppLogger.Log($"[DRIVER_PKG_CLIENT] Cache marker mismatch — re-downloading.");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Log($"[DRIVER_PKG_CLIENT] Cache marker unreadable — re-downloading: {ex.Message}");
+                    }
                 }
+                else
+                {
+                    AppLogger.Log($"[DRIVER_PKG_CLIENT] Legacy cache (no .verified.json) — re-downloading once.");
+                }
+                // Marker missing or mismatched → delete stale cache entry
+                try { Directory.Delete(cachedDir, true); } catch { }
             }
 
             // Acquire download semaphore (only one concurrent download)
@@ -119,6 +149,7 @@ namespace ShaPrint.WpfApp.Services.Client
 
                 // Receive chunks
                 byte[] allBytes;
+                DriverPackageComplete? completeMessage = null;
                 using (var ms = new MemoryStream())
                 {
                     int totalChunks = 0;
@@ -137,6 +168,17 @@ namespace ShaPrint.WpfApp.Services.Client
                             {
                                 Success = false,
                                 ErrorMessage = $"Invalid payload length: {payloadLength}"
+                            };
+                        }
+
+                        // H7: Per-chunk sanity cap — reject oversized chunk payload
+                        if (packetType == Constants.PacketTypeDriverPackageChunk &&
+                            payloadLength > Constants.DriverPackageChunkSize * 2)
+                        {
+                            return new DriverDownloadResult
+                            {
+                                Success = false,
+                                ErrorMessage = $"Chunk too large: {payloadLength} bytes (max {Constants.DriverPackageChunkSize * 2})."
                             };
                         }
 
@@ -171,9 +213,9 @@ namespace ShaPrint.WpfApp.Services.Client
                         }
                         else if (packetType == Constants.PacketTypeDriverPackageComplete)
                         {
-                            var complete = JsonSerializer.Deserialize<DriverPackageComplete>(
+                            completeMessage = JsonSerializer.Deserialize<DriverPackageComplete>(
                                 Encoding.UTF8.GetString(payload));
-                            if (complete == null)
+                            if (completeMessage == null)
                             {
                                 return new DriverDownloadResult { Success = false, ErrorMessage = "Invalid completion message." };
                             }
@@ -190,6 +232,16 @@ namespace ShaPrint.WpfApp.Services.Client
                                 };
                             }
 
+                            // H5: Cross-check server-reported total bytes
+                            if (completeMessage.TotalBytes != expectedSize)
+                            {
+                                return new DriverDownloadResult
+                                {
+                                    Success = false,
+                                    ErrorMessage = $"Server-reported size mismatch: server says {completeMessage.TotalBytes}, expected {expectedSize}"
+                                };
+                            }
+
                             // Verify SHA-256
                             string actualHash = Convert.ToHexString(SHA256.HashData(allBytes)).ToLowerInvariant();
                             if (!actualHash.Equals(expectedPackageId, StringComparison.OrdinalIgnoreCase))
@@ -201,17 +253,39 @@ namespace ShaPrint.WpfApp.Services.Client
                                 };
                             }
 
-                            // Success — extract zip to final cache directory
+                            // H8: Cancel-during-verify (between verify and extract)
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            // Success — extract zip to final cache directory using safe extractor (H2)
                             string finalDir = Path.Combine(_cacheRoot, expectedPackageId);
                             if (Directory.Exists(finalDir))
                                 Directory.Delete(finalDir, true);
 
-                            // Extract zip archive to finalDir
-                            using (var zipStream = new MemoryStream(allBytes))
-                            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Read))
+                            try
                             {
-                                archive.ExtractToDirectory(finalDir);
+                                using (var zipStream = new MemoryStream(allBytes))
+                                using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Read))
+                                {
+                                    SafeZipExtractor.ExtractSafely(archive, finalDir);
+                                }
                             }
+                            catch
+                            {
+                                // Clean up partial extraction on failure
+                                try { if (Directory.Exists(finalDir)) Directory.Delete(finalDir, true); } catch { }
+                                throw;
+                            }
+
+                            // H3: Write verification marker after successful extract
+                            var marker = new DriverPackageVerifiedMarker
+                            {
+                                Sha256 = actualHash,
+                                TotalSizeBytes = allBytes.Length,
+                                FileCount = Directory.GetFiles(finalDir, "*", SearchOption.AllDirectories).Length,
+                                ExtractedAtUtc = DateTime.UtcNow
+                            };
+                            string markerJson = JsonSerializer.Serialize(marker, new JsonSerializerOptions { WriteIndented = true });
+                            File.WriteAllText(Path.Combine(finalDir, ".verified.json"), markerJson);
 
                             progress?.Report(1.0);
                             AppLogger.Log($"[DRIVER_PKG_CLIENT] Driver package downloaded, verified, and extracted: {allBytes.Length} bytes zip, SHA-256={actualHash[..16]}...");
@@ -243,6 +317,26 @@ namespace ShaPrint.WpfApp.Services.Client
                         }
                     }
                 }
+            }
+            catch (TimeoutException ex)
+            {
+                // H1: Per-read timeout — propagate so caller can show Cancel/Retry dialog
+                AppLogger.Error("[DRIVER_PKG_CLIENT] Transfer timed out", ex);
+                return new DriverDownloadResult
+                {
+                    Success = false,
+                    ErrorMessage = "Driver transfer timed out — server stalled.",
+                    TimedOut = true
+                };
+            }
+            catch (OperationCanceledException)
+            {
+                // User cancellation
+                return new DriverDownloadResult
+                {
+                    Success = false,
+                    ErrorMessage = "Download cancelled."
+                };
             }
             catch (Exception ex)
             {
@@ -302,15 +396,50 @@ namespace ShaPrint.WpfApp.Services.Client
         }
 
         /// <summary>
-        /// Extracts .inf and other driver files from the cached package.dat
-        /// into a directory suitable for pnputil /add-driver or Add-PrinterDriver -InfPath.
-        /// Returns the path to the directory containing the .inf file, or null on failure.
+        /// H4: Deterministic .inf selection. Priority: manifest.InfName → sole .inf → fail.
+        /// Returns null if no .inf found or ambiguous (multiple .inf, no manifest).
         /// </summary>
+        public string? ResolveInfPath(string packageDirectory, string? manifestInfName = null)
+        {
+            try
+            {
+                var infFiles = Directory.GetFiles(packageDirectory, "*.inf", SearchOption.AllDirectories);
+
+                if (infFiles.Length == 0)
+                    return null;
+
+                // Priority 1: manifest InfName (if provided and file exists on disk)
+                if (!string.IsNullOrWhiteSpace(manifestInfName))
+                {
+                    var match = infFiles.FirstOrDefault(f =>
+                        string.Equals(Path.GetFileName(f), manifestInfName, StringComparison.OrdinalIgnoreCase));
+                    if (match != null)
+                        return match;
+                    AppLogger.Log($"[DRIVER_PKG_CLIENT] manifest InfName '{manifestInfName}' not found on disk, falling through.");
+                }
+
+                // Priority 2: exactly one .inf
+                if (infFiles.Length == 1)
+                    return infFiles[0];
+
+                // Priority 3: ambiguity → fail explicitly (never infFiles[0])
+                AppLogger.Error($"[DRIVER_PKG_CLIENT] Multiple .inf files found, no manifest — ambiguous: {string.Join(", ", infFiles.Select(Path.GetFileName))}");
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Legacy .inf selection (deprecated — use ResolveInfPath instead).
+        /// </summary>
+        [Obsolete("Use ResolveInfPath(string, string?) for deterministic selection.")]
         public string? GetDriverInfPath(string packageDirectory)
         {
             try
             {
-                // Look for .inf files in the package directory
                 var infFiles = Directory.GetFiles(packageDirectory, "*.inf", SearchOption.AllDirectories);
                 if (infFiles.Length > 0)
                     return infFiles[0];
@@ -323,28 +452,56 @@ namespace ShaPrint.WpfApp.Services.Client
             }
         }
 
-        private static async Task<int> ReadInt32Async(NetworkStream stream, CancellationToken ct)
+        /// <summary>
+        /// H1: Read exactly 4 bytes with per-read timeout.
+        /// Uses a linked CancellationTokenSource with CancelAfter to detect stalls.
+        /// </summary>
+        internal static async Task<int> ReadInt32Async(NetworkStream stream, CancellationToken ct)
         {
             byte[] buf = new byte[4];
             int read = 0;
             while (read < 4)
             {
-                int n = await stream.ReadAsync(buf.AsMemory(read, 4 - read), ct);
-                if (n == 0) throw new EndOfStreamException();
-                read += n;
+                using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                readCts.CancelAfter(TimeSpan.FromMilliseconds(Constants.DriverTransferReadTimeoutMs));
+                try
+                {
+                    int n = await stream.ReadAsync(buf.AsMemory(read, 4 - read), readCts.Token);
+                    if (n == 0) throw new EndOfStreamException();
+                    read += n;
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    // Per-read timeout (not user cancel)
+                    throw new TimeoutException("Driver transfer timed out — server stalled.");
+                }
             }
             return BitConverter.ToInt32(buf, 0);
         }
 
-        private static async Task<byte[]> ReadBytesAsync(NetworkStream stream, int count, CancellationToken ct)
+        /// <summary>
+        /// H1: Read exactly 'count' bytes with per-read timeout.
+        /// Uses a linked CancellationTokenSource with CancelAfter to detect stalls.
+        /// </summary>
+        internal static async Task<byte[]> ReadBytesAsync(NetworkStream stream, int count, CancellationToken ct)
         {
             byte[] buf = new byte[count];
             int read = 0;
             while (read < count)
             {
-                int n = await stream.ReadAsync(buf.AsMemory(read, count - read), ct);
-                if (n == 0) throw new EndOfStreamException();
-                read += n;
+                using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                readCts.CancelAfter(TimeSpan.FromMilliseconds(Constants.DriverTransferReadTimeoutMs));
+                try
+                {
+                    int n = await stream.ReadAsync(buf.AsMemory(read, count - read), readCts.Token);
+                    if (n == 0) throw new EndOfStreamException();
+                    read += n;
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    // Per-read timeout (not user cancel)
+                    throw new TimeoutException("Driver transfer timed out — server stalled.");
+                }
             }
             return buf;
         }
@@ -356,5 +513,22 @@ namespace ShaPrint.WpfApp.Services.Client
         public string? PackageDirectory { get; set; }
         public bool FromCache { get; set; }
         public string? ErrorMessage { get; set; }
+
+        /// <summary>
+        /// H1: Indicates the download failed due to a per-read timeout (server stall).
+        /// Used by the caller to show Cancel/Retry dialog.
+        /// </summary>
+        public bool TimedOut { get; set; }
+    }
+
+    /// <summary>
+    /// H3: Verification marker written to cache after successful download + extract.
+    /// </summary>
+    public class DriverPackageVerifiedMarker
+    {
+        public string Sha256 { get; set; } = string.Empty;
+        public long TotalSizeBytes { get; set; }
+        public int FileCount { get; set; }
+        public DateTime ExtractedAtUtc { get; set; }
     }
 }

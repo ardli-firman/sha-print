@@ -34,6 +34,12 @@ namespace ShaPrint.Core
         public const int DriverPackageCacheTtlHours    = 24;          // server cache TTL
         public const long ClientDriverCacheMaxBytes    = 524_288_000; // 500 MB LRU
 
+        // ── Driver hardening constants (H1/H2) ───────────────────────────
+        public const int DriverTransferReadTimeoutMs      = 30_000;          // per-read timeout (H1)
+        public const int DriverExtractMaxEntryCount        = 1024;            // max entries in zip (H2)
+        public const long DriverExtractMaxTotalBytes       = 1_073_741_824;   // 1 GiB max extracted (H2)
+        public const int DriverExtractMaxEntryNameLength   = 512;             // max entry name length (H2)
+
         // ─────────────────────────────────────────────
         // Network Channel (Dynamic Shared Secret)
         // ─────────────────────────────────────────────
