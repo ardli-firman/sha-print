@@ -168,8 +168,8 @@ namespace ShaPrint.Server
                             DriverName = driverName
                         };
 
-                        // Populate driver provisioning metadata if sharing is enabled
-                        if (_driverSharingEnabled && _driverPackageService != null)
+                        // Populate driver provisioning metadata if sharing is enabled (skip for lightweight monitor requests)
+                        if (!isMonitorRequest && _driverSharingEnabled && _driverPackageService != null)
                         {
                             try
                             {

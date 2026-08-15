@@ -77,6 +77,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         private readonly DiscoveryServer _discoveryServer;
         private readonly PrintReceiver _printReceiver;
+        private readonly DriverPackageService _driverPackageService;
         private readonly ShaPrint.WpfApp.Services.Server.PrintMonitorService _printMonitorService;
         private readonly ScannerService _scannerService;
         private readonly INavigationService _navigationService;
@@ -91,6 +92,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public List<string> ExposedScanners { get; private set; } = new();
 
         public DiscoveryServer DiscoveryServer => _discoveryServer;
+        public DriverPackageService DriverPackageService => _driverPackageService;
 
         /// <summary>
         /// Stable server identity. Null until the first <see cref="SaveConfiguration"/> call.
@@ -114,8 +116,12 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _snackbarService = snackbarService;
             _printMonitorService = printMonitorService;
             _scannerService = new ScannerService();
+            _driverPackageService = new DriverPackageService(new ShaPrint.WpfApp.Services.Client.RealProcessRunner(), new ShaPrint.Core.Abstractions.RealFileSystem());
             _discoveryServer = new DiscoveryServer(notificationService);
+            _discoveryServer.SetDriverPackageService(_driverPackageService);
+            _discoveryServer.SetDriverSharingEnabled(!IsUnitTest && (ShaPrint.WpfApp.Models.AppSettings.Current.DriverSharing?.Enabled ?? true));
             _printReceiver = new PrintReceiver(notificationService, LogJob, LogError);
+            _printReceiver.SetDriverPackageService(_driverPackageService);
             
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
             _configFile = Path.Combine(dir, "ServerConfig.json");
@@ -258,6 +264,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
             _discoveryServer.SetExposedPrinters(selectedPrinters);
             _discoveryServer.SetExposedScanners(selectedScanners);
+            _discoveryServer.SetDriverSharingEnabled(!IsUnitTest && (ShaPrint.WpfApp.Models.AppSettings.Current.DriverSharing?.Enabled ?? true));
             _printMonitorService?.SetMonitoredPrinters(selectedPrinters);
 
             // Save configuration before starting so ServerId is persisted and broadcast correctly
