@@ -262,44 +262,88 @@ namespace ShaPrint.Server
             }
             AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: pnputil export succeeded.");
 
-            // Build a zip archive — include only driver files (.inf, .cat, .dll, .gpd, .ppd)
-            // Exclude meta-files we write ourselves (package.zip, manifest.json, .verified.json)
+            // Build a zip archive — include only real driver files, exclude our packaging artifacts
+            // and Windows system INFs that pnputil co-exports as dependencies.
+            // Supported extensions cover all major vendors:
+            //   .inf .cat           — universal (all vendors)
+            //   .dll                — driver DLLs (Canon UFR II, HP PCL6, etc.)
+            //   .gpd                — Generic Printer Description (Canon, Epson dot-matrix)
+            //   .ppd                — PostScript Printer Description (HP PS, Canon PS)
+            //   .icm                — ICC color profiles (photo printers)
+            //   .oem                — OEM extension files
+            //   .cab                — Cabinet archives (HP LaserJet, some Canon CAPT drivers)
+            //   .cfg .xml .ini      — Config files some vendors bundle
             try
             {
                 var allFiles = _fileSystem.GetFiles(exportDir, "*", SearchOption.TopDirectoryOnly)
                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
 
-                // Filter: only real driver files, never our own packaging artifacts or Windows system INFs
-                var driverExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                    { ".inf", ".cat", ".dll", ".gpd", ".ppd", ".icm", ".oem" };
+                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: all files in exportDir ({allFiles.Length}): {string.Join(", ", allFiles.Select(Path.GetFileName))}");
+
+                // Files we write ourselves — never include in the driver package
                 var metaFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                     { "package.zip", "manifest.json", ".verified.json" };
-                // Windows built-in INFs that pnputil co-exports as dependencies — exclude from package
+
+                // Windows built-in INFs that pnputil co-exports as class/bus dependencies.
+                // These must NEVER be installed as the printer driver — they are OS infrastructure.
                 var windowsSystemInfs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 {
-                    "ntprint.inf", "prnms001.inf", "prnms002.inf", "prnms003.inf",
-                    "prnms006.inf", "prnms007.inf", "prnms008.inf", "prnms009.inf",
-                    "prnms010.inf", "prnms011.inf", "prnms012.inf",
+                    "ntprint.inf",
+                    "prnms001.inf", "prnms002.inf", "prnms003.inf", "prnms004.inf",
+                    "prnms005.inf", "prnms006.inf", "prnms007.inf", "prnms008.inf",
+                    "prnms009.inf", "prnms010.inf", "prnms011.inf", "prnms012.inf",
                     "usbprint.inf", "wsdprint.inf", "wsprint.inf",
-                    "printqueue.inf", "prnroot.inf"
+                    "printqueue.inf", "prnroot.inf",
+                    // HP bus/class files sometimes co-exported
+                    "hpbusenum.inf", "hpvirtualbus.inf",
+                };
+
+                // Known driver-payload extensions across all major vendors
+                var driverExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ".inf", ".cat",                     // universal
+                    ".dll",                              // driver DLLs
+                    ".gpd", ".ppd",                     // printer description languages
+                    ".icm",                              // color profiles
+                    ".oem",                              // OEM extension files
+                    ".cab",                              // cabinet archives (HP, Canon CAPT)
+                    ".cfg", ".xml", ".ini",             // vendor config files
                 };
 
                 var files = allFiles
-                    .Where(f => !metaFiles.Contains(Path.GetFileName(f))
-                             && !windowsSystemInfs.Contains(Path.GetFileName(f))
-                             && (driverExts.Contains(Path.GetExtension(f))
-                                 || allFiles.Length <= 4)) // if very few files, include all non-meta
+                    .Where(f =>
+                    {
+                        string name = Path.GetFileName(f);
+                        string ext  = Path.GetExtension(f);
+                        // Never include our own meta-files
+                        if (metaFiles.Contains(name)) return false;
+                        // Never include Windows system INFs
+                        if (windowsSystemInfs.Contains(name)) return false;
+                        // Include if it has a known driver extension
+                        return driverExts.Contains(ext);
+                    })
                     .ToArray();
+
+                // Fallback: if nothing passed the extension filter (unusual format), include
+                // everything except our meta-files and system INFs
+                if (files.Length == 0)
+                {
+                    AppLogger.Log("[DRIVER_PKG] ExportDriverAsync: extension filter yielded 0 files — using relaxed filter (meta+sysINF exclusion only).");
+                    files = allFiles
+                        .Where(f => !metaFiles.Contains(Path.GetFileName(f))
+                                 && !windowsSystemInfs.Contains(Path.GetFileName(f)))
+                        .ToArray();
+                }
 
                 if (files.Length == 0)
                 {
-                    AppLogger.Error($"[DRIVER_PKG] ExportDriverAsync: no driver files found in exportDir after filter. allFiles={allFiles.Length}");
+                    AppLogger.Error($"[DRIVER_PKG] ExportDriverAsync: no driver files found after all filters. allFiles={allFiles.Length}");
                     _fileSystem.DeleteDirectory(exportDir, true);
                     return null;
                 }
 
-                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: zipping {files.Length} driver file(s): {string.Join(", ", files.Select(Path.GetFileName))}");
+                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: zipping {files.Length} file(s): {string.Join(", ", files.Select(Path.GetFileName))}");
 
                 // Create zip archive in memory from driver files
                 byte[] zipBytes;
@@ -323,23 +367,47 @@ namespace ShaPrint.Server
                 string packageHash = Convert.ToHexString(SHA256.HashData(zipBytes)).ToLowerInvariant();
                 AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: zip={zipBytes.Length:N0} bytes, SHA-256={packageHash[..16]}...");
 
-                // Resolve actual INF filename from the exported files (NOT the Windows oem*.inf store name).
-                // pnputil exports with the original manufacturer name (e.g., EPSONL3210.inf).
-                // Priority: non-oem-numbered INF > oem-numbered INF > fallback to store name.
+                // Resolve actual INF filename from the exported files (NOT the Windows oem##.inf store name).
+                // pnputil /export-driver restores the original vendor INF name.
+                // Priority:
+                //   1. Single non-oem INF that isn't architecture-specific (e.g., CNMC3280ZK.inf NOT CNMC3280ZK_x64.inf)
+                //   2. Any single non-oem INF
+                //   3. First oem-numbered INF (oem##.inf — shouldn't happen after export but just in case)
+                //   4. Fallback to Windows store name (absolute last resort)
                 string actualInfName;
-                var infFiles = files
+                var infFileNames = files
                     .Where(f => f.EndsWith(".inf", StringComparison.OrdinalIgnoreCase))
                     .Select(Path.GetFileName)
+                    .Where(n => !string.IsNullOrEmpty(n))
                     .ToArray();
 
-                var nonOemInf = infFiles.FirstOrDefault(n =>
-                    !string.IsNullOrEmpty(n) &&
-                    !n.StartsWith("oem", StringComparison.OrdinalIgnoreCase));
-                actualInfName = nonOemInf
-                    ?? infFiles.FirstOrDefault()
-                    ?? infName; // absolute fallback: Windows store name
+                var nonOemInfs = infFileNames
+                    .Where(n => !n!.StartsWith("oem", StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
 
-                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: resolved INF name for manifest: '{infName}' (store) → '{actualInfName}' (exported)");
+                if (nonOemInfs.Length == 1)
+                {
+                    // Ideal: exactly one vendor INF
+                    actualInfName = nonOemInfs[0]!;
+                }
+                else if (nonOemInfs.Length > 1)
+                {
+                    // Multiple vendor INFs — prefer architecture-neutral one (no _x64/_x86/_arm64 suffix)
+                    // e.g., prefer "CNMC3280ZK.inf" over "CNMC3280ZK_x64.inf"
+                    var archSuffixes = new[] { "_x64", "_x86", "_arm64", "_arm", "_ia64", "64", "86" };
+                    var neutralInf = nonOemInfs.FirstOrDefault(n =>
+                        !archSuffixes.Any(s => Path.GetFileNameWithoutExtension(n)
+                            .EndsWith(s, StringComparison.OrdinalIgnoreCase)));
+                    actualInfName = neutralInf ?? nonOemInfs[0]!;
+                    AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: multiple vendor INFs found: {string.Join(", ", nonOemInfs)} — selected '{actualInfName}'");
+                }
+                else
+                {
+                    // All INFs are oem-numbered (unusual post-export) or none exist
+                    actualInfName = infFileNames.FirstOrDefault() ?? infName;
+                }
+
+                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: INF name: '{infName}' (store) → '{actualInfName}' (exported)");
 
                 // Build manifest
                 var manifest = new DriverPackageManifest

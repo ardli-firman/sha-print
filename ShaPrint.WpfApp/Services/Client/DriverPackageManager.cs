@@ -415,11 +415,13 @@ namespace ShaPrint.WpfApp.Services.Client
             // These must NEVER be used as the driver INF — they are OS infrastructure.
             var windowsSystemInfs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "ntprint.inf", "prnms001.inf", "prnms002.inf", "prnms003.inf",
-                "prnms006.inf", "prnms007.inf", "prnms008.inf", "prnms009.inf",
-                "prnms010.inf", "prnms011.inf", "prnms012.inf",
+                "ntprint.inf",
+                "prnms001.inf", "prnms002.inf", "prnms003.inf", "prnms004.inf",
+                "prnms005.inf", "prnms006.inf", "prnms007.inf", "prnms008.inf",
+                "prnms009.inf", "prnms010.inf", "prnms011.inf", "prnms012.inf",
                 "usbprint.inf", "wsdprint.inf", "wsprint.inf",
-                "printqueue.inf", "prnroot.inf"
+                "printqueue.inf", "prnroot.inf",
+                "hpbusenum.inf", "hpvirtualbus.inf",
             };
 
             try
@@ -464,15 +466,17 @@ namespace ShaPrint.WpfApp.Services.Client
                     // Priority 3: prefer oem*.inf (pnputil export naming convention)
                     var oemInf = driverInfs.FirstOrDefault(f =>
                         Path.GetFileName(f).StartsWith("oem", StringComparison.OrdinalIgnoreCase));
-                    if (oemInf != null)
-                    {
-                        AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: Priority 3 oem*.inf match → {Path.GetFileName(oemInf)}");
-                        return oemInf;
-                    }
 
-                    // Priority 4: if still ambiguous, log all and pick first (best effort)
-                    AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: Priority 4 best-effort first candidate → {Path.GetFileName(driverInfs[0])}");
-                    return driverInfs[0];
+                    // Priority 3b: prefer architecture-neutral INF over arch-specific
+                    // e.g., prefer "CNMC3280ZK.inf" over "CNMC3280ZK_x64.inf"
+                    var archSuffixes = new[] { "_x64", "_x86", "_arm64", "_arm", "_ia64", "64", "86" };
+                    var neutralInf = driverInfs.FirstOrDefault(f =>
+                        !archSuffixes.Any(s => Path.GetFileNameWithoutExtension(f)
+                            .EndsWith(s, StringComparison.OrdinalIgnoreCase)));
+
+                    var best = neutralInf ?? oemInf ?? driverInfs[0];
+                    AppLogger.Log($"[DRIVER_PKG_CLIENT] ResolveInfPath: Priority 3 from {driverInfs.Length} candidates → {Path.GetFileName(best)}");
+                    return best;
                 }
 
                 // All files were system INFs — last resort: use them
