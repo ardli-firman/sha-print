@@ -89,6 +89,8 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <TextBlock Grid.Column="0" Text="{Binding ViewModel.StatusText}" 
@@ -105,7 +107,12 @@
                 </TextBlock.Style>
             </TextBlock>
 
-            <ui:Button Grid.Column="1" 
+            <CheckBox Grid.Column="1"
+                      Content="Share Drivers with Clients"
+                      IsChecked="{Binding ViewModel.ShareDriversWithClients}"
+                      VerticalAlignment="Center"/>
+
+            <ui:Button Grid.Column="3" 
                        Command="{Binding ViewModel.ToggleServerCommand}"
                        Content="{Binding ViewModel.ToggleButtonText}"
                        Appearance="{Binding ViewModel.ToggleButtonAppearance}" />

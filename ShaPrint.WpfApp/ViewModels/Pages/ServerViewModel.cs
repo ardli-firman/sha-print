@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ShaPrint.Core;
+using ShaPrint.Core.Abstractions;
 using ShaPrint.Server;
 using System;
 using System.Collections.Generic;
@@ -13,6 +14,7 @@ using Wpf.Ui;
 using Wpf.Ui.Controls;
 using ShaPrint.WpfApp.Views.Pages;
 using ShaPrint.WpfApp.Services;
+using ShaPrint.WpfApp.Services.Client;
 using System.Collections.Concurrent;
 using ShaPrint.Core.Network;
 using ShaPrint.WpfApp.Services.Server;
@@ -57,6 +59,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         /// populated and persisted from the first save onward. Broadcast in discovery responses.
         /// </summary>
         public string? ServerId { get; set; }
+
+        public bool ShareDriversWithClients { get; set; } = true;
     }
 
     public partial class ServerViewModel : ObservableObject, IDisposable
@@ -77,6 +81,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         private readonly DiscoveryServer _discoveryServer;
         private readonly PrintReceiver _printReceiver;
+        private readonly DriverPackageService _driverPackageService;
+        private readonly DriverCacheInvalidator _driverCacheInvalidator;
         private readonly ShaPrint.WpfApp.Services.Server.PrintMonitorService _printMonitorService;
         private readonly ScannerService _scannerService;
         private readonly INavigationService _navigationService;
@@ -103,6 +109,9 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         [ObservableProperty]
         private string _statusText = "Status: Stopped";
 
+        [ObservableProperty]
+        private bool _shareDriversWithClients = true;
+
         public ObservableCollection<PrinterItem> Printers { get; } = new();
         public ObservableCollection<ScannerItem> Scanners { get; } = new();
         public ObservableCollection<string> Logs { get; } = new();
@@ -116,6 +125,16 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _scannerService = new ScannerService();
             _discoveryServer = new DiscoveryServer(notificationService);
             _printReceiver = new PrintReceiver(notificationService, LogJob, LogError);
+
+            _driverPackageService = new DriverPackageService(new RealProcessRunner(), new RealFileSystem());
+            _driverCacheInvalidator = new DriverCacheInvalidator(_driverPackageService);
+            _driverCacheInvalidator.Start();
+
+            _discoveryServer.SetDriverPackageService(_driverPackageService);
+            _discoveryServer.SetDriverSharingEnabled(ShareDriversWithClients);
+
+            _printReceiver.SetDriverPackageService(_driverPackageService);
+            _printReceiver.SetDriverSharingEnabled(ShareDriversWithClients);
             
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
             _configFile = Path.Combine(dir, "ServerConfig.json");
@@ -177,6 +196,12 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             OnPropertyChanged(nameof(ToggleButtonText));
             OnPropertyChanged(nameof(IsNotRunning));
             OnPropertyChanged(nameof(ToggleButtonAppearance));
+        }
+
+        partial void OnShareDriversWithClientsChanged(bool value)
+        {
+            _discoveryServer?.SetDriverSharingEnabled(value);
+            _printReceiver?.SetDriverSharingEnabled(value);
         }
 
         public string ToggleButtonText => IsRunning ? "Stop Server" : "Start Server";
@@ -347,6 +372,9 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         savedScanners = savedConfig.ExposedScanners;
                         ServerId = savedConfig.ServerId;
                         _discoveryServer.SetServerId(ServerId);
+                        ShareDriversWithClients = savedConfig.ShareDriversWithClients;
+                        _discoveryServer.SetDriverSharingEnabled(ShareDriversWithClients);
+                        _printReceiver.SetDriverSharingEnabled(ShareDriversWithClients);
                     }
                 }
                 catch
@@ -400,7 +428,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 {
                     ExposedPrinters = printers,
                     ExposedScanners = scanners,
-                    ServerId = newServerId
+                    ServerId = newServerId,
+                    ShareDriversWithClients = ShareDriversWithClients
                 };
                 string json = JsonSerializer.Serialize(config);
                 string wrapped = CryptoHelper.WrapConfigWithHmac(json);
@@ -416,6 +445,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public void Dispose()
         {
             AppLogger.OnLog -= AppLogger_OnLog;
+            _driverCacheInvalidator?.Dispose();
             if (IsRunning) StopServer();
         }
     }

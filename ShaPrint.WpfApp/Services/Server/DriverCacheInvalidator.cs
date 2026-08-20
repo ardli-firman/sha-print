@@ -16,7 +16,7 @@ namespace ShaPrint.Server
     public class DriverCacheInvalidator : IDisposable
     {
         private readonly DriverPackageService _driverPackageService;
-        private readonly IEventLog _eventLog;
+        private readonly IEventLog? _eventLog;
         private readonly TimeSpan _ttl;
         private CancellationTokenSource? _cts;
         private DateTime _lastInvalidationTime = DateTime.UtcNow;
@@ -29,7 +29,7 @@ namespace ShaPrint.Server
 
         public DriverCacheInvalidator(
             DriverPackageService driverPackageService,
-            IEventLog eventLog,
+            IEventLog? eventLog = null,
             TimeSpan? ttl = null)
         {
             _driverPackageService = driverPackageService;
@@ -69,17 +69,20 @@ namespace ShaPrint.Server
                     // Check for driver change events since last check
                     try
                     {
-                        var entries = _eventLog.GetEntries(PrintServiceLogName, DriverChangedEventId);
-                        var recentEvent = entries
-                            .Where(e => e.TimeGenerated > _lastInvalidationTime)
-                            .OrderByDescending(e => e.TimeGenerated)
-                            .FirstOrDefault();
-
-                        if (recentEvent != null)
+                        if (_eventLog != null)
                         {
-                            AppLogger.Log($"[DRIVER_CACHE] Driver change event detected (ID={recentEvent.EventId}, time={recentEvent.TimeGenerated}). Invalidating cache.");
-                            _driverPackageService.InvalidateAll();
-                            _lastInvalidationTime = DateTime.UtcNow;
+                            var entries = _eventLog.GetEntries(PrintServiceLogName, DriverChangedEventId);
+                            var recentEvent = entries
+                                .Where(e => e.TimeGenerated > _lastInvalidationTime)
+                                .OrderByDescending(e => e.TimeGenerated)
+                                .FirstOrDefault();
+
+                            if (recentEvent != null)
+                            {
+                                AppLogger.Log($"[DRIVER_CACHE] Driver change event detected (ID={recentEvent.EventId}, time={recentEvent.TimeGenerated}). Invalidating cache.");
+                                _driverPackageService.InvalidateAll();
+                                _lastInvalidationTime = DateTime.UtcNow;
+                            }
                         }
                     }
                     catch (Exception ex)

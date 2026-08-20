@@ -137,7 +137,7 @@ namespace ShaPrint.Server
 
             // Try WMI to get the InfPath
             var result = await _processRunner.RunAsync("powershell.exe",
-                $"-NoProfile -ExecutionPolicy Bypass -Command \"Get-WmiObject Win32_PrinterDriver | Where-Object {{ $_.Name -like '*{safeName}*' }} | Select-Object -First 1 -ExpandProperty InfPath 2>&1 | Out-String -Width 4096\"",
+                $"-NoProfile -ExecutionPolicy Bypass -Command \"Get-WmiObject Win32_PrinterDriver | Where-Object {{ $_.Name -eq '{safeName}' }} | Select-Object -First 1 -ExpandProperty InfPath 2>&1 | Out-String -Width 4096\"",
                 TimeSpan.FromSeconds(30));
 
             if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
