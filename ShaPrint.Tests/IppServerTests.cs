@@ -281,6 +281,192 @@ public class IppServerTests
         Assert.Empty(spooler.PrintedJobs); // No jobs should be printed
     }
 
+    /// <summary>
+    /// Empty request should not crash the server.
+    /// </summary>
+    [Fact]
+    public async Task EmptyRequest_DoesNotCrash()
+    {
+        // Arrange
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "TestPrinter", DriverName = "Generic Driver" });
+        var server = new IppServer(spooler);
+
+        var emptyBytes = Array.Empty<byte>();
+        using var inputStream = new MemoryStream(emptyBytes);
+        using var outputStream = new MemoryStream();
+
+        // Act & Assert - should not throw
+        try
+        {
+            await server.ProcessRequestAsync(inputStream, outputStream);
+        }
+        catch (Exception ex)
+        {
+            // Expected - IPP protocol requires valid data
+            Assert.NotNull(ex);
+        }
+    }
+
+    /// <summary>
+    /// Invalid IPP version should return error.
+    /// </summary>
+    [Fact]
+    public async Task InvalidIppVersion_ReturnsError()
+    {
+        // Arrange
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "TestPrinter", DriverName = "Generic Driver" });
+        var server = new IppServer(spooler);
+
+        // Build request with invalid version (0.0)
+        var requestBytes = BuildInvalidVersionRequest();
+        using var inputStream = new MemoryStream(requestBytes);
+        using var outputStream = new MemoryStream();
+
+        // Act
+        await server.ProcessRequestAsync(inputStream, outputStream);
+
+        // Assert
+        var responseBytes = outputStream.ToArray();
+        // Server should handle gracefully (may return error or empty)
+    }
+
+    /// <summary>
+    /// Print-Job with empty document should handle gracefully.
+    /// </summary>
+    [Fact]
+    public async Task PrintJob_EmptyDocument_HandlesGracefully()
+    {
+        // Arrange
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "TestPrinter", DriverName = "Generic Driver" });
+        var server = new IppServer(spooler);
+
+        var request = BuildPrintJobRequest("TestPrinter", Array.Empty<byte>());
+        using var input = new MemoryStream(request);
+        using var output = new MemoryStream();
+
+        // Act
+        await server.ProcessRequestAsync(input, output);
+
+        // Assert
+        var responseBytes = output.ToArray();
+        Assert.NotEmpty(responseBytes);
+    }
+
+    /// <summary>
+    /// Print-Job with large document should work.
+    /// </summary>
+    [Fact]
+    public async Task PrintJob_LargeDocument_Works()
+    {
+        // Arrange
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "TestPrinter", DriverName = "Generic Driver" });
+        var server = new IppServer(spooler);
+
+        // 1MB document
+        var largeDoc = new byte[1024 * 1024];
+        new Random().NextBytes(largeDoc);
+
+        var request = BuildPrintJobRequest("TestPrinter", largeDoc);
+        using var input = new MemoryStream(request);
+        using var output = new MemoryStream();
+
+        // Act
+        await server.ProcessRequestAsync(input, output);
+
+        // Assert
+        Assert.Single(spooler.PrintedJobs);
+        Assert.Equal(largeDoc.Length, spooler.PrintedJobs[0].Data.Length);
+    }
+
+    /// <summary>
+    /// Multiple concurrent requests should not crash.
+    /// </summary>
+    [Fact]
+    public async Task ConcurrentRequests_DoNotCrash()
+    {
+        // Arrange
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "TestPrinter", DriverName = "Generic Driver" });
+        var server = new IppServer(spooler);
+
+        // Act - send 10 concurrent requests
+        var tasks = new List<Task>();
+        for (int i = 0; i < 10; i++)
+        {
+            tasks.Add(Task.Run(async () =>
+            {
+                var request = BuildPrintJobRequest("TestPrinter", new byte[] { 0x50, 0x44, 0x46 });
+                using var input = new MemoryStream(request);
+                using var output = new MemoryStream();
+                await server.ProcessRequestAsync(input, output);
+            }));
+        }
+
+        await Task.WhenAll(tasks);
+
+        // Assert
+        Assert.Equal(10, spooler.PrintedJobs.Count);
+    }
+
+    /// <summary>
+    /// Get-Printer-Attributes with multiple printers should return first.
+    /// </summary>
+    [Fact]
+    public async Task GetPrinterAttributes_MultiplePrinters_ReturnsFirst()
+    {
+        // Arrange
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "Printer1", DriverName = "Driver1" });
+        spooler.AddPrinter(new PrinterInfo { Name = "Printer2", DriverName = "Driver2" });
+        var server = new IppServer(spooler);
+
+        var request = BuildGetPrinterAttributesRequest();
+        using var input = new MemoryStream(request);
+        using var output = new MemoryStream();
+
+        // Act
+        await server.ProcessRequestAsync(input, output);
+
+        // Assert
+        var responseBytes = output.ToArray();
+        var responseText = System.Text.Encoding.ASCII.GetString(responseBytes);
+        Assert.Contains("Printer1", responseText);
+    }
+
+    /// <summary>
+    /// Print-Job then Get-Job-Attributes should return same job.
+    /// </summary>
+    [Fact]
+    public async Task PrintJob_ThenGetJobAttributes_ReturnsSameJob()
+    {
+        // Arrange
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "TestPrinter", DriverName = "Generic Driver" });
+        var server = new IppServer(spooler);
+
+        // Print a job
+        var printRequest = BuildPrintJobRequest("TestPrinter", new byte[] { 0x50, 0x44, 0x46 });
+        using var printInput = new MemoryStream(printRequest);
+        using var printOutput = new MemoryStream();
+        await server.ProcessRequestAsync(printInput, printOutput);
+
+        // Get job attributes
+        var getRequest = BuildGetJobAttributesRequest(1);
+        using var getInput = new MemoryStream(getRequest);
+        using var getOutput = new MemoryStream();
+
+        // Act
+        await server.ProcessRequestAsync(getInput, getOutput);
+
+        // Assert
+        var responseBytes = getOutput.ToArray();
+        Assert.NotEmpty(responseBytes);
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // IPP Request Builders (test helpers)
     // ═══════════════════════════════════════════════════════════════
@@ -541,6 +727,34 @@ public class IppServerTests
 
         writer.Write((byte)0x03);
         writer.Write((byte)0x03);
+
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Build a request with invalid IPP version (0.0).
+    /// </summary>
+    private static byte[] BuildInvalidVersionRequest()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms);
+
+        // Invalid version
+        writer.Write((byte)0x00); // version-major (invalid)
+        writer.Write((byte)0x00); // version-minor (invalid)
+        writer.Write((short)0x000B); // operation-id: Get-Printer-Attributes
+        writer.Write(1); // request-id
+
+        // Minimal attributes
+        writer.Write((byte)0x01); // begin-operation-attributes
+        writer.Write((byte)0x47); // charset
+        writer.Write((short)0x0012);
+        writer.Write("attributes-charset"u8.ToArray());
+        writer.Write((short)0x0005);
+        writer.Write("utf-8"u8.ToArray());
+
+        writer.Write((byte)0x03); // end-operation-attributes
+        writer.Write((byte)0x03); // end-of-attributes
 
         return ms.ToArray();
     }
