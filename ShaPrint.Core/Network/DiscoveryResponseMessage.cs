@@ -27,5 +27,13 @@ namespace ShaPrint.Core.Network
         /// </summary>
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? ServerId { get; set; }
+
+        /// <summary>
+        /// IPP endpoint URL for Mobility Print style printing.
+        /// Format: http://<ip>:631/ipp/print
+        /// Clients can add this as an IPP printer in Windows.
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? IppEndpoint { get; set; }
     }
 }

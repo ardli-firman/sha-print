@@ -196,7 +196,8 @@ namespace ShaPrint.Server
                         IpAddress = GetLocalIPAddress(),
                         ExposedPrinters = exposedInfos,
                         ExposedScanners = _exposedScanners.Count > 0 ? new List<ScannerInfo>() : null,
-                        ServerId = _serverId
+                        ServerId = _serverId,
+                        IppEndpoint = $"http://{GetLocalIPAddress()}:631/ipp/print"
                     };
 
                     if (response.ExposedScanners != null)
