@@ -26,6 +26,7 @@ namespace ShaPrint.WpfApp.Services.Client
     /// 
     /// All errors are surfaced (never swallowed).
     /// </summary>
+    [Obsolete("Deprecated: IPP server handles all printing. Driver installation no longer needed.")]
     public class DriverInstaller
     {
         private readonly IProcessRunner _processRunner;

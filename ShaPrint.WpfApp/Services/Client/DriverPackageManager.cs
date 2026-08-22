@@ -18,6 +18,7 @@ namespace ShaPrint.WpfApp.Services.Client
     /// verifies integrity (SHA-256 + size), and caches them locally.
     /// Cache uses LRU eviction with a 500 MB cap.
     /// </summary>
+    [Obsolete("Deprecated: IPP server handles all printing. Driver download no longer needed.")]
     public class DriverPackageManager
     {
         private readonly string _cacheRoot;
