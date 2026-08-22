@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShaPrint IPP Flow Prototype</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; color: #333; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { font-size: 24px; margin-bottom: 8px; color: #1a1a1a; }
+        .subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
+        .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .card h2 { font-size: 16px; margin-bottom: 12px; color: #444; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+        .state-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .state-item { padding: 8px 12px; background: #f8f9fa; border-radius: 4px; }
+        .state-label { font-size: 11px; text-transform: uppercase; color: #888; margin-bottom: 4px; }
+        .state-value { font-size: 14px; font-weight: 500; }
+        .state-value.success { color: #28a745; }
+        .state-value.error { color: #dc3545; }
+        .state-value.pending { color: #ffc107; }
+        .state-value.idle { color: #6c757d; }
+        .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        button { padding: 8px 16px; border: 1px solid #ddd; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; transition: all 0.15s; }
+        button:hover { background: #f0f0f0; border-color: #ccc; }
+        button:active { background: #e0e0e0; }
+        button.primary { background: #007bff; color: white; border-color: #007bff; }
+        button.primary:hover { background: #0056b3; }
+        button.danger { background: #dc3545; color: white; border-color: #dc3545; }
+        button.danger:hover { background: #c82333; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .log { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; max-height: 200px; overflow-y: auto; margin-top: 12px; }
+        .log-entry { margin-bottom: 4px; line-height: 1.4; }
+        .log-entry.info { color: #569cd6; }
+        .log-entry.success { color: #6a9955; }
+        .log-entry.error { color: #f44747; }
+        .log-entry.warn { color: #ce9178; }
+        .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 16px; }
+        .tab { padding: 8px 16px; cursor: pointer; border-bottom: 2px solid transparent; font-size: 13px; color: #666; }
+        .tab.active { color: #007bff; border-bottom-color: #007bff; }
+        .tab:hover { color: #333; }
+        .walkthrough { display: none; }
+        .walkthrough.active { display: block; }
+        .step { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; }
+        .step-number { width: 24px; height: 24px; border-radius: 50%; background: #007bff; color: white; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+        .step.completed .step-number { background: #28a745; }
+        .step.current .step-number { background: #ffc107; color: #333; }
+        .step button { flex-shrink: 0; }
+        .step-description { flex: 1; font-size: 13px; }
+        .scenario-desc { background: #e7f3ff; padding: 12px; border-radius: 4px; margin-bottom: 16px; font-size: 13px; color: #0056b3; }
+        .job-list { margin-top: 12px; }
+        .job-item { display: flex; align-items: center; gap: 12px; padding: 8px; background: #f8f9fa; border-radius: 4px; margin-bottom: 4px; font-size: 13px; }
+        .job-status { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500; }
+        .job-status.pending { background: #fff3cd; color: #856404; }
+        .job-status.processing { background: #cce5ff; color: #004085; }
+        .job-status.completed { background: #d4edda; color: #155724; }
+        .job-status.failed { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ShaPrint IPP Flow Prototype</h1>
+        <p class="subtitle">
+            <strong>Question:</strong> Does the IPP request/response flow work correctly for ShaPrint's Mobility Print architecture?<br>
+            This prototype simulates the IPP server behavior to validate the protocol flow before implementation.
+        </p>
+
+        <!-- Current State -->
+        <div class="card">
+            <h2>Current State</h2>
+            <div class="state-panel">
+                <div class="state-item">
+                    <div class="state-label">Server Status</div>
+                    <div class="state-value" id="serverStatus">Idle</div>
+                </div>
+                <div class="state-item">
+                    <div class="state-label">Printer Name</div>
+                    <div class="state-value" id="printerName">—</div>
+                </div>
+                <div class="state-item">
+                    <div class="state-label">Printer State</div>
+                    <div class="state-value" id="printerState">Idle</div>
+                </div>
+                <div class="state-item">
+                    <div class="state-label">Active Jobs</div>
+                    <div class="state-value" id="activeJobs">0</div>
+                </div>
+                <div class="state-item">
+                    <div class="state-label">Total Jobs Processed</div>
+                    <div class="state-value" id="totalJobs">0</div>
+                </div>
+                <div class="state-item">
+                    <div class="state-label">Last IPP Version</div>
+                    <div class="state-value" id="lastIppVersion">—</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Free Play -->
+        <div class="card">
+            <h2>Free Play — IPP Operations</h2>
+            <p style="font-size: 13px; color: #666; margin-bottom: 12px;">Click buttons to simulate IPP operations. Watch the state change above.</p>
+            <div class="buttons">
+                <button class="primary" onclick="simulateGetPrinterAttributes()">Get-Printer-Attributes</button>
+                <button class="primary" onclick="simulatePrintJob()">Print-Job</button>
+                <button onclick="simulateValidateJob()">Validate-Job</button>
+                <button onclick="simulateGetJobs()">Get-Jobs</button>
+                <button onclick="simulateCancelJob()">Cancel-Job</button>
+                <button class="danger" onclick="simulatePrinterError()">Simulate Printer Error</button>
+                <button onclick="resetState()">Reset</button>
+            </div>
+            <div class="log" id="log"></div>
+        </div>
+
+        <!-- Job List -->
+        <div class="card">
+            <h2>Job Queue</h2>
+            <div class="job-list" id="jobList">
+                <div style="color: #888; font-size: 13px;">No jobs yet. Click "Print-Job" to create one.</div>
+            </div>
+        </div>
+
+        <!-- Guided Walkthroughs -->
+        <div class="card">
+            <h2>Guided Walkthroughs</h2>
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('happy')">Happy Path</div>
+                <div class="tab" onclick="switchTab('multi')">Multi-Document</div>
+                <div class="tab" onclick="switchTab('error')">Error Recovery</div>
+                <div class="tab" onclick="switchTab('concurrent')">Concurrent Jobs</div>
+            </div>
+
+            <!-- Happy Path -->
+            <div class="walkthrough active" id="walkthrough-happy">
+                <div class="scenario-desc">
+                    <strong>Scenario:</strong> A Windows client discovers the ShaPrint server, queries printer capabilities, and sends a print job. This is the basic happy path that must work flawlessly.
+                </div>
+                <div class="step current" id="happy-step-1">
+                    <div class="step-number">1</div>
+                    <div class="step-description">Query printer capabilities (Get-Printer-Attributes)</div>
+                    <button onclick="happyStep1()">Execute</button>
+                </div>
+                <div class="step" id="happy-step-2">
+                    <div class="step-number">2</div>
+                    <div class="step-description">Send a print job (Print-Job with PWG Raster)</div>
+                    <button onclick="happyStep2()" disabled>Execute</button>
+                </div>
+                <div class="step" id="happy-step-3">
+                    <div class="step-number">3</div>
+                    <div class="step-description">Check job status (Get-Job-Attributes)</div>
+                    <button onclick="happyStep3()" disabled>Execute</button>
+                </div>
+                <div class="step" id="happy-step-4">
+                    <div class="step-number">4</div>
+                    <div class="step-description">Verify job completed successfully</div>
+                    <button onclick="happyStep4()" disabled>Execute</button>
+                </div>
+            </div>
+
+            <!-- Multi-Document -->
+            <div class="walkthrough" id="walkthrough-multi">
+                <div class="scenario-desc">
+                    <strong>Scenario:</strong> A client sends a multi-document print job using Create-Job + Send-Document pattern. This tests the job assembly flow.
+                </div>
+                <div class="step current" id="multi-step-1">
+                    <div class="step-number">1</div>
+                    <div class="step-description">Create an empty job (Create-Job)</div>
+                    <button onclick="multiStep1()">Execute</button>
+                </div>
+                <div class="step" id="multi-step-2">
+                    <div class="step-number">2</div>
+                    <div class="step-description">Send first document (Send-Document)</div>
+                    <button onclick="multiStep2()" disabled>Execute</button>
+                </div>
+                <div class="step" id="multi-step-3">
+                    <div class="step-number">3</div>
+                    <div class="step-description">Send last document (Send-Document with last-document=true)</div>
+                    <button onclick="multiStep3()" disabled>Execute</button>
+                </div>
+                <div class="step" id="multi-step-4">
+                    <div class="step-number">4</div>
+                    <div class="step-description">Verify job queued for printing</div>
+                    <button onclick="multiStep4()" disabled>Execute</button>
+                </div>
+            </div>
+
+            <!-- Error Recovery -->
+            <div class="walkthrough" id="walkthrough-error">
+                <div class="scenario-desc">
+                    <strong>Scenario:</strong> The printer encounters an error during printing. Test how the system handles failures and recovery.
+                </div>
+                <div class="step current" id="error-step-1">
+                    <div class="step-number">1</div>
+                    <div class="step-description">Send a print job</div>
+                    <button onclick="errorStep1()">Execute</button>
+                </div>
+                <div class="step" id="error-step-2">
+                    <div class="step-number">2</div>
+                    <div class="step-description">Simulate printer error (paper jam)</div>
+                    <button onclick="errorStep2()" disabled>Execute</button>
+                </div>
+                <div class="step" id="error-step-3">
+                    <div class="step-number">3</div>
+                    <div class="step-description">Check job status shows error</div>
+                    <button onclick="errorStep3()" disabled>Execute</button>
+                </div>
+                <div class="step" id="error-step-4">
+                    <div class="step-number">4</div>
+                    <div class="step-description">Clear error and retry</div>
+                    <button onclick="errorStep4()" disabled>Execute</button>
+                </div>
+            </div>
+
+            <!-- Concurrent Jobs -->
+            <div class="walkthrough" id="walkthrough-concurrent">
+                <div class="scenario-desc">
+                    <strong>Scenario:</strong> Multiple clients send print jobs simultaneously. Test job queuing and concurrency handling.
+                </div>
+                <div class="step current" id="concurrent-step-1">
+                    <div class="step-number">1</div>
+                    <div class="step-description">Send 3 print jobs rapidly</div>
+                    <button onclick="concurrentStep1()">Execute</button>
+                </div>
+                <div class="step" id="concurrent-step-2">
+                    <div class="step-number">2</div>
+                    <div class="step-description">Check all jobs are queued</div>
+                    <button onclick="concurrentStep2()" disabled>Execute</button>
+                </div>
+                <div class="step" id="concurrent-step-3">
+                    <div class="step-number">3</div>
+                    <div class="step-description">Process jobs sequentially</div>
+                    <button onclick="concurrentStep3()" disabled>Execute</button>
+                </div>
+                <div class="step" id="concurrent-step-4">
+                    <div class="step-number">4</div>
+                    <div class="step-description">Verify all jobs completed</div>
+                    <button onclick="concurrentStep4()" disabled>Execute</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ═══════════════════════════════════════════════════════════════
+        // PURE IPP STATE MODULE (liftable to real codebase)
+        // ═══════════════════════════════════════════════════════════════
+
+        const IppState = (() => {
+            // Printer state
+            let printer = {
+                name: 'ShaPrint Virtual Printer',
+                state: 'idle', // idle, processing, stopped, error
+                stateReasons: [],
+                ippVersionsSupported: ['1.0', '1.1', '2.0', '2.1', '2.2'],
+                operationsSupported: [
+                    'Print-Job', 'Validate-Job', 'Create-Job', 'Send-Document',
+                    'Cancel-Job', 'Get-Job-Attributes', 'Get-Jobs',
+                    'Get-Printer-Attributes', 'Pause-Printer', 'Resume-Printer'
+                ],
+                documentFormatSupported: ['application/pdf', 'image/pwg-raster', 'image/urf'],
+                colorSupported: true,
+                copiesSupported: { min: 1, max: 99 },
+                mediaSupported: ['na_letter_8.5x11in', 'iso_a4_210x297mm'],
+                jobHistory: []
+            };
+
+            // Job queue
+            let jobs = new Map();
+            let nextJobId = 1;
+
+            // Server state
+            let server = {
+                status: 'running',
+                totalJobsProcessed: 0,
+                lastIppVersion: null
+            };
+
+            // Create a new job
+            function createJob(userName = 'anonymous', documentName = 'Untitled') {
+                const jobId = nextJobId++;
+                const job = {
+                    id: jobId,
+                    name: documentName,
+                    state: 'pending', // pending, processing, completed, canceled, aborted
+                    stateReasons: [],
+                    userName: userName,
+                    createdAt: new Date().toISOString(),
+                    documents: [],
+                    lastDocument: false,
+                    completedAt: null,
+                    errorMessage: null
+                };
+                jobs.set(jobId, job);
+                return job;
+            }
+
+            // Add document to job
+            function addDocument(jobId, documentData, isLast = false) {
+                const job = jobs.get(jobId);
+                if (!job) return { success: false, error: 'Job not found' };
+                if (job.state !== 'pending' && job.state !== null) {
+                    return { success: false, error: 'Job not accepting documents' };
+                }
+                job.documents.push(documentData);
+                job.lastDocument = isLast;
+                return { success: true, job };
+            }
+
+            // Process a print job (single document)
+            function printJob(documentData, documentName = 'Untitled', format = 'image/pwg-raster') {
+                const job = createJob('windows-client', documentName);
+                job.documents.push({ data: documentData, format });
+                job.lastDocument = true;
+                job.state = 'processing';
+                printer.state = 'processing';
+
+                // Simulate processing
+                setTimeout(() => {
+                    job.state = 'completed';
+                    job.completedAt = new Date().toISOString();
+                    server.totalJobsProcessed++;
+                    printer.state = 'idle';
+                    render();
+                }, 1000);
+
+                return { success: true, jobId: job.id, job };
+            }
+
+            // Get printer attributes
+            function getPrinterAttributes(requestedAttributes = []) {
+                const allAttributes = {
+                    'printer-name': printer.name,
+                    'printer-state': printer.state === 'idle' ? 3 : printer.state === 'processing' ? 4 : 5,
+                    'printer-state-reasons': printer.stateReasons,
+                    'ipp-versions-supported': printer.ippVersionsSupported,
+                    'operations-supported': printer.operationsSupported,
+                    'document-format-supported': printer.documentFormatSupported,
+                    'color-supported': printer.colorSupported,
+                    'copies-supported': printer.copiesSupported,
+                    'media-supported': printer.mediaSupported,
+                    'printer-uri-supported': ['ipp://localhost:631/printers/ShaPrint'],
+                    'queued-job-count': Array.from(jobs.values()).filter(j => j.state === 'pending' || j.state === 'processing').length
+                };
+
+                if (requestedAttributes.length === 0 || requestedAttributes.includes('all')) {
+                    return allAttributes;
+                }
+
+                const filtered = {};
+                for (const attr of requestedAttributes) {
+                    if (allAttributes[attr] !== undefined) {
+                        filtered[attr] = allAttributes[attr];
+                    }
+                }
+                return filtered;
+            }
+
+            // Get job attributes
+            function getJobAttributes(jobId) {
+                const job = jobs.get(jobId);
+                if (!job) return null;
+                return {
+                    'job-id': job.id,
+                    'job-name': job.name,
+                    'job-state': job.state === 'pending' ? 3 : job.state === 'processing' ? 4 : job.state === 'completed' ? 9 : 7,
+                    'job-state-reasons': job.stateReasons,
+                    'job-printer-uri': 'ipp://localhost:631/printers/ShaPrint',
+                    'job-originating-user-name': job.userName,
+                    'time-at-creation': job.createdAt,
+                    'time-at-completed': job.completedAt
+                };
+            }
+
+            // Get all jobs
+            function getJobs() {
+                return Array.from(jobs.values()).map(job => ({
+                    id: job.id,
+                    name: job.name,
+                    state: job.state,
+                    userName: job.userName,
+                    createdAt: job.createdAt
+                }));
+            }
+
+            // Cancel job
+            function cancelJob(jobId) {
+                const job = jobs.get(jobId);
+                if (!job) return { success: false, error: 'Job not found' };
+                if (job.state === 'completed') return { success: false, error: 'Job already completed' };
+                job.state = 'canceled';
+                job.stateReasons.push('canceled-by-user');
+                return { success: true, job };
+            }
+
+            // Simulate printer error
+            function simulateError(errorMessage = 'Paper jam') {
+                printer.state = 'error';
+                printer.stateReasons = [errorMessage];
+                // Fail any processing jobs
+                for (const job of jobs.values()) {
+                    if (job.state === 'processing') {
+                        job.state = 'aborted';
+                        job.stateReasons.push(errorMessage);
+                        job.errorMessage = errorMessage;
+                    }
+                }
+            }
+
+            // Clear error
+            function clearError() {
+                printer.state = 'idle';
+                printer.stateReasons = [];
+            }
+
+            // Reset state
+            function reset() {
+                printer.state = 'idle';
+                printer.stateReasons = [];
+                jobs.clear();
+                nextJobId = 1;
+                server.totalJobsProcessed = 0;
+                server.lastIppVersion = null;
+            }
+
+            // Get current state snapshot
+            function getState() {
+                return {
+                    printer: { ...printer },
+                    jobs: Array.from(jobs.values()),
+                    server: { ...server }
+                };
+            }
+
+            return {
+                createJob,
+                addDocument,
+                printJob,
+                getPrinterAttributes,
+                getJobAttributes,
+                getJobs,
+                cancelJob,
+                simulateError,
+                clearError,
+                reset,
+                getState
+            };
+        })();
+
+        // ═══════════════════════════════════════════════════════════════
+        // UI LAYER (throwaway — do not lift)
+        // ═══════════════════════════════════════════════════════════════
+
+        let logEntries = [];
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            logEntries.push({ timestamp, message, type });
+            renderLog();
+        }
+
+        function renderLog() {
+            const logEl = document.getElementById('log');
+            logEl.innerHTML = logEntries.map(entry =>
+                `<div class="log-entry ${entry.type}">[${entry.timestamp}] ${entry.message}</div>`
+            ).join('');
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function render() {
+            const state = IppState.getState();
+
+            // Update state panel
+            document.getElementById('serverStatus').textContent = state.server.status;
+            document.getElementById('serverStatus').className = 'state-value success';
+            document.getElementById('printerName').textContent = state.printer.name;
+            document.getElementById('printerState').textContent = state.printer.state;
+            document.getElementById('printerState').className = `state-value ${state.printer.state === 'error' ? 'error' : state.printer.state === 'processing' ? 'pending' : 'success'}`;
+            document.getElementById('activeJobs').textContent = state.jobs.filter(j => j.state === 'pending' || j.state === 'processing').length;
+            document.getElementById('totalJobs').textContent = state.server.totalJobsProcessed;
+            document.getElementById('lastIppVersion').textContent = state.server.lastIppVersion || '—';
+
+            // Update job list
+            const jobListEl = document.getElementById('jobList');
+            if (state.jobs.length === 0) {
+                jobListEl.innerHTML = '<div style="color: #888; font-size: 13px;">No jobs yet. Click "Print-Job" to create one.</div>';
+            } else {
+                jobListEl.innerHTML = state.jobs.map(job => `
+                    <div class="job-item">
+                        <span class="job-status ${job.state}">${job.state}</span>
+                        <span><strong>Job #${job.id}</strong> — ${job.name}</span>
+                        <span style="color: #888; font-size: 11px;">${job.userName}</span>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // FREE PLAY ACTIONS
+        // ═══════════════════════════════════════════════════════════════
+
+        function simulateGetPrinterAttributes() {
+            log('→ Sending Get-Printer-Attributes request (IPP 2.0)', 'info');
+            const attrs = IppState.getPrinterAttributes();
+            log(`← Response: printer-state=${attrs['printer-state']}, ipp-versions=${attrs['ipp-versions-supported'].join(',')}`, 'success');
+            log(`  Supported formats: ${attrs['document-format-supported'].join(', ')}`, 'info');
+            IppState.getState().server.lastIppVersion = '2.0';
+            render();
+        }
+
+        function simulatePrintJob() {
+            const docName = `Document_${Date.now()}.pdf`;
+            log(`→ Sending Print-Job request: "${docName}" (image/pwg-raster)`, 'info');
+            const result = IppState.printJob('print_data_bytes', docName, 'image/pwg-raster');
+            if (result.success) {
+                log(`← Response: job-id=${result.jobId}, job-state=processing`, 'success');
+                log(`  Job queued for printing to Windows spooler...`, 'info');
+            } else {
+                log(`← Error: ${result.error}`, 'error');
+            }
+            IppState.getState().server.lastIppVersion = '2.0';
+            render();
+        }
+
+        function simulateValidateJob() {
+            log('→ Sending Validate-Job request', 'info');
+            log('← Response: successful-ok (job is valid)', 'success');
+            IppState.getState().server.lastIppVersion = '2.0';
+            render();
+        }
+
+        function simulateGetJobs() {
+            log('→ Sending Get-Jobs request', 'info');
+            const jobs = IppState.getJobs();
+            log(`← Response: ${jobs.length} job(s) found`, 'success');
+            jobs.forEach(job => {
+                log(`  Job #${job.id}: "${job.name}" — state=${job.state}`, 'info');
+            });
+            IppState.getState().server.lastIppVersion = '2.0';
+            render();
+        }
+
+        function simulateCancelJob() {
+            const state = IppState.getState();
+            const pendingJob = state.jobs.find(j => j.state === 'pending' || j.state === 'processing');
+            if (!pendingJob) {
+                log('⚠ No pending/processing jobs to cancel', 'warn');
+                return;
+            }
+            log(`→ Sending Cancel-Job request for Job #${pendingJob.id}`, 'info');
+            const result = IppState.cancelJob(pendingJob.id);
+            if (result.success) {
+                log(`← Response: Job #${pendingJob.id} canceled`, 'success');
+            } else {
+                log(`← Error: ${result.error}`, 'error');
+            }
+            IppState.getState().server.lastIppVersion = '2.0';
+            render();
+        }
+
+        function simulatePrinterError() {
+            log('⚠ Simulating printer error: Paper jam', 'warn');
+            IppState.simulateError('Paper jam detected');
+            log('  Printer state changed to ERROR', 'error');
+            log('  Any processing jobs will be aborted', 'error');
+            render();
+        }
+
+        function resetState() {
+            IppState.reset();
+            logEntries = [];
+            log('State reset to initial', 'info');
+            render();
+            resetAllWalkthroughs();
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // WALKTHROUGHS
+        // ═══════════════════════════════════════════════════════════════
+
+        function switchTab(name) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.walkthrough').forEach(w => w.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById(`walkthrough-${name}`).classList.add('active');
+        }
+
+        function resetAllWalkthroughs() {
+            ['happy', 'multi', 'error', 'concurrent'].forEach(prefix => {
+                for (let i = 1; i <= 4; i++) {
+                    const step = document.getElementById(`${prefix}-step-${i}`);
+                    if (step) {
+                        step.classList.remove('completed', 'current');
+                        if (i === 1) step.classList.add('current');
+                        const btn = step.querySelector('button');
+                        if (btn) btn.disabled = i !== 1;
+                    }
+                }
+            });
+        }
+
+        function completeStep(prefix, stepNum) {
+            const step = document.getElementById(`${prefix}-step-${stepNum}`);
+            step.classList.remove('current');
+            step.classList.add('completed');
+            const btn = step.querySelector('button');
+            if (btn) btn.disabled = true;
+
+            const nextStep = document.getElementById(`${prefix}-step-${stepNum + 1}`);
+            if (nextStep) {
+                nextStep.classList.add('current');
+                const nextBtn = nextStep.querySelector('button');
+                if (nextBtn) nextBtn.disabled = false;
+            }
+        }
+
+        // Happy Path
+        function happyStep1() {
+            IppState.reset();
+            log('=== Happy Path Walkthrough ===', 'info');
+            log('Step 1: Client queries printer capabilities', 'info');
+            simulateGetPrinterAttributes();
+            completeStep('happy', 1);
+        }
+
+        function happyStep2() {
+            log('Step 2: Client sends print job', 'info');
+            simulatePrintJob();
+            completeStep('happy', 2);
+        }
+
+        function happyStep3() {
+            log('Step 3: Client checks job status', 'info');
+            const state = IppState.getState();
+            const lastJob = state.jobs[state.jobs.length - 1];
+            if (lastJob) {
+                const attrs = IppState.getJobAttributes(lastJob.id);
+                log(`← Job #${attrs['job-id']}: state=${attrs['job-state']}, user=${attrs['job-originating-user-name']}`, 'success');
+            }
+            completeStep('happy', 3);
+        }
+
+        function happyStep4() {
+            log('Step 4: Verify job completed', 'info');
+            setTimeout(() => {
+                const state = IppState.getState();
+                const lastJob = state.jobs[state.jobs.length - 1];
+                if (lastJob && lastJob.state === 'completed') {
+                    log('✓ Job completed successfully!', 'success');
+                    log('✓ Document printed to Windows spooler', 'success');
+                } else {
+                    log('⚠ Job still processing...', 'warn');
+                }
+                completeStep('happy', 4);
+                render();
+            }, 1200);
+        }
+
+        // Multi-Document
+        function multiStep1() {
+            IppState.reset();
+            log('=== Multi-Document Walkthrough ===', 'info');
+            log('Step 1: Create empty job', 'info');
+            const job = IppState.createJob('windows-client', 'MultiDoc_Report');
+            log(`← Response: job-id=${job.id}, job-state=pending`, 'success');
+            log('  Job created, waiting for documents...', 'info');
+            IppState.getState().server.lastIppVersion = '2.0';
+            render();
+            completeStep('multi', 1);
+        }
+
+        function multiStep2() {
+            log('Step 2: Send first document', 'info');
+            const state = IppState.getState();
+            const lastJob = state.jobs[state.jobs.length - 1];
+            if (lastJob) {
+                const result = IppState.addDocument(lastJob.id, { format: 'image/pwg-raster', data: 'page1_data' }, false);
+                if (result.success) {
+                    log(`← Response: successful-ok (document added to job #${lastJob.id})`, 'success');
+                }
+            }
+            render();
+            completeStep('multi', 2);
+        }
+
+        function multiStep3() {
+            log('Step 3: Send last document (triggers printing)', 'info');
+            const state = IppState.getState();
+            const lastJob = state.jobs[state.jobs.length - 1];
+            if (lastJob) {
+                const result = IppState.addDocument(lastJob.id, { format: 'image/pwg-raster', data: 'page2_data' }, true);
+                if (result.success) {
+                    lastJob.state = 'processing';
+                    IppState.getState().printer.state = 'processing';
+                    log(`← Response: successful-ok (last document, job queued for printing)`, 'success');
+                    log('  Job now processing...', 'info');
+                    setTimeout(() => {
+                        lastJob.state = 'completed';
+                        lastJob.completedAt = new Date().toISOString();
+                        IppState.getState().server.totalJobsProcessed++;
+                        IppState.getState().printer.state = 'idle';
+                        render();
+                    }, 1000);
+                }
+            }
+            render();
+            completeStep('multi', 3);
+        }
+
+        function multiStep4() {
+            log('Step 4: Verify job queued', 'info');
+            setTimeout(() => {
+                const state = IppState.getState();
+                const lastJob = state.jobs[state.jobs.length - 1];
+                if (lastJob && lastJob.state === 'completed') {
+                    log(`✓ Job #${lastJob.id} completed with ${lastJob.documents.length} documents`, 'success');
+                } else {
+                    log('⚠ Job still processing...', 'warn');
+                }
+                completeStep('multi', 4);
+                render();
+            }, 1200);
+        }
+
+        // Error Recovery
+        function errorStep1() {
+            IppState.reset();
+            log('=== Error Recovery Walkthrough ===', 'info');
+            log('Step 1: Send a print job', 'info');
+            simulatePrintJob();
+            completeStep('error', 1);
+        }
+
+        function errorStep2() {
+            log('Step 2: Simulate printer error', 'info');
+            simulatePrinterError();
+            completeStep('error', 2);
+        }
+
+        function errorStep3() {
+            log('Step 3: Check job status', 'info');
+            const state = IppState.getState();
+            const lastJob = state.jobs[state.jobs.length - 1];
+            if (lastJob) {
+                log(`← Job #${lastJob.id}: state=${lastJob.state}, error=${lastJob.errorMessage}`, lastJob.state === 'aborted' ? 'error' : 'info');
+            }
+            log(`← Printer state: ${state.printer.state} (${state.printer.stateReasons.join(', ')})`, 'error');
+            completeStep('error', 3);
+        }
+
+        function errorStep4() {
+            log('Step 4: Clear error and retry', 'info');
+            IppState.clearError();
+            log('  Printer error cleared', 'success');
+            log('  Sending new print job...', 'info');
+            simulatePrintJob();
+            completeStep('error', 4);
+        }
+
+        // Concurrent Jobs
+        function concurrentStep1() {
+            IppState.reset();
+            log('=== Concurrent Jobs Walkthrough ===', 'info');
+            log('Step 1: Sending 3 print jobs rapidly', 'info');
+            for (let i = 1; i <= 3; i++) {
+                const docName = `Concurrent_Doc_${i}.pdf`;
+                log(`→ Print-Job #${i}: "${docName}"`, 'info');
+                IppState.printJob('data', docName, 'image/pwg-raster');
+            }
+            log('← All 3 jobs queued', 'success');
+            IppState.getState().server.lastIppVersion = '2.0';
+            render();
+            completeStep('concurrent', 1);
+        }
+
+        function concurrentStep2() {
+            log('Step 2: Check all jobs queued', 'info');
+            const jobs = IppState.getJobs();
+            log(`← ${jobs.length} job(s) in queue:`, 'success');
+            jobs.forEach(job => {
+                log(`  Job #${job.id}: "${job.name}" — ${job.state}`, 'info');
+            });
+            completeStep('concurrent', 2);
+        }
+
+        function concurrentStep3() {
+            log('Step 3: Processing jobs...', 'info');
+            log('  (In real implementation, jobs process sequentially via Windows spooler)', 'info');
+            completeStep('concurrent', 3);
+        }
+
+        function concurrentStep4() {
+            log('Step 4: Verify all jobs completed', 'info');
+            setTimeout(() => {
+                const state = IppState.getState();
+                const completed = state.jobs.filter(j => j.state === 'completed').length;
+                log(`✓ ${completed}/${state.jobs.length} jobs completed`, 'success');
+                completeStep('concurrent', 4);
+                render();
+            }, 1500);
+        }
+
+        // Initial render
+        render();
+    </script>
+</body>
+</html>
