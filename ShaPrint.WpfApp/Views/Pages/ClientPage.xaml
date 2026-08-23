@@ -98,6 +98,7 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
@@ -112,7 +113,13 @@
                        Content="Delete" Appearance="Danger"
                        Icon="{ui:SymbolIcon Delete24}"/>
 
-            <ui:Button Grid.Column="2" 
+            <ui:Button Grid.Column="2" Margin="0,0,8,0"
+                       Command="{Binding ViewModel.AddIppPrinterCommand}"
+                       Content="Add IPP" Appearance="Info"
+                       Icon="{ui:SymbolIcon Globe24}"
+                       ToolTip="Add IPP printer (no driver needed)"/>
+
+            <ui:Button Grid.Column="3" 
                        Command="{Binding ViewModel.InstallSelectedCommand}"
                        Content="Install" Appearance="Success"
                        Icon="{ui:SymbolIcon ArrowDownload24}"/>

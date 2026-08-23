@@ -968,6 +968,78 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         }
 
         [RelayCommand]
+        private async Task AddIppPrinterAsync()
+        {
+            if (SelectedPrinter == null)
+            {
+                _snackbarService.Show(
+                    "No printer selected",
+                    "Please select a printer from the list first.",
+                    ControlAppearance.Caution,
+                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Warning24),
+                    TimeSpan.FromSeconds(3));
+                return;
+            }
+
+            var item = SelectedPrinter;
+            string serverIp = item.Server.IpAddress;
+            string printerName = item.Printer.Name;
+            string ippUrl = $"http://{serverIp}:631/printers/{Uri.EscapeDataString(printerName)}/ipp/print";
+
+            // Copy IPP URL to clipboard
+            try
+            {
+                System.Windows.Clipboard.SetText(ippUrl);
+                AppLogger.Log($"[CLIENT] IPP URL copied to clipboard: {ippUrl}");
+
+                _snackbarService.Show(
+                    "IPP URL Copied!",
+                    "URL copied to clipboard. Open Windows Settings → Printers → Add printer to use it.",
+                    ControlAppearance.Success,
+                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Copy24),
+                    TimeSpan.FromSeconds(7));
+
+                // Also show the URL in a dialog for easy reference
+                var dialog = new Wpf.Ui.Controls.ContentDialog
+                {
+                    Title = "Add IPP Printer",
+                    Content = $"IPP URL has been copied to clipboard:\n\n{ippUrl}\n\nTo add this printer:\n1. Open Windows Settings\n2. Go to Bluetooth & devices → Printers & scanners\n3. Click Add device\n4. Click Add a new device manually\n5. Select IPP Device\n6. Paste the URL",
+                    PrimaryButtonText = "Open Windows Settings",
+                    CloseButtonText = "Close",
+                    DefaultButton = Wpf.Ui.Controls.ContentDialogButton.Primary,
+                };
+
+                var result = await _contentDialogService.ShowAsync(dialog, CancellationToken.None);
+                if (result == Wpf.Ui.Controls.ContentDialogResult.Primary)
+                {
+                    // Open Windows Printers settings
+                    try
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = "ms-settings:printers",
+                            UseShellExecute = true
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Error("[CLIENT] Failed to open Windows Settings: " + ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[CLIENT] Failed to copy IPP URL: " + ex.Message);
+                _snackbarService.Show(
+                    "Copy failed",
+                    $"Could not copy URL: {ex.Message}",
+                    ControlAppearance.Danger,
+                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
+                    TimeSpan.FromSeconds(5));
+            }
+        }
+
+        [RelayCommand]
         private void CancelDownload()
         {
             _downloadCts?.Cancel();
