@@ -237,19 +237,20 @@ public class TestSpoolerAdapter : ISpoolerAdapter
 
     public void AddPrinter(PrinterInfo printer) => _printers.Add(printer);
 
-    public Task<SpoolerResult> PrintAsync(string printerName, byte[] data, string documentName, CancellationToken ct)
+    public Task<SpoolerResult> PrintAsync(PrintJob job, CancellationToken ct)
     {
-        var printer = _printers.FirstOrDefault(p => p.Name == printerName);
+        var printer = _printers.FirstOrDefault(p => p.Name == job.PrinterName);
         if (printer == null)
-            return Task.FromResult(SpoolerResult.Fail($"Printer '{printerName}' not found"));
+            return Task.FromResult(SpoolerResult.Fail($"Printer '{job.PrinterName}' not found"));
 
         var jobId = _nextJobId++;
         _printedJobs.Add(new PrintedJob
         {
             JobId = jobId,
-            PrinterName = printerName,
-            DocumentName = documentName,
-            Data = data
+            PrinterName = job.PrinterName,
+            DocumentName = job.DocumentName,
+            Data = job.Data,
+            DocumentFormat = job.DocumentFormat
         });
 
         return Task.FromResult(SpoolerResult.Ok(jobId));
@@ -265,6 +266,7 @@ public class PrintedJob
     public string PrinterName { get; init; } = string.Empty;
     public string DocumentName { get; init; } = string.Empty;
     public byte[] Data { get; init; } = Array.Empty<byte>();
+    public string? DocumentFormat { get; init; }
 }
 
 

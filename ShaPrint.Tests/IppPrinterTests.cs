@@ -9,6 +9,37 @@ namespace ShaPrint.Tests;
 public class IppPrinterTests
 {
     /// <summary>
+    /// Server must percent-decode the printer name in the request path so that
+    /// encoded names (spaces, special chars) match the real spooler printer.
+    /// </summary>
+    [Theory]
+    [InlineData("/printers/HP%20LaserJet/ipp/print", "HP LaserJet")]
+    [InlineData("/printers/Canon%20PIXMA/ipp/print", "Canon PIXMA")]
+    [InlineData("/printers/Printer%20%281%29/ipp/print", "Printer (1)")]
+    [InlineData("/printers/Printer%20%26%20Sons/ipp/print", "Printer & Sons")]
+    [InlineData("/printers/TestPrinter/ipp/print", "TestPrinter")]
+    public void IppUrl_RouteDecodesPrinterName(string path, string expectedName)
+    {
+        // Act
+        var printerName = IppHttpServer.ExtractPrinterNameFromPath(path);
+
+        // Assert
+        Assert.Equal(expectedName, printerName);
+    }
+
+    /// <summary>
+    /// Non-printer paths should not route to a printer server.
+    /// </summary>
+    [Theory]
+    [InlineData("/")]
+    [InlineData("/ipp/print")]
+    [InlineData(null)]
+    public void IppUrl_NonPrinterPath_ReturnsNull(string? path)
+    {
+        Assert.Null(IppHttpServer.ExtractPrinterNameFromPath(path));
+    }
+
+    /// <summary>
     /// IPP URL should be correctly formatted for printer name.
     /// </summary>
     [Theory]

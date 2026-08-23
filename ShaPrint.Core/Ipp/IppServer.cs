@@ -122,7 +122,7 @@ public class IppServer : IIppServer
                 NaturalLanguageConfigured = NaturalLanguage.En,
                 GeneratedNaturalLanguageSupported = [NaturalLanguage.En],
                 DocumentFormatDefault = "application/octet-stream",
-                DocumentFormatSupported = ["application/pdf", "image/pwg-raster", "image/urf", "application/octet-stream"],
+                DocumentFormatSupported = GetSupportedFormats(),
                 ColorSupported = true,
                 CopiesSupported = new SharpIpp.Protocol.Models.Range(1, 99),
                 OperationsSupported = [
@@ -150,12 +150,20 @@ public class IppServer : IIppServer
         var targetPrinter = printerName ?? ExtractPrinterName(request.OperationAttributes?.PrinterUri);
         var documentName = request.OperationAttributes?.JobName ?? "Untitled";
         var documentData = ReadDocumentData(request.Document);
+        var documentFormat = GetDocumentFormat(request);
 
         // Create job
         var job = _jobManager.CreateJob(targetPrinter, documentName);
 
-        // Send to spooler
-        var result = await _spooler.PrintAsync(targetPrinter, documentData, documentName, ct);
+        // Send to spooler (format travels with the document so the printer driver
+        // gets the data it actually understands rather than an implicit raw blob)
+        var result = await _spooler.PrintAsync(new PrintJob
+        {
+            PrinterName = targetPrinter,
+            Data = documentData,
+            DocumentName = documentName,
+            DocumentFormat = documentFormat
+        }, ct);
 
         if (result.Success)
         {
@@ -337,6 +345,38 @@ public class IppServer : IIppServer
         document.CopyTo(memoryStream);
         return memoryStream.ToArray();
     }
+
+    /// <summary>
+    /// MIME types this server can hand through to the Windows spooler.
+    /// These mirror what a Microsoft IPP class driver client actually sends.
+    /// </summary>
+    private static readonly HashSet<string> _supportedFormats =
+    [
+        "application/pdf",
+        "application/postscript",
+        "image/jpeg",
+        "image/pwg-raster",
+        "image/urf",
+        "text/plain",
+        "application/octet-stream"
+    ];
+
+    /// <summary>
+    /// Extract the client-declared document format. Returns <c>null</c> when the
+    /// client omitted it or sent a format we don't advertise as supported.
+    /// </summary>
+    private static string? GetDocumentFormat(PrintJobRequest request)
+    {
+        var declared = request.OperationAttributes?.DocumentFormat?.Value;
+        return declared != null && _supportedFormats.Contains(declared) ? declared : null;
+    }
+
+    /// <summary>
+    /// Formats advertised in Get-Printer-Attributes so the client renders in a
+    /// format this server can actually accept (fidelity depends on this being honest).
+    /// </summary>
+    private static string[] GetSupportedFormats() =>
+        ["application/pdf", "image/pwg-raster", "image/urf", "application/octet-stream"];
 }
 
 /// <summary>

@@ -84,11 +84,16 @@ public class WindowsSpoolerAdapter : ISpoolerAdapter
     private const uint PRINTER_ENUM_LOCAL = 2;
     private const uint PRINTER_ENUM_CONNECTIONS = 4;
 
-    public async Task<SpoolerResult> PrintAsync(string printerName, byte[] data, string documentName, CancellationToken ct)
+    public async Task<SpoolerResult> PrintAsync(PrintJob job, CancellationToken ct)
     {
         try
         {
-            bool success = await Task.Run(() => PrintRawData(printerName, data, documentName), ct);
+            if (!string.IsNullOrEmpty(job.DocumentFormat))
+            {
+                AppLogger.Log($"[IPP] Spooling '{job.DocumentName}' to '{job.PrinterName}' as {job.DocumentFormat} ({job.Data.Length} bytes)");
+            }
+
+            bool success = await Task.Run(() => PrintRawData(job.PrinterName, job.Data, job.DocumentName), ct);
 
             if (success)
             {

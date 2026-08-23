@@ -67,6 +67,57 @@ public class IppServerTests
     }
 
     /// <summary>
+    /// The document format declared by the client must travel through the spooler
+    /// seam, so the printer driver knows what it is receiving (fidelity depends on
+    /// this not being dropped).
+    /// </summary>
+    [Fact]
+    public async Task PrintJob_CarriesDocumentFormat_ToSpooler()
+    {
+        // Arrange
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "TestPrinter", DriverName = "Generic Driver" });
+        var server = new IppServer(spooler);
+
+        var requestBytes = IppRequestBuilder.BuildPrintJobRequest("TestPrinter", new byte[] { 0x50 }, "image/pwg-raster");
+
+        using var inputStream = new MemoryStream(requestBytes);
+        using var outputStream = new MemoryStream();
+
+        // Act
+        await server.ProcessRequestAsync(inputStream, outputStream);
+
+        // Assert
+        Assert.Single(spooler.PrintedJobs);
+        Assert.Equal("image/pwg-raster", spooler.PrintedJobs[0].DocumentFormat);
+    }
+
+    /// <summary>
+    /// A client format we don't advertise as supported should not be passed through
+    /// blindly; the server stays honest about what it can hand to the driver.
+    /// </summary>
+    [Fact]
+    public async Task PrintJob_UnsupportedDocumentFormat_IsDropped()
+    {
+        // Arrange
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "TestPrinter", DriverName = "Generic Driver" });
+        var server = new IppServer(spooler);
+
+        var requestBytes = IppRequestBuilder.BuildPrintJobRequest("TestPrinter", new byte[] { 0x50 }, "application/x-unknown");
+
+        using var inputStream = new MemoryStream(requestBytes);
+        using var outputStream = new MemoryStream();
+
+        // Act
+        await server.ProcessRequestAsync(inputStream, outputStream);
+
+        // Assert
+        Assert.Single(spooler.PrintedJobs);
+        Assert.Null(spooler.PrintedJobs[0].DocumentFormat);
+    }
+
+    /// <summary>
     /// RED: Get-Jobs should return list of jobs.
     /// </summary>
     [Fact]
@@ -487,21 +538,22 @@ public class InMemorySpoolerAdapter : ISpoolerAdapter
         _printers.Add(printer);
     }
 
-    public Task<SpoolerResult> PrintAsync(string printerName, byte[] data, string documentName, CancellationToken ct)
+    public Task<SpoolerResult> PrintAsync(PrintJob job, CancellationToken ct)
     {
-        var printer = _printers.FirstOrDefault(p => p.Name == printerName);
+        var printer = _printers.FirstOrDefault(p => p.Name == job.PrinterName);
         if (printer == null)
         {
-            return Task.FromResult(SpoolerResult.Fail($"Printer '{printerName}' not found"));
+            return Task.FromResult(SpoolerResult.Fail($"Printer '{job.PrinterName}' not found"));
         }
 
         var jobId = _nextJobId++;
         _printedJobs.Add(new PrintedJob
         {
             JobId = jobId,
-            PrinterName = printerName,
-            DocumentName = documentName,
-            Data = data
+            PrinterName = job.PrinterName,
+            DocumentName = job.DocumentName,
+            Data = job.Data,
+            DocumentFormat = job.DocumentFormat
         });
 
         return Task.FromResult(SpoolerResult.Ok(jobId));
@@ -519,4 +571,5 @@ public class PrintedJob
     public string PrinterName { get; init; } = string.Empty;
     public string DocumentName { get; init; } = string.Empty;
     public byte[] Data { get; init; } = Array.Empty<byte>();
+    public string? DocumentFormat { get; init; }
 }

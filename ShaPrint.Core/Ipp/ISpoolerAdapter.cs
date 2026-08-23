@@ -11,12 +11,30 @@ public interface ISpoolerAdapter
     /// Send print data to the spooler for the specified printer.
     /// Returns success/failure with optional error message.
     /// </summary>
-    Task<SpoolerResult> PrintAsync(string printerName, byte[] data, string documentName, CancellationToken ct);
+    Task<SpoolerResult> PrintAsync(PrintJob job, CancellationToken ct);
 
     /// <summary>
     /// Get list of available printers from the spooler.
     /// </summary>
     Task<IReadOnlyList<PrinterInfo>> GetPrintersAsync(CancellationToken ct);
+}
+
+/// <summary>
+/// A resolved print job: the document bytes plus everything the spooler needs
+/// to hand it to a printer driver correctly. Carries format together with data
+/// so the adapter never drops what the client actually rendered.
+/// </summary>
+public record PrintJob
+{
+    public required string PrinterName { get; init; }
+    public required byte[] Data { get; init; }
+    public string DocumentName { get; init; } = "Untitled";
+
+    /// <summary>
+    /// MIME type of the document (e.g. image/pwg-raster, image/urf, application/pdf).
+    /// Set by the server from the IPP request; empty when the client supplied none.
+    /// </summary>
+    public string? DocumentFormat { get; init; }
 }
 
 /// <summary>

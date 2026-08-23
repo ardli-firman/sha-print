@@ -27,6 +27,9 @@ public static class IppRequestBuilder
     }
 
     public static byte[] BuildPrintJobRequest(string printerName, byte[] documentData)
+        => BuildPrintJobRequest(printerName, documentData, documentFormat: null);
+
+    public static byte[] BuildPrintJobRequest(string printerName, byte[] documentData, string? documentFormat)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms);
@@ -41,6 +44,11 @@ public static class IppRequestBuilder
         WriteStringAttribute(writer, 0x48, "attributes-natural-language", "en");
         WriteStringAttribute(writer, 0x45, "printer-uri", $"ipp://localhost:631/printers/{printerName}");
         WriteStringAttribute(writer, 0x42, "job-name", "TestJob");
+        if (documentFormat != null)
+        {
+            // 0x44 = document-format keyword attribute
+            WriteStringAttribute(writer, 0x44, "document-format", documentFormat);
+        }
         writer.Write((byte)0x03);
 
         // Document data

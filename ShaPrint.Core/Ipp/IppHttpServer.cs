@@ -1,6 +1,10 @@
 using System.Net;
 using System.Text;
 
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("ShaPrint.Tests")]
+
 namespace ShaPrint.Core.Ipp;
 
 /// <summary>
@@ -164,23 +168,31 @@ public class IppHttpServer : IDisposable
     /// </summary>
     private IppServer RouteToPrinterServer(Uri? url)
     {
-        if (url == null) return _defaultServer;
+        var printerName = ExtractPrinterNameFromPath(url?.AbsolutePath);
+        return printerName != null ? GetOrCreatePrinterServer(printerName) : _defaultServer;
+    }
 
-        var path = url.AbsolutePath;
+    /// <summary>
+    /// Extract the decoded printer name from a request path of the form
+    /// <c>/printers/{name}/ipp/print</c>. Returns <c>null</c> for non-printer paths.
+    /// Percent-encoding is decoded so names with spaces/special chars resolve to the real spooler printer.
+    /// </summary>
+    internal static string? ExtractPrinterNameFromPath(string? path)
+    {
+        if (path == null) return null;
 
-        // Check for /printers/{name}/ pattern
         if (path.StartsWith("/printers/", StringComparison.OrdinalIgnoreCase))
         {
             var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
             if (segments.Length >= 2)
             {
-                var printerName = segments[1]; // "printers" is [0], name is [1]
-                return GetOrCreatePrinterServer(printerName);
+                // segments[1] is the percent-encoded printer name; decode it so
+                // names with spaces/special chars match the real spooler printer.
+                return Uri.UnescapeDataString(segments[1]);
             }
         }
 
-        // Default: multi-printer mode
-        return _defaultServer;
+        return null;
     }
 
     /// <summary>
