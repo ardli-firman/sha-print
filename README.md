@@ -16,6 +16,7 @@ By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TC
 
 - 🎭 **Unified Application:** One executable handles everything. Operate as a **Server** (hosting the physical printer) or a **Client** (routing the documents) from a single unified interface.
 - 💎 **Native Driver Quality:** Unlike traditional workarounds that degrade quality to *Generic/Text* or PDF rasterization, ShaPrint leverages the official printer driver (e.g., Epson, HP, Canon) on the Client side. Margins, colors, and layouts are preserved perfectly.
+- 🌐 **IPP Printing (New!):** Industry-standard Internet Printing Protocol support. Clients can print without installing drivers — just add an IPP printer using the built-in Windows driver. Cross-platform compatible (Windows, macOS, iOS, Android).
 - 🌍 **Cross-VLAN Support:** Use the *Specific Server IP* feature to bypass router boundaries, allowing Clients to connect to Servers located in entirely different subnets or VLANs.
 - 🔄 **IP Change Auto-Detection:** Automatically detects when the server IP changes (e.g., DHCP reallocation, network migration) using a stable, unique server identity. It dynamically updates client configurations and restarts active pipe listeners without user intervention or print interruption.
 - 🔒 **Enterprise-Grade Security:** Network communication is secured via a shared **Network Channel** password. All discovery payloads are verified using **HMAC signatures**, ensuring only authorized clients can discover or print to your server.
@@ -142,10 +143,60 @@ ShaPrint is packaged as a fully self-contained Standalone Setup. You do **not** 
 
 ## 📖 How to Use
 
-> [!IMPORTANT]  
+### Printing Methods
+
+ShaPrint supports **two printing methods**:
+
+| Method | Driver Required | Setup | Best For |
+|--------|----------------|-------|----------|
+| **IPP Printing** (Recommended) | ❌ No | One-time Windows setup | Most users, cross-platform |
+| **Legacy Printing** | ✅ Yes | Install driver on client | High-fidelity, specific drivers |
+
+---
+
+### Method 1: IPP Printing (Recommended)
+
+> [!TIP]
+> **No driver installation needed!** IPP printing uses the built-in Windows driver. Works on Windows, macOS, iOS, and Android.
+
+#### Server Setup
+1. Open ShaPrint and select the **Server** tab.
+2. Check the printers you want to share.
+3. Click **Start Server**.
+4. The IPP server starts automatically on **port 631**.
+
+#### Client Setup (Windows)
+1. Open ShaPrint and select the **Client** tab.
+2. Click **Scan LAN** to discover servers.
+3. Select a printer from the list.
+4. Click **Add IPP** button.
+5. The IPP URL is copied to clipboard.
+6. Open **Windows Settings → Printers & scanners → Add device**.
+7. Click **Add a new device manually**.
+8. Select **IPP Device** and paste the URL.
+9. Done! The printer appears in your print dialog.
+
+#### Client Setup (macOS)
+1. Open **System Preferences → Printers & Scanners**.
+2. Click **+** to add a printer.
+3. Select **IP** tab.
+4. Enter the server IP address.
+5. Protocol: **IPP**.
+6. Queue: `/ipp/print`.
+7. Click **Add**.
+
+#### Client Setup (iOS/Android)
+- **iOS:** Print from any app → Select printer (auto-discovered via AirPrint).
+- **Android:** Install **Mopria Print Service** → Print from any app.
+
+---
+
+### Method 2: Legacy Printing
+
+> [!IMPORTANT]
 > **Native Driver Requirement:** To guarantee print fidelity, you **must install the official printer driver on the Client PC**. For example, if the Server is hosting an Epson L3210, you must install the Epson L3210 driver on the Client PC beforehand.
 
-### 1. On the Server PC (Hosting the Printer)
+#### Server Setup
 1. Open ShaPrint from your Desktop.
 2. Ensure you and your clients agree on a **Network Channel** password in the Settings.
 3. Select the **Server** tab.
@@ -153,7 +204,7 @@ ShaPrint is packaged as a fully self-contained Standalone Setup. You do **not** 
 5. Click **Start Server**.
 6. You may now close the window; the application will silently minimize to the System Tray.
 
-### 2. On the Client PC (Sending Print Jobs)
+#### Client Setup
 1. Open ShaPrint. 
 2. Ensure your **Network Channel** password matches the Server's exactly.
 3. Select the **Client** tab.
@@ -162,7 +213,9 @@ ShaPrint is packaged as a fully self-contained Standalone Setup. You do **not** 
 5. Select your target printer from the list and click **Install Selected Printer**.
 6. Open any application, press `Ctrl + P`, select `ShaPrint - [Printer Name]`, and **Print!**
 
-### 3. Monitoring Server Status
+---
+
+### Monitoring Server Status
 1. Open ShaPrint.
 2. Select the **Monitor** tab from the sidebar.
 3. The dashboard will automatically scan and list all active servers on your network channel, displaying their status, connected clients, recent jobs, and active printer/scanner status.
@@ -194,6 +247,14 @@ Your compiled installer (`ShaPrint_Setup_v1.0.x.exe`) will be generated inside t
 ---
 
 ## 🛠 Troubleshooting
+
+### IPP Printing Issues
+
+- **Printer not found in Windows:** Ensure port `631/TCP` is open on the Server's Windows Firewall. The IPP server starts automatically when you start the ShaPrint server.
+- **Connection timeout:** Check if the server IP is correct. Use the "Specific Server IP" feature if on a different VLAN.
+- **Print job fails:** Verify the physical printer is online and working on the Server PC.
+
+### Legacy Printing Issues
 
 - **Error: "Driver X is not installed on this computer" (Client):** You must install the official manufacturer driver for the printer on the Client PC before ShaPrint can create the virtual printer.
 - **HMAC Verification Failed:** The Client and Server do not share the same Network Channel password. Update the Network Channel in Settings to match exactly.
