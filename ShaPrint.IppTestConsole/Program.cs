@@ -52,6 +52,16 @@ class Program
         await TestValidateJob(server);
         Console.WriteLine();
 
+        // Test 6: Multi-printer - specific printer
+        Console.WriteLine("Test 6: Multi-printer - specific printer (OfficePrinter)");
+        await TestSpecificPrinter(spooler);
+        Console.WriteLine();
+
+        // Test 7: Multi-printer - print to specific printer
+        Console.WriteLine("Test 7: Multi-printer - print to OfficePrinter");
+        await TestPrintToSpecificPrinter(spooler);
+        Console.WriteLine();
+
         Console.WriteLine("=== All tests completed ===");
     }
 
@@ -172,6 +182,45 @@ class Program
         var response = output.ToArray();
         Console.WriteLine($"  Response: {response.Length} bytes");
         Console.WriteLine("  ✓ Validate-Job completed");
+    }
+
+    static async Task TestSpecificPrinter(TestSpoolerAdapter spooler)
+    {
+        // Create server for specific printer
+        var server = new IppServer(spooler, "OfficePrinter");
+        
+        var request = IppRequestBuilder.BuildGetPrinterAttributesRequest();
+        using var input = new MemoryStream(request);
+        using var output = new MemoryStream();
+
+        await server.ProcessRequestAsync(input, output);
+
+        var response = output.ToArray();
+        var text = System.Text.Encoding.ASCII.GetString(response);
+        
+        if (text.Contains("OfficePrinter"))
+            Console.WriteLine("  ✓ Response contains 'OfficePrinter'");
+        else
+            Console.WriteLine("  ✗ Response missing 'OfficePrinter'");
+    }
+
+    static async Task TestPrintToSpecificPrinter(TestSpoolerAdapter spooler)
+    {
+        // Create server for specific printer
+        var server = new IppServer(spooler, "OfficePrinter");
+        
+        var document = System.Text.Encoding.UTF8.GetBytes("Print to OfficePrinter");
+        var request = IppRequestBuilder.BuildPrintJobRequest("OfficePrinter", document);
+        using var input = new MemoryStream(request);
+        using var output = new MemoryStream();
+
+        await server.ProcessRequestAsync(input, output);
+
+        var lastJob = spooler.PrintedJobs.LastOrDefault();
+        if (lastJob != null && lastJob.PrinterName == "OfficePrinter")
+            Console.WriteLine($"  ✓ Job created for OfficePrinter (ID={lastJob.JobId})");
+        else
+            Console.WriteLine("  ✗ Job not created for OfficePrinter");
     }
 }
 

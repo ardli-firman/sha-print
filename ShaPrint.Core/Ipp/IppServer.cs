@@ -11,6 +11,7 @@ namespace ShaPrint.Core.Ipp;
 /// <summary>
 /// IPP print server implementation.
 /// Deep module: one ProcessRequestAsync method handles the entire IPP lifecycle.
+/// Supports multi-printer mode (extract from request) or single-printer mode (configured).
 /// </summary>
 public class IppServer : IIppServer
 {
@@ -18,13 +19,30 @@ public class IppServer : IIppServer
     private readonly SharpIppServer _ippProtocol;
     private readonly PrinterState _printerState;
     private readonly JobManager _jobManager;
+    private readonly string? _configuredPrinterName;
 
+    /// <summary>
+    /// Multi-printer mode: printer name extracted from IPP request.
+    /// </summary>
     public IppServer(ISpoolerAdapter spooler)
     {
         _spooler = spooler;
         _ippProtocol = new SharpIppServer();
         _printerState = new PrinterState();
         _jobManager = new JobManager();
+        _configuredPrinterName = null;
+    }
+
+    /// <summary>
+    /// Single-printer mode: printer name configured at construction.
+    /// </summary>
+    public IppServer(ISpoolerAdapter spooler, string printerName)
+    {
+        _spooler = spooler;
+        _ippProtocol = new SharpIppServer();
+        _printerState = new PrinterState();
+        _jobManager = new JobManager();
+        _configuredPrinterName = printerName;
     }
 
     public async Task ProcessRequestAsync(Stream inputStream, Stream outputStream, CancellationToken ct = default)
@@ -34,11 +52,14 @@ public class IppServer : IIppServer
             // 1. Parse IPP request
             IIppRequest request = await _ippProtocol.ReceiveRequestAsync(inputStream);
 
-            // 2. Route to handler
+            // 2. Extract printer name from request or use configured one
+            var printerName = _configuredPrinterName ?? ExtractPrinterNameFromRequest(request);
+
+            // 3. Route to handler with printer context
             IIppResponse response = request switch
             {
-                GetPrinterAttributesRequest r => await HandleGetPrinterAttributesAsync(r, ct),
-                PrintJobRequest r => await HandlePrintJobAsync(r, ct),
+                GetPrinterAttributesRequest r => await HandleGetPrinterAttributesAsync(r, printerName, ct),
+                PrintJobRequest r => await HandlePrintJobAsync(r, printerName, ct),
                 GetJobAttributesRequest r => HandleGetJobAttributes(r),
                 GetJobsRequest r => HandleGetJobs(r),
                 CancelJobRequest r => HandleCancelJob(r),
@@ -46,7 +67,7 @@ public class IppServer : IIppServer
                 _ => HandleUnsupportedOperation(request)
             };
 
-            // 3. Serialize and send response
+            // 4. Serialize and send response
             IIppResponseMessage rawResponse = await _ippProtocol.CreateRawResponseAsync(response);
             await _ippProtocol.SendRawResponseAsync(rawResponse, outputStream);
         }
@@ -72,11 +93,20 @@ public class IppServer : IIppServer
     // ═══════════════════════════════════════════════════════════════
 
     private async Task<GetPrinterAttributesResponse> HandleGetPrinterAttributesAsync(
-        GetPrinterAttributesRequest request, CancellationToken ct)
+        GetPrinterAttributesRequest request, string? printerName, CancellationToken ct)
     {
         var printers = await _spooler.GetPrintersAsync(ct);
-        var firstPrinter = printers.FirstOrDefault();
-        var printerName = firstPrinter?.Name ?? "ShaPrint";
+        
+        // Find the specific printer or use first one
+        PrinterInfo? targetPrinter = null;
+        if (printerName != null)
+        {
+            targetPrinter = printers.FirstOrDefault(p => 
+                p.Name.Equals(printerName, StringComparison.OrdinalIgnoreCase));
+        }
+        targetPrinter ??= printers.FirstOrDefault();
+        
+        var resolvedName = targetPrinter?.Name ?? printerName ?? "ShaPrint";
 
         return new GetPrinterAttributesResponse
         {
@@ -85,7 +115,7 @@ public class IppServer : IIppServer
             StatusCode = IppStatusCode.SuccessfulOk,
             PrinterAttributes = new()
             {
-                PrinterName = printerName,
+                PrinterName = resolvedName,
                 PrinterState = _printerState.IsProcessing ? SharpIpp.Protocol.Models.PrinterState.Processing : SharpIpp.Protocol.Models.PrinterState.Idle,
                 CharsetConfigured = "utf-8",
                 CharsetSupported = ["utf-8"],
@@ -108,23 +138,24 @@ public class IppServer : IIppServer
                     new IppVersion(1, 1),
                     new IppVersion(2, 0)
                 ],
-                PrinterUriSupported = [new Uri($"ipp://localhost:631/printers/{printerName}")],
+                PrinterUriSupported = [new Uri($"ipp://localhost:631/printers/{resolvedName}")],
                 QueuedJobCount = _jobManager.ActiveJobCount
             }
         };
     }
 
-    private async Task<PrintJobResponse> HandlePrintJobAsync(PrintJobRequest request, CancellationToken ct)
+    private async Task<PrintJobResponse> HandlePrintJobAsync(PrintJobRequest request, string? printerName, CancellationToken ct)
     {
-        var printerName = ExtractPrinterName(request.OperationAttributes?.PrinterUri);
+        // Use provided printer name or extract from request
+        var targetPrinter = printerName ?? ExtractPrinterName(request.OperationAttributes?.PrinterUri);
         var documentName = request.OperationAttributes?.JobName ?? "Untitled";
         var documentData = ReadDocumentData(request.Document);
 
         // Create job
-        var job = _jobManager.CreateJob(printerName, documentName);
+        var job = _jobManager.CreateJob(targetPrinter, documentName);
 
         // Send to spooler
-        var result = await _spooler.PrintAsync(printerName, documentData, documentName, ct);
+        var result = await _spooler.PrintAsync(targetPrinter, documentData, documentName, ct);
 
         if (result.Success)
         {
@@ -263,6 +294,20 @@ public class IppServer : IIppServer
     // ═══════════════════════════════════════════════════════════════
     // Helpers
     // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Extract printer name from IPP request (printer-uri attribute).
+    /// </summary>
+    private static string? ExtractPrinterNameFromRequest(IIppRequest request)
+    {
+        return request switch
+        {
+            GetPrinterAttributesRequest r => ExtractPrinterName(r.OperationAttributes?.PrinterUri),
+            PrintJobRequest r => ExtractPrinterName(r.OperationAttributes?.PrinterUri),
+            ValidateJobRequest r => ExtractPrinterName(r.OperationAttributes?.PrinterUri),
+            _ => null
+        };
+    }
 
     private static int? GetJobIdFromRequest(object? operationAttributes)
     {
