@@ -106,7 +106,8 @@ namespace ShaPrint.WpfApp.Services.Client
             string expectedPackageId,
             long expectedSize,
             IProgress<double>? progress,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            TimeSpan? transferTimeout = null)
         {
             string tempDir = Path.Combine(_cacheRoot, $"tmp_{Guid.NewGuid():N}");
             string tempZipPath = Path.Combine(tempDir, "package.zip");
@@ -118,7 +119,7 @@ namespace ShaPrint.WpfApp.Services.Client
                 AppLogger.Log($"[DRIVER_PKG_CLIENT] Connecting to {serverIp}:{Constants.PrintTcpPort}...");
                 var connectTask = client.ConnectAsync(serverIp, Constants.PrintTcpPort);
                 using var transferDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                transferDeadline.CancelAfter(Constants.DriverPackageTransferTimeoutMs);
+                transferDeadline.CancelAfter(transferTimeout ?? TimeSpan.FromMilliseconds(Constants.DriverPackageTransferTimeoutMs));
                 if (await Task.WhenAny(connectTask, Task.Delay(Timeout.InfiniteTimeSpan, transferDeadline.Token)).ConfigureAwait(false) != connectTask)
                 {
                     transferDeadline.Token.ThrowIfCancellationRequested();
@@ -492,6 +493,22 @@ namespace ShaPrint.WpfApp.Services.Client
                     ErrorMessage = "Driver transfer timed out — server stalled.",
                     TimedOut = true
                 };
+
+        internal Task<DriverDownloadResult> DownloadDriverPackageForTestAsync(
+            string serverIp,
+            string printerName,
+            string expectedPackageId,
+            long expectedSize,
+            TimeSpan transferTimeout,
+            CancellationToken cancellationToken = default)
+            => DownloadFromServerAsync(
+                serverIp,
+                printerName,
+                expectedPackageId,
+                expectedSize,
+                progress: null,
+                cancellationToken: cancellationToken,
+                transferTimeout: transferTimeout);
 
         private static void TryDeleteDirectory(string directory)
         {
