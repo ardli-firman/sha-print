@@ -218,19 +218,25 @@ namespace ShaPrint.Tests
             if (!OperatingSystem.IsWindows())
                 return;
 
-            string arguments = "-NoProfile -Command \"$child = Start-Process powershell.exe -ArgumentList '-NoProfile -Command Start-Sleep -Seconds 30' -PassThru; Write-Output $child.Id; Wait-Process -Id $child.Id\"";
+            string pidPath = Path.Combine(Path.GetTempPath(), "ShaPrint-driver-child-" + Guid.NewGuid().ToString("N") + ".txt");
+            string escapedPath = pidPath.Replace("'", "''", StringComparison.Ordinal);
+            string arguments = $"-NoProfile -Command \"$child = Start-Process powershell.exe -ArgumentList '-NoProfile -Command Start-Sleep -Seconds 30' -PassThru; Set-Content -LiteralPath '{escapedPath}' -Value $child.Id; Wait-Process -Id $child.Id\"";
             int childPid = 0;
             try
             {
                 var result = await new RealProcessRunner().RunAsync(
-                    "powershell.exe", arguments, TimeSpan.FromSeconds(1));
+                    "powershell.exe", arguments, TimeSpan.FromSeconds(2));
                 Assert.False(result.Success);
-                Assert.True(int.TryParse(result.Output.Trim(), out childPid), result.Output);
+                for (int i = 0; i < 20 && !File.Exists(pidPath); i++)
+                    await Task.Delay(50);
+                Assert.True(File.Exists(pidPath));
+                Assert.True(int.TryParse(File.ReadAllText(pidPath), out childPid));
                 Assert.True(WaitForProcessExit(childPid, TimeSpan.FromSeconds(2)));
             }
             finally
             {
                 TryKillProcess(childPid);
+                try { File.Delete(pidPath); } catch { }
             }
         }
 

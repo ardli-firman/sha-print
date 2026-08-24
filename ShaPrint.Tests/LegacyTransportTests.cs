@@ -166,23 +166,25 @@ public class LegacyTransportTests
     public async Task PrintReceiver_Timeout_DefersSpoolBufferCleanupUntilUnderlyingTaskCompletes()
     {
         var spoolerCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        byte[]? capturedBuffer = null;
+        var captureStarted = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         var receiver = CreateReceiver(printerExists: true, spoolerAccepts: true);
         receiver.SubmitPrintAsync = (_, data, _) =>
         {
-            capturedBuffer = data;
+            captureStarted.TrySetResult(data);
             return spoolerCompletion.Task;
         };
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(25));
+        using var cancellation = new CancellationTokenSource();
 
-        LegacyAcknowledgement acknowledgement = await receiver.ProcessLegacyEnvelopePrintAsync(CreateEnvelope(130), "loopback", cancellation.Token);
+        Task<LegacyAcknowledgement> processing = receiver.ProcessLegacyEnvelopePrintAsync(CreateEnvelope(130), "loopback", cancellation.Token);
+        byte[] capturedBuffer = await captureStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+        LegacyAcknowledgement acknowledgement = await processing;
 
         Assert.Equal(LegacyAcknowledgementStatus.Timeout, acknowledgement.Status);
-        Assert.NotNull(capturedBuffer);
         Assert.Contains(capturedBuffer!, value => value != 0);
 
         spoolerCompletion.SetResult(true);
-        for (int attempt = 0; attempt < 20 && capturedBuffer!.Any(value => value != 0); attempt++)
+        for (int attempt = 0; attempt < 20 && capturedBuffer.Any(value => value != 0); attempt++)
             await Task.Delay(10);
 
         Assert.All(capturedBuffer!, value => Assert.Equal(0, value));
