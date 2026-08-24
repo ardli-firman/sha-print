@@ -4,8 +4,21 @@ using System.Runtime.InteropServices;
 
 namespace ShaPrint.Server
 {
+    internal interface ISpoolerApiNative
+    {
+        bool OpenPrinter(string printerName, out IntPtr handle);
+        bool ClosePrinter(IntPtr handle);
+        int StartDocPrinter(IntPtr handle, string documentName);
+        bool EndDocPrinter(IntPtr handle);
+        bool StartPagePrinter(IntPtr handle);
+        bool EndPagePrinter(IntPtr handle);
+        bool WritePrinter(IntPtr handle, IntPtr bytes, int count, out int written);
+        bool SetJob(IntPtr handle, int jobId);
+    }
+
     public static class SpoolerApi
     {
+        private const uint MaxPrinterEnumerationBytes = 16 * 1024 * 1024;
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
         public class DOCINFO
         {
@@ -86,28 +99,31 @@ namespace ShaPrint.Server
 
         public static List<string> GetLocalPrinters()
         {
-            var printers = new List<string>();
+            try
+            {
+                var printers = new List<string>();
             uint flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
             uint cbNeeded = 0;
             uint cReturned = 0;
 
             EnumPrinters(flags, null, 2, IntPtr.Zero, 0, out cbNeeded, out cReturned);
-            if (cbNeeded > 0)
+            if (cbNeeded > 0 && cbNeeded <= MaxPrinterEnumerationBytes)
             {
                 IntPtr pAddr = Marshal.AllocHGlobal((int)cbNeeded);
                 try
                 {
                     if (EnumPrinters(flags, null, 2, pAddr, cbNeeded, out cbNeeded, out cReturned))
                     {
-                        var infoArray = new PRINTER_INFO_2[cReturned];
                         Type type = typeof(PRINTER_INFO_2);
                         int increment = Marshal.SizeOf(type);
-                        
+                        if ((long)increment * cReturned > MaxPrinterEnumerationBytes || (long)increment * cReturned > cbNeeded)
+                            return printers;
+
                         for (int i = 0; i < cReturned; i++)
                         {
                             IntPtr currentAddr = IntPtr.Add(pAddr, i * increment);
-                            infoArray[i] = (PRINTER_INFO_2)Marshal.PtrToStructure(currentAddr, type)!;
-                            printers.Add(infoArray[i].pPrinterName);
+                            var info = (PRINTER_INFO_2)Marshal.PtrToStructure(currentAddr, type)!;
+                            printers.Add(info.pPrinterName);
                         }
                     }
                 }
@@ -116,36 +132,45 @@ namespace ShaPrint.Server
                     Marshal.FreeHGlobal(pAddr);
                 }
             }
-            return printers;
+                return printers;
+            }
+            catch (Exception ex)
+            {
+                ShaPrint.Core.AppLogger.Error($"[SPOOLER] Printer enumeration failed: {ex.Message}");
+                return new List<string>();
+            }
         }
 
         public static List<ShaPrint.Core.Network.PrinterInfo> GetLocalPrintersDetailed()
         {
-            var printers = new List<ShaPrint.Core.Network.PrinterInfo>();
+            try
+            {
+                var printers = new List<ShaPrint.Core.Network.PrinterInfo>();
             uint flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
             uint cbNeeded = 0;
             uint cReturned = 0;
 
             EnumPrinters(flags, null, 2, IntPtr.Zero, 0, out cbNeeded, out cReturned);
-            if (cbNeeded > 0)
+            if (cbNeeded > 0 && cbNeeded <= MaxPrinterEnumerationBytes)
             {
                 IntPtr pAddr = Marshal.AllocHGlobal((int)cbNeeded);
                 try
                 {
                     if (EnumPrinters(flags, null, 2, pAddr, cbNeeded, out cbNeeded, out cReturned))
                     {
-                        var infoArray = new PRINTER_INFO_2[cReturned];
                         Type type = typeof(PRINTER_INFO_2);
                         int increment = Marshal.SizeOf(type);
-                        
+                        if ((long)increment * cReturned > MaxPrinterEnumerationBytes || (long)increment * cReturned > cbNeeded)
+                            return printers;
+
                         for (int i = 0; i < cReturned; i++)
                         {
                             IntPtr currentAddr = IntPtr.Add(pAddr, i * increment);
-                            infoArray[i] = (PRINTER_INFO_2)Marshal.PtrToStructure(currentAddr, type)!;
+                            var info = (PRINTER_INFO_2)Marshal.PtrToStructure(currentAddr, type)!;
                             printers.Add(new ShaPrint.Core.Network.PrinterInfo 
                             {
-                                Name = infoArray[i].pPrinterName ?? "",
-                                DriverName = infoArray[i].pDriverName ?? ""
+                                Name = info.pPrinterName ?? "",
+                                DriverName = info.pDriverName ?? ""
                             });
                         }
                     }
@@ -155,96 +180,187 @@ namespace ShaPrint.Server
                     Marshal.FreeHGlobal(pAddr);
                 }
             }
-            return printers;
+                return printers;
+            }
+            catch (Exception ex)
+            {
+                ShaPrint.Core.AppLogger.Error($"[SPOOLER] Detailed printer enumeration failed: {ex.Message}");
+                return new List<ShaPrint.Core.Network.PrinterInfo>();
+            }
         }
 
-        public static async System.Threading.Tasks.Task<bool> PrintRawDataAsync(string printerName, byte[] data, string documentName, TimeSpan? timeout = null)
+        public static System.Threading.Tasks.Task<bool> PrintRawDataAsync(
+            string printerName,
+            byte[] data,
+            string documentName,
+            TimeSpan? timeout = null,
+            System.Threading.CancellationToken cancellationToken = default)
+            => PrintRawDataAsync(printerName, data, documentName, timeout, cancellationToken, new Win32SpoolerApiNative());
+
+        internal static async System.Threading.Tasks.Task<bool> PrintRawDataAsync(
+            string printerName,
+            byte[] data,
+            string documentName,
+            TimeSpan? timeout,
+            System.Threading.CancellationToken cancellationToken,
+            ISpoolerApiNative native)
         {
             TimeSpan actualTimeout = timeout ?? TimeSpan.FromSeconds(120);
-            int jobId = 0;
+            if (actualTimeout <= TimeSpan.Zero || actualTimeout == System.Threading.Timeout.InfiniteTimeSpan)
+                return false;
+            if (cancellationToken.IsCancellationRequested)
+                return false;
 
+            var state = new SpoolerJobState();
             var printTask = System.Threading.Tasks.Task.Factory.StartNew(() =>
             {
-                IntPtr pBytes = Marshal.AllocCoTaskMem(data.Length);
-                Marshal.Copy(data, 0, pBytes, data.Length);
+                IntPtr hPrinter = IntPtr.Zero;
+                IntPtr pBytes = IntPtr.Zero;
+                bool printerOpened = false;
+                bool documentStarted = false;
+                bool pageStarted = false;
                 bool success = false;
                 try
                 {
-                    IntPtr hPrinter = new IntPtr(0);
                     ShaPrint.Core.AppLogger.Log($"[SPOOLER] Attempting to open printer: '{printerName}'");
-                    if (OpenPrinter(printerName.Normalize(), out hPrinter, IntPtr.Zero))
+                    if (native.OpenPrinter(printerName.Normalize(), out hPrinter))
                     {
+                        printerOpened = true;
                         ShaPrint.Core.AppLogger.Log($"[SPOOLER] Printer opened successfully. Starting document '{documentName}'");
-                        DOCINFO di = new DOCINFO
-                        {
-                            pDocName = documentName,
-                            pDatatype = "RAW"
-                        };
-
-                        int currentJobId = StartDocPrinter(hPrinter, 1, di);
+                        int currentJobId = native.StartDocPrinter(hPrinter, documentName);
                         if (currentJobId > 0)
                         {
-                            System.Threading.Interlocked.Exchange(ref jobId, currentJobId);
-                            if (StartPagePrinter(hPrinter))
+                            documentStarted = true;
+                            state.SetJobId(currentJobId);
+                            if (native.StartPagePrinter(hPrinter))
                             {
-                                int dwWritten = 0;
-                                success = WritePrinter(hPrinter, pBytes, data.Length, out dwWritten);
-                                if (!success)
+                                pageStarted = true;
+                                pBytes = Marshal.AllocCoTaskMem(data.Length);
+                                Marshal.Copy(data, 0, pBytes, data.Length);
+                                success = native.WritePrinter(hPrinter, pBytes, data.Length, out int dwWritten)
+                                    && dwWritten == data.Length;
+                                if (!success && dwWritten != data.Length)
+                                    ShaPrint.Core.AppLogger.Error($"[SPOOLER] WritePrinter was partial: expected {data.Length}, wrote {dwWritten}.");
+                                else if (!success)
                                     ShaPrint.Core.AppLogger.Error($"[SPOOLER] WritePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                                 else
                                     ShaPrint.Core.AppLogger.Log($"[SPOOLER] WritePrinter wrote {dwWritten} bytes to the spooler.");
-
-                                EndPagePrinter(hPrinter);
                             }
                             else
                             {
                                 ShaPrint.Core.AppLogger.Error($"[SPOOLER] StartPagePrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                             }
-                            EndDocPrinter(hPrinter);
                         }
                         else
                         {
                             ShaPrint.Core.AppLogger.Error($"[SPOOLER] StartDocPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                         }
-                        ClosePrinter(hPrinter);
                     }
                     else
                     {
                         ShaPrint.Core.AppLogger.Error($"[SPOOLER] OpenPrinter failed. Win32 Error: {Marshal.GetLastWin32Error()}");
                     }
                 }
+                catch (Exception ex)
+                {
+                    ShaPrint.Core.AppLogger.Error($"[SPOOLER] Native spooler operation failed: {ex.Message}");
+                    success = false;
+                }
                 finally
                 {
-                    Marshal.FreeCoTaskMem(pBytes);
+                    if (pageStarted)
+                    {
+                        try
+                        {
+                            if (!native.EndPagePrinter(hPrinter))
+                                success = false;
+                        }
+                        catch (Exception ex) { ShaPrint.Core.AppLogger.Error($"[SPOOLER] EndPagePrinter failed: {ex.Message}"); success = false; }
+                    }
+                    if (documentStarted)
+                    {
+                        try
+                        {
+                            if (!native.EndDocPrinter(hPrinter))
+                                success = false;
+                        }
+                        catch (Exception ex) { ShaPrint.Core.AppLogger.Error($"[SPOOLER] EndDocPrinter failed: {ex.Message}"); success = false; }
+                    }
+                    if (pBytes != IntPtr.Zero)
+                    {
+                        try { Marshal.FreeCoTaskMem(pBytes); }
+                        catch (Exception ex) { ShaPrint.Core.AppLogger.Error($"[SPOOLER] Failed to release print buffer: {ex.Message}"); success = false; }
+                    }
+                    if (printerOpened)
+                    {
+                        try
+                        {
+                            if (!native.ClosePrinter(hPrinter))
+                                success = false;
+                        }
+                        catch (Exception ex) { ShaPrint.Core.AppLogger.Error($"[SPOOLER] ClosePrinter failed: {ex.Message}"); success = false; }
+                    }
                 }
                 return success;
             }, System.Threading.CancellationToken.None, System.Threading.Tasks.TaskCreationOptions.LongRunning, System.Threading.Tasks.TaskScheduler.Default);
 
-            if (await System.Threading.Tasks.Task.WhenAny(printTask, System.Threading.Tasks.Task.Delay(actualTimeout)) == printTask)
+            try
             {
-                return await printTask;
+                return await printTask.WaitAsync(actualTimeout, cancellationToken);
             }
-            else
+            catch (TimeoutException)
             {
                 ShaPrint.Core.AppLogger.Error($"[SPOOLER] PrintRawData timed out after {actualTimeout.TotalSeconds}s for '{printerName}'.");
-                int capturedJobId = System.Threading.Volatile.Read(ref jobId);
-                if (capturedJobId > 0)
-                {
-                    ShaPrint.Core.AppLogger.Log($"[SPOOLER] Attempting to abort stuck Job ID {capturedJobId}...");
-                    IntPtr abortHandle = IntPtr.Zero;
-                    if (OpenPrinter(printerName.Normalize(), out abortHandle, IntPtr.Zero))
-                    {
-                        bool deleted = SetJob(abortHandle, capturedJobId, 0, IntPtr.Zero, 5 /* JOB_CONTROL_DELETE */);
-                        if (deleted)
-                            ShaPrint.Core.AppLogger.Log($"[SPOOLER] Successfully aborted Job ID {capturedJobId}.");
-                        else
-                            ShaPrint.Core.AppLogger.Error($"[SPOOLER] Failed to abort Job ID {capturedJobId}. Win32 Error: {Marshal.GetLastWin32Error()}");
-                        
-                        ClosePrinter(abortHandle);
-                    }
-                }
+                RequestAbort(printerName, state.JobId, native);
                 return false;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                ShaPrint.Core.AppLogger.Error($"[SPOOLER] PrintRawData canceled for '{printerName}'.");
+                RequestAbort(printerName, state.JobId, native);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                ShaPrint.Core.AppLogger.Error($"[SPOOLER] PrintRawData failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static void RequestAbort(string printerName, int jobId, ISpoolerApiNative native)
+        {
+            if (jobId <= 0) return;
+            _ = System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    if (native.OpenPrinter(printerName.Normalize(), out IntPtr abortHandle))
+                    {
+                        try { native.SetJob(abortHandle, jobId); }
+                        finally { native.ClosePrinter(abortHandle); }
+                    }
+                }
+                catch (Exception ex) { ShaPrint.Core.AppLogger.Error($"[SPOOLER] Failed to abort job {jobId}: {ex.Message}"); }
+            });
+        }
+
+        private sealed class SpoolerJobState
+        {
+            private int _jobId;
+            public int JobId => System.Threading.Volatile.Read(ref _jobId);
+            public void SetJobId(int jobId) => System.Threading.Volatile.Write(ref _jobId, jobId);
+        }
+
+        private sealed class Win32SpoolerApiNative : ISpoolerApiNative
+        {
+            public bool OpenPrinter(string printerName, out IntPtr handle) => SpoolerApi.OpenPrinter(printerName, out handle, IntPtr.Zero);
+            public bool ClosePrinter(IntPtr handle) => SpoolerApi.ClosePrinter(handle);
+            public int StartDocPrinter(IntPtr handle, string documentName) => SpoolerApi.StartDocPrinter(handle, 1, new DOCINFO { pDocName = documentName, pDatatype = "RAW" });
+            public bool EndDocPrinter(IntPtr handle) => SpoolerApi.EndDocPrinter(handle);
+            public bool StartPagePrinter(IntPtr handle) => SpoolerApi.StartPagePrinter(handle);
+            public bool EndPagePrinter(IntPtr handle) => SpoolerApi.EndPagePrinter(handle);
+            public bool WritePrinter(IntPtr handle, IntPtr bytes, int count, out int written) => SpoolerApi.WritePrinter(handle, bytes, count, out written);
+            public bool SetJob(IntPtr handle, int jobId) => SpoolerApi.SetJob(handle, jobId, 0, IntPtr.Zero, 5);
         }
     }
 }
