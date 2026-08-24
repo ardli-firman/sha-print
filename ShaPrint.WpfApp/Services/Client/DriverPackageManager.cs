@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Compression;
@@ -83,7 +84,9 @@ namespace ShaPrint.WpfApp.Services.Client
                     progress?.Report(1.0);
                     return new DriverDownloadResult { Success = true, PackageDirectory = cachedDir, FromCache = true };
                 }
-                TryDeleteDirectory(cachedDir);
+                // Keep an existing verified/partial directory until a fully
+                // verified replacement is ready. This preserves the last usable
+                // package if the new transfer is cancelled.
                 return await DownloadFromServerAsync(serverIp, printerName, expectedPackageId, expectedSize, progress, cancellationToken);
             }
             finally
@@ -132,16 +135,31 @@ namespace ShaPrint.WpfApp.Services.Client
                     PrinterName = printerName,
                     DriverPackageId = expectedPackageId
                 };
-                byte[] requestJson = JsonSerializer.SerializeToUtf8Bytes(request);
-
-                // Write packet type + length-prefixed JSON
-                using (var bw = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+                byte[] requestPacket;
+                try
                 {
-                    bw.Write(Constants.PacketTypeDriverPackageRequest);
-                    bw.Write(requestJson.Length);
-                    bw.Write(requestJson);
+                    requestPacket = BuildDriverPackageRequestPacket(request);
                 }
-                await stream.FlushAsync(transferDeadline.Token);
+                catch (InvalidDataException)
+                {
+                    return new DriverDownloadResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Driver package request is too large."
+                    };
+                }
+
+                // Write one bounded packet with cancellation-aware async I/O. The
+                // receiver expects little-endian type and length prefixes.
+                try
+                {
+                    await stream.WriteAsync(requestPacket.AsMemory(), transferDeadline.Token).ConfigureAwait(false);
+                    await stream.FlushAsync(transferDeadline.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(requestPacket);
+                }
 
                 // Receive and hash chunks directly into a bounded temporary file.
                 DriverPackageComplete? completeMessage = null;
@@ -253,8 +271,20 @@ namespace ShaPrint.WpfApp.Services.Client
                             if (sequence == null || !sequence.IsComplete || completeMessage.TotalChunks != totalChunks)
                                 return new DriverDownloadResult { Success = false, ErrorMessage = "Driver package has missing chunks." };
                             await packageFile.FlushAsync(transferDeadline.Token).ConfigureAwait(false);
-                            string actualHash = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
                             AppLogger.Log($"[DRIVER_PKG_CLIENT] All chunks received: {receivedBytes:N0} bytes total (expected={expectedSize:N0}).");
+
+                            // Keep the hard bound immediately before hashing and
+                            // publication as a second line of defence against a
+                            // future framing/metadata regression.
+                            if (receivedBytes <= 0 || receivedBytes > Constants.MaxDriverPackageSize)
+                            {
+                                return new DriverDownloadResult
+                                {
+                                    Success = false,
+                                    ErrorMessage = "Driver package exceeds the configured size limit."
+                                };
+                            }
+                            string actualHash = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
 
                             // Verify total size — skip if expectedSize is 0 (stale discovery metadata)
                             if (expectedSize > 0 && receivedBytes != expectedSize)
@@ -305,26 +335,43 @@ namespace ShaPrint.WpfApp.Services.Client
                                 {
                                     SafeZipExtractor.ExtractSafely(archive, extractionDir);
                                 }
-                                TryDeleteDirectory(finalDir);
-                                Directory.Move(extractionDir, finalDir);
+
+                                // A verified cache entry wins over a concurrent or
+                                // externally-triggered re-download. Only remove an
+                                // incomplete destination after the new extraction is
+                                // complete and cancellation has been checked.
+                                transferDeadline.Token.ThrowIfCancellationRequested();
+                                if (TryGetVerifiedCache(finalDir, expectedPackageId, expectedSize, out _))
+                                {
+                                    TryDeleteDirectory(extractionDir);
+                                }
+                                else
+                                {
+                                    var marker = new DriverPackageVerifiedMarker
+                                    {
+                                        Sha256 = actualHash,
+                                        TotalSizeBytes = receivedBytes,
+                                        FileCount = Directory.GetFiles(extractionDir, "*", SearchOption.AllDirectories).Length,
+                                        ExtractedAtUtc = DateTime.UtcNow
+                                    };
+                                    string markerJson = JsonSerializer.Serialize(marker, new JsonSerializerOptions { WriteIndented = true });
+                                    File.WriteAllText(Path.Combine(extractionDir, ".verified.json"), markerJson);
+                                    transferDeadline.Token.ThrowIfCancellationRequested();
+
+                                    // Move is atomic within the cache root. A partial
+                                    // destination is safe to remove now because all
+                                    // bytes, extraction, and verification completed in
+                                    // the isolated directory.
+                                    TryDeleteDirectory(finalDir);
+                                    Directory.Move(extractionDir, finalDir);
+                                }
                             }
                             catch
                             {
                                 // Clean up partial extraction on failure
-                                try { if (Directory.Exists(finalDir)) Directory.Delete(finalDir, true); } catch { }
+                                TryDeleteDirectory(extractionDir);
                                 throw;
                             }
-
-                            // H3: Write verification marker after successful extract
-                            var marker = new DriverPackageVerifiedMarker
-                            {
-                                Sha256 = actualHash,
-                                TotalSizeBytes = receivedBytes,
-                                FileCount = Directory.GetFiles(finalDir, "*", SearchOption.AllDirectories).Length,
-                                ExtractedAtUtc = DateTime.UtcNow
-                            };
-                            string markerJson = JsonSerializer.Serialize(marker, new JsonSerializerOptions { WriteIndented = true });
-                            File.WriteAllText(Path.Combine(finalDir, ".verified.json"), markerJson);
 
                             progress?.Report(1.0);
                             AppLogger.Log($"[DRIVER_PKG_CLIENT] Driver package downloaded, verified, and extracted: {receivedBytes} bytes zip, SHA-256={actualHash[..16]}...");
@@ -408,7 +455,7 @@ namespace ShaPrint.WpfApp.Services.Client
             }
         }
 
-        private static bool TryGetVerifiedCache(string directory, string packageId, long expectedSize, out DriverPackageVerifiedMarker? marker)
+        internal static bool TryGetVerifiedCache(string directory, string packageId, long expectedSize, out DriverPackageVerifiedMarker? marker)
         {
             marker = null;
             string markerPath = Path.Combine(directory, ".verified.json");
@@ -423,6 +470,26 @@ namespace ShaPrint.WpfApp.Services.Client
                     && marker.TotalSizeBytes == expectedSize;
             }
             catch { return false; }
+        }
+
+        internal static byte[] BuildDriverPackageRequestPacket(DriverPackageRequest request)
+        {
+            byte[] requestJson = JsonSerializer.SerializeToUtf8Bytes(request);
+            try
+            {
+                if (requestJson.Length > 16 * 1024)
+                    throw new InvalidDataException("Driver package request is too large.");
+
+                byte[] packet = new byte[sizeof(int) + sizeof(int) + requestJson.Length];
+                BinaryPrimitives.WriteInt32LittleEndian(packet.AsSpan(0, sizeof(int)), Constants.PacketTypeDriverPackageRequest);
+                BinaryPrimitives.WriteInt32LittleEndian(packet.AsSpan(sizeof(int), sizeof(int)), requestJson.Length);
+                requestJson.CopyTo(packet.AsSpan(sizeof(int) * 2));
+                return packet;
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(requestJson);
+            }
         }
 
         private static void TryDeleteDirectory(string directory)

@@ -418,20 +418,11 @@ namespace ShaPrint.Server
             string infName = Path.GetFileName(infPath);
             AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: starting export for '{driverName}' (inf={infName})");
 
-            // Compute a preliminary hash of the inf content for the cache directory name
-            byte[] infBytes = await ReadFileBytesAsync(infPath, cancellationToken).ConfigureAwait(false);
-            string infHash;
-            try
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                infHash = Convert.ToHexString(SHA256.HashData(infBytes)).ToLowerInvariant();
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(infBytes);
-            }
-
-            string exportDir = Path.Combine(_cacheRoot, infHash);
+            // Every export gets an isolated staging directory. The old INF-hash
+            // directory allowed two exports of the same INF to have pnputil write
+            // into one another's output while one was being cached.
+            string exportDir = Path.Combine(_cacheRoot, $"staging_{Guid.NewGuid():N}");
+            string? tempFinalDir = null;
             _fileSystem.CreateDirectory(exportDir);
             AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: exportDir='{exportDir}'");
 
@@ -448,10 +439,19 @@ namespace ShaPrint.Server
 
             // Export using pnputil
             AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: running pnputil /export-driver...");
-            var result = await _processRunner.RunAsync("pnputil",
-                $"/export-driver \"{infPath}\" \"{exportDir}\"",
-                TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
+            ProcessResult result;
+            try
+            {
+                result = await _processRunner.RunAsync("pnputil",
+                    $"/export-driver \"{infPath}\" \"{exportDir}\"",
+                    TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException)
+            {
+                try { _fileSystem.DeleteDirectory(exportDir, true); } catch { }
+                throw;
+            }
 
             if (!result.Success)
             {
@@ -558,6 +558,8 @@ namespace ShaPrint.Server
                     await CreateZipFileAsync(files, tempZipPath, streamingFs, cancellationToken).ConfigureAwait(false);
                     File.Move(tempZipPath, packageZipPath, overwrite: true);
                     zipLength = _fileSystem.GetFileSize(packageZipPath);
+                    if (zipLength <= 0 || zipLength > Constants.MaxDriverPackageSize)
+                        throw new InvalidDataException($"Driver package zip exceeds the configured size limit ({Constants.MaxDriverPackageSize:N0} bytes).");
                     packageHash = await HashFileAsync(streamingFs, packageZipPath, cancellationToken).ConfigureAwait(false);
                 }
                 else
@@ -577,6 +579,8 @@ namespace ShaPrint.Server
                     }
                     zipBytes = zipMs.ToArray();
                     zipLength = zipBytes.LongLength;
+                    if (zipLength <= 0 || zipLength > Constants.MaxDriverPackageSize)
+                        throw new InvalidDataException($"Driver package zip exceeds the configured size limit ({Constants.MaxDriverPackageSize:N0} bytes).");
                     packageHash = Convert.ToHexString(SHA256.HashData(zipBytes)).ToLowerInvariant();
                 }
                 if (!DriverPackageIdValidator.IsValid(packageHash))
@@ -640,52 +644,129 @@ namespace ShaPrint.Server
 
                 string manifestJson = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
 
-                // Write to exportDir (infHash-based, for pnputil output). The
-                // streaming branch already wrote package.zip atomically.
+                // Write the manifest beside the staged archive. The staged
+                // directory is never exposed to clients.
                 if (zipBytes != null)
                     await _fileSystem.WriteAllBytesAsync(packageZipPath, zipBytes).WaitAsync(cancellationToken).ConfigureAwait(false);
                 await _fileSystem.WriteAllBytesAsync(Path.Combine(exportDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson)).WaitAsync(cancellationToken).ConfigureAwait(false);
 
-                // Write to finalDir (packageHash-based, where ReadPackageBytesAsync looks)
+                // Publish to the hash-addressed directory only after every byte is
+                // complete. For the production RealFileSystem this is a same-volume
+                // Directory.Move, so readers see either the prior verified package
+                // or the complete new package, never a partial final directory.
                 string finalDir = Path.Combine(_cacheRoot, packageHash);
-                if (!string.Equals(exportDir, finalDir, StringComparison.OrdinalIgnoreCase))
+                tempFinalDir = finalDir + $".tmp_{Guid.NewGuid():N}";
+                _fileSystem.CreateDirectory(tempFinalDir);
+                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: writing staged final package → {tempFinalDir}");
+                if (streamingFs != null)
                 {
-                    AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: writing final package to SHA-256 dir → {finalDir}");
-                    _fileSystem.CreateDirectory(finalDir);
-                    if (streamingFs != null)
-                    {
-                        await CopyFileAsync(streamingFs, packageZipPath, Path.Combine(finalDir, "package.zip"), cancellationToken).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        foreach (var f in files)
-                        {
-                            string dest = Path.Combine(finalDir, Path.GetFileName(f));
-                            var content = await _fileSystem.ReadAllBytesAsync(f).WaitAsync(cancellationToken).ConfigureAwait(false);
-                            await _fileSystem.WriteAllBytesAsync(dest, content).WaitAsync(cancellationToken).ConfigureAwait(false);
-                        }
-                        await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "package.zip"), zipBytes!).WaitAsync(cancellationToken).ConfigureAwait(false);
-                    }
-                    await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson)).WaitAsync(cancellationToken).ConfigureAwait(false);
+                    await CopyFileAsync(streamingFs, packageZipPath, Path.Combine(tempFinalDir, "package.zip"), cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
-                    AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: exportDir matches packageHash dir — no copy needed.");
+                    foreach (var f in files)
+                    {
+                        string dest = Path.Combine(tempFinalDir, Path.GetFileName(f));
+                        var content = await _fileSystem.ReadAllBytesAsync(f).WaitAsync(cancellationToken).ConfigureAwait(false);
+                        await _fileSystem.WriteAllBytesAsync(dest, content).WaitAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    await _fileSystem.WriteAllBytesAsync(Path.Combine(tempFinalDir, "package.zip"), zipBytes!).WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                await _fileSystem.WriteAllBytesAsync(Path.Combine(tempFinalDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson)).WaitAsync(cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (IsCompleteFinalPackage(finalDir, packageHash))
+                {
+                    // A prior verified package is immutable and already serves the
+                    // same hash. Preserve it and discard this redundant staging.
+                    _fileSystem.DeleteDirectory(tempFinalDir, true);
+                    tempFinalDir = null;
+                }
+                else if (Directory.Exists(tempFinalDir))
+                {
+                    // Only an incomplete/invalid destination may be removed. The
+                    // move is atomic because both directories share _cacheRoot.
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (_fileSystem.DirectoryExists(finalDir))
+                        _fileSystem.DeleteDirectory(finalDir, true);
+                    Directory.Move(tempFinalDir, finalDir);
+                    tempFinalDir = null;
+                }
+                else
+                {
+                    // Compatibility fallback for non-physical test file systems.
+                    // Production always takes the atomic Directory.Move branch.
+                    _fileSystem.DeleteDirectory(finalDir, true);
+                    _fileSystem.CreateDirectory(finalDir);
+                    foreach (var f in files)
+                    {
+                        string dest = Path.Combine(finalDir, Path.GetFileName(f));
+                        var content = await _fileSystem.ReadAllBytesAsync(f).WaitAsync(cancellationToken).ConfigureAwait(false);
+                        await _fileSystem.WriteAllBytesAsync(dest, content).WaitAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    if (zipBytes != null)
+                        await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "package.zip"), zipBytes).WaitAsync(cancellationToken).ConfigureAwait(false);
+                    await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson)).WaitAsync(cancellationToken).ConfigureAwait(false);
+                    _fileSystem.DeleteDirectory(tempFinalDir, true);
+                    tempFinalDir = null;
                 }
 
                 AppLogger.Log($"[DRIVER_PKG] Exported driver '{driverName}' → {files.Length} files, zip {zipLength:N0} bytes, SHA-256={packageHash[..16]}...");
+                try { _fileSystem.DeleteDirectory(exportDir, true); } catch { }
                 return manifest;
             }
             catch (OperationCanceledException)
             {
+                if (tempFinalDir != null)
+                {
+                    try { _fileSystem.DeleteDirectory(tempFinalDir, true); } catch { }
+                }
                 try { _fileSystem.DeleteDirectory(exportDir, true); } catch { }
                 throw;
             }
             catch (Exception ex)
             {
                 AppLogger.Error($"[DRIVER_PKG] ExportDriverAsync: error building manifest for '{driverName}'", ex);
+                if (tempFinalDir != null)
+                {
+                    try { _fileSystem.DeleteDirectory(tempFinalDir, true); } catch { }
+                }
                 try { _fileSystem.DeleteDirectory(exportDir, true); } catch { }
                 return null;
+            }
+        }
+
+        private bool IsCompleteFinalPackage(string directory, string packageHash)
+        {
+            if (!DriverPackageIdValidator.IsValid(packageHash)
+                || !_fileSystem.DirectoryExists(directory)
+                || !_fileSystem.FileExists(Path.Combine(directory, "package.zip"))
+                || !_fileSystem.FileExists(Path.Combine(directory, "manifest.json")))
+                return false;
+
+            try
+            {
+                byte[] manifestBytes = _fileSystem.ReadAllBytesAsync(Path.Combine(directory, "manifest.json"))
+                    .GetAwaiter().GetResult();
+                DriverPackageManifest? manifest;
+                try
+                {
+                    manifest = JsonSerializer.Deserialize<DriverPackageManifest>(manifestBytes);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(manifestBytes);
+                }
+                return manifest != null
+                    && DriverPackageIdValidator.IsValid(manifest.Sha256)
+                    && manifest.Sha256.Equals(packageHash, StringComparison.OrdinalIgnoreCase)
+                    && manifest.TotalSizeBytes > 0
+                    && manifest.TotalSizeBytes <= Constants.MaxDriverPackageSize
+                    && _fileSystem.GetFileSize(Path.Combine(directory, "package.zip")) == manifest.TotalSizeBytes;
+            }
+            catch
+            {
+                return false;
             }
         }
 
