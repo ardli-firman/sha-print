@@ -2,6 +2,7 @@
 # Agent & Pi
 .agents/
 .pi/
+.superpowers/
 docs/
 skills-lock.json
 CONTEXT.md
