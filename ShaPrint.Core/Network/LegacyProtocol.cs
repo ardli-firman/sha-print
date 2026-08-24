@@ -72,8 +72,11 @@ public sealed record LegacyAcknowledgement(
 public static class LegacyEnvelopeCodec
 {
     // "SPRT" when viewed as the little-endian uint32 written by BinaryWriter.
-    private const uint Magic = 0x54525053;
-    private const int HeaderLength = sizeof(uint) + sizeof(byte) + sizeof(byte) + sizeof(long) + sizeof(int);
+    // "SPRT" when read as an ASCII byte sequence. These are public so the
+    // stream transport can explicitly discriminate a new frame from the old
+    // int32-length payload without guessing from a numeric size.
+    public const uint Magic = 0x54525053;
+    public const int HeaderLength = sizeof(uint) + sizeof(byte) + sizeof(byte) + sizeof(long) + sizeof(int);
 
     public static byte[] Write(LegacyEnvelope envelope)
     {
@@ -124,6 +127,88 @@ public static class LegacyEnvelopeCodec
         byte[] payload = frame.Slice(HeaderLength, payloadLength).ToArray();
 
         return new LegacyEnvelope(version, messageType, correlationId, payload);
+    }
+
+    public static async Task<LegacyEnvelope> ReadAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        byte[] header = new byte[HeaderLength];
+        try
+        {
+            await ReadExactlyAsync(stream, header, cancellationToken).ConfigureAwait(false);
+            return await ReadFromHeaderAsync(stream, header, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(header);
+        }
+    }
+
+    /// <summary>Reads an envelope after the caller has already consumed the magic prefix.</summary>
+    public static async Task<LegacyEnvelope> ReadAfterMagicAsync(Stream stream, ReadOnlyMemory<byte> magicPrefix, CancellationToken cancellationToken)
+    {
+        if (magicPrefix.Length != sizeof(uint) || BinaryPrimitives.ReadUInt32LittleEndian(magicPrefix.Span) != Magic)
+            throw new InvalidDataException("Legacy envelope magic is invalid.");
+
+        byte[] header = new byte[HeaderLength];
+        try
+        {
+            magicPrefix.CopyTo(header);
+            await ReadExactlyAsync(stream, header.AsMemory(sizeof(uint)), cancellationToken).ConfigureAwait(false);
+            return await ReadFromHeaderAsync(stream, header, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(header);
+        }
+    }
+
+    private static async Task<LegacyEnvelope> ReadFromHeaderAsync(Stream stream, byte[] header, CancellationToken cancellationToken)
+    {
+        if (BinaryPrimitives.ReadUInt32LittleEndian(header) != Magic)
+            throw new InvalidDataException("Legacy envelope magic is invalid.");
+
+        int payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(HeaderLength - sizeof(int)));
+        ValidatePayloadLength(payloadLength);
+
+        byte[] frame = new byte[HeaderLength + payloadLength];
+        try
+        {
+            Buffer.BlockCopy(header, 0, frame, 0, HeaderLength);
+            await ReadExactlyAsync(stream, frame.AsMemory(HeaderLength, payloadLength), cancellationToken).ConfigureAwait(false);
+            return Read(frame);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(frame);
+        }
+    }
+
+    public static async Task WriteAsync(Stream stream, LegacyEnvelope envelope, CancellationToken cancellationToken)
+    {
+        byte[] frame = Write(envelope);
+        try
+        {
+            await stream.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(frame);
+        }
+    }
+
+    public static async Task ReadExactlyAsync(Stream stream, Memory<byte> buffer, CancellationToken cancellationToken)
+    {
+        int offset = 0;
+        while (offset < buffer.Length)
+        {
+            int read = await stream.ReadAsync(buffer[offset..], cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+                throw new EndOfStreamException($"Truncated frame: expected {buffer.Length} bytes, received {offset}.");
+            offset += read;
+        }
     }
 
     private static void ValidateVersion(byte version)
@@ -227,6 +312,58 @@ public static class LegacyAcknowledgementCodec
         finally
         {
             CryptographicOperations.ZeroMemory(plaintext);
+        }
+    }
+
+    /// <summary>
+    /// Writes an encrypted acknowledgement as [length:int32][ciphertext]. The
+    /// length prefix lets the peer use a bounded exact read instead of relying
+    /// on connection closure to find a message boundary.
+    /// </summary>
+    public static async Task WriteFramedAsync(Stream stream, LegacyAcknowledgement acknowledgement, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        byte[] encrypted = Write(acknowledgement);
+        byte[] header = new byte[sizeof(int)];
+        try
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(header, encrypted.Length);
+            await stream.WriteAsync(header, cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(encrypted, cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(header);
+            CryptographicOperations.ZeroMemory(encrypted);
+        }
+    }
+
+    public static async Task<LegacyAcknowledgement> ReadFramedAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        byte[] header = new byte[sizeof(int)];
+        try
+        {
+            await LegacyEnvelopeCodec.ReadExactlyAsync(stream, header, cancellationToken).ConfigureAwait(false);
+            int encryptedLength = BinaryPrimitives.ReadInt32LittleEndian(header);
+            if (encryptedLength < AesGcmMinimumEncryptedBytes || encryptedLength > MaxEncryptedAcknowledgementBytes)
+                throw new InvalidDataException("Encrypted acknowledgement length is invalid.");
+
+            byte[] encrypted = new byte[encryptedLength];
+            try
+            {
+                await LegacyEnvelopeCodec.ReadExactlyAsync(stream, encrypted, cancellationToken).ConfigureAwait(false);
+                return Read(encrypted);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(encrypted);
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(header);
         }
     }
 

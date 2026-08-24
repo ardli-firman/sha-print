@@ -23,6 +23,7 @@ namespace ShaPrint.Core
         public const int MaxPrinterNameLength = 220;
         public const int MaxServerNameLength = 64;
         public const int MaxDriverNameLength = 256;
+        public const int MaxDocumentNameLength = 256;
 
         /// <summary>
         /// Validates a printer name. Must be safe alphanumeric + limited special chars.
@@ -84,6 +85,25 @@ namespace ShaPrint.Core
 
             if (!SafeNameRegex.IsMatch(trimmed))
                 throw new ArgumentException($"Driver name contains unsupported characters: '{trimmed}'");
+
+            return trimmed;
+        }
+
+        /// <summary>
+        /// Validates a document title before it is sent to the Windows spooler
+        /// or recorded in operational history. A title is metadata, not a file
+        /// path: control characters are rejected so it cannot forge log lines.
+        /// </summary>
+        public static string ValidateDocumentName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ArgumentException("Document name cannot be empty.");
+
+            string trimmed = name.Trim();
+            if (trimmed.Length > MaxDocumentNameLength)
+                throw new ArgumentException($"Document name exceeds {MaxDocumentNameLength} characters.");
+            if (trimmed.Any(char.IsControl))
+                throw new ArgumentException("Document name contains control characters.");
 
             return trimmed;
         }

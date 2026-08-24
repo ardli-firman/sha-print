@@ -22,38 +22,16 @@ namespace ShaPrint.Core.Network
 
         public static async Task WriteAsync(Stream stream, PrintJobPayload payload)
         {
-            // Validate before sending
-            if (string.IsNullOrEmpty(payload.TargetPrinterName))
-                throw new ArgumentException("TargetPrinterName cannot be empty.");
-            if (payload.TargetPrinterName.Length > Constants.MaxTargetPrinterNameBytes)
-                throw new ArgumentException($"TargetPrinterName exceeds {Constants.MaxTargetPrinterNameBytes} bytes.");
-            if (payload.SpoolData.Length > Constants.MaxPrintJobBytes)
-                throw new ArgumentException($"SpoolData exceeds {Constants.MaxPrintJobBytes} bytes.");
-
-            await Task.Run(() =>
+            byte[] wire = Serialize(payload);
+            try
             {
-                // Step 1: serialize the inner payload
-                byte[] innerPayload;
-                using (var ms = new MemoryStream())
-                using (var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
-                {
-                    bw.Write(payload.TargetPrinterName);
-                    bw.Write(payload.DocumentName);
-                    bw.Write(payload.SpoolData.Length);
-                    bw.Write(payload.SpoolData);
-                    bw.Flush();
-                    innerPayload = ms.ToArray();
-                }
-
-                // Step 2: encrypt with AES-256-GCM
-                byte[] encryptedBlob = CryptoHelper.EncryptAesGcm(innerPayload);
-
-                // Step 3: send [length][encrypted blob]
-                var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
-                writer.Write(encryptedBlob.Length);
-                writer.Write(encryptedBlob);
-                writer.Flush();
-            });
+                await stream.WriteAsync(wire).ConfigureAwait(false);
+                await stream.FlushAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(wire);
+            }
         }
 
         public static async Task<PrintJobPayload> ReadAsync(Stream stream)
@@ -81,6 +59,91 @@ namespace ShaPrint.Core.Network
             if (encryptedBlob.Length != encryptedLength)
                 throw new InvalidDataException($"Truncated payload: expected {encryptedLength}, got {encryptedBlob.Length}.");
 
+            try
+            {
+                return ReadEncryptedBlob(encryptedBlob);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(encryptedBlob);
+            }
+        }
+
+        /// <summary>Creates the legacy [length][encrypted payload] wire bytes.</summary>
+        public static byte[] Serialize(PrintJobPayload payload)
+        {
+            ArgumentNullException.ThrowIfNull(payload);
+            if (string.IsNullOrEmpty(payload.TargetPrinterName))
+                throw new ArgumentException("TargetPrinterName cannot be empty.");
+            if (payload.TargetPrinterName.Length > Constants.MaxTargetPrinterNameBytes)
+                throw new ArgumentException($"TargetPrinterName exceeds {Constants.MaxTargetPrinterNameBytes} bytes.");
+            if (payload.SpoolData is null || payload.SpoolData.Length > Constants.MaxPrintJobBytes)
+                throw new ArgumentException($"SpoolData exceeds {Constants.MaxPrintJobBytes} bytes.");
+
+            byte[] innerPayload;
+            using (var ms = new MemoryStream())
+            using (var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
+            {
+                writer.Write(payload.TargetPrinterName);
+                writer.Write(payload.DocumentName ?? string.Empty);
+                writer.Write(payload.SpoolData.Length);
+                writer.Write(payload.SpoolData);
+                writer.Flush();
+                innerPayload = ms.ToArray();
+            }
+
+            try
+            {
+                byte[] encrypted = CryptoHelper.EncryptAesGcm(innerPayload);
+                try
+                {
+                    byte[] wire = new byte[sizeof(int) + encrypted.Length];
+                    BitConverter.GetBytes(encrypted.Length).CopyTo(wire, 0);
+                    Buffer.BlockCopy(encrypted, 0, wire, sizeof(int), encrypted.Length);
+                    return wire;
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(encrypted);
+                }
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(innerPayload);
+            }
+        }
+
+        /// <summary>Reads a fully-buffered legacy wire payload with exact framing.</summary>
+        public static PrintJobPayload ReadWire(ReadOnlySpan<byte> wire)
+        {
+            if (wire.Length < sizeof(int))
+                throw new InvalidDataException("Print job payload is truncated before its length.");
+
+            int encryptedLength = BitConverter.ToInt32(wire[..sizeof(int)]);
+            if (encryptedLength < 0 || encryptedLength > Constants.MaxPrintJobBytes + 1024)
+                throw new InvalidDataException($"Encrypted blob length is invalid: {encryptedLength}.");
+            if (wire.Length != sizeof(int) + encryptedLength)
+                throw new InvalidDataException($"Print job payload length mismatch: declared {encryptedLength}, actual {wire.Length - sizeof(int)}.");
+
+            byte[] encrypted = wire[sizeof(int)..].ToArray();
+            try
+            {
+                return ReadEncryptedBlob(encrypted);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(encrypted);
+            }
+        }
+
+        /// <summary>
+        /// Decrypts an owned encrypted blob. The caller retains ownership of the
+        /// encrypted argument; decrypted plaintext is always cleared here.
+        /// </summary>
+        public static PrintJobPayload ReadEncryptedBlob(byte[] encryptedBlob)
+        {
+            ArgumentNullException.ThrowIfNull(encryptedBlob);
+
             // Decrypt with AES-256-GCM
             byte[] innerPayload;
             try
@@ -92,23 +155,25 @@ namespace ShaPrint.Core.Network
                 throw new InvalidDataException("AES-GCM authentication failed — payload may have been tampered.", ex);
             }
 
-            // Deserialize inner payload
-            using var ms = new MemoryStream(innerPayload);
-            using var br = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+            try
+            {
+                // Deserialize inner payload
+                using var ms = new MemoryStream(innerPayload);
+                using var br = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
 
-            var payload = new PrintJobPayload();
+                var payload = new PrintJobPayload();
 
-            payload.TargetPrinterName = br.ReadString();
-            if (payload.TargetPrinterName.Length > Constants.MaxTargetPrinterNameBytes)
+                payload.TargetPrinterName = br.ReadString();
+                if (payload.TargetPrinterName.Length > Constants.MaxTargetPrinterNameBytes)
                 throw new InvalidDataException(
                     $"TargetPrinterName too long: {payload.TargetPrinterName.Length} bytes (max {Constants.MaxTargetPrinterNameBytes}).");
 
             // Detect format version (legacy/v1 vs new/v2 with DocumentName)
-            long posBeforeDetect = ms.Position;
-            bool parsedAsNewFormat = false;
+                long posBeforeDetect = ms.Position;
+                bool parsedAsNewFormat = false;
 
-            try
-            {
+                try
+                {
                 payload.DocumentName = br.ReadString();
                 long remainingAfterDocName = ms.Length - ms.Position;
                 if (remainingAfterDocName >= 4)
@@ -124,14 +189,14 @@ namespace ShaPrint.Core.Network
                         parsedAsNewFormat = true;
                     }
                 }
-            }
-            catch
-            {
+                }
+                catch
+                {
                 // Fallback to legacy parsing below
-            }
+                }
 
-            if (!parsedAsNewFormat)
-            {
+                if (!parsedAsNewFormat)
+                {
                 // Reset position to after TargetPrinterName
                 ms.Position = posBeforeDetect;
                 long remainingAfterReset = ms.Length - ms.Position;
@@ -151,9 +216,14 @@ namespace ShaPrint.Core.Network
                 {
                     throw new InvalidDataException("Invalid print job payload format.");
                 }
-            }
+                }
 
-            return payload;
+                return payload;
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(innerPayload);
+            }
         }
     }
 }
