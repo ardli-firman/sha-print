@@ -62,6 +62,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private readonly INavigationService _navigationService;
         private readonly ISnackbarService _snackbarService;
         private readonly IContentDialogService _contentDialogService;
+        private readonly IClipboardService _clipboardService;
         private readonly string _configFile;
 
         // Driver auto-provisioning (client-side)
@@ -92,11 +93,13 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public ClientViewModel(
             INavigationService navigationService,
             ISnackbarService snackbarService,
-            IContentDialogService contentDialogService)
+            IContentDialogService contentDialogService,
+            IClipboardService clipboardService)
         {
             _navigationService = navigationService;
             _snackbarService = snackbarService;
             _contentDialogService = contentDialogService;
+            _clipboardService = clipboardService;
             _discoveryClient = new DiscoveryClient();
             _driverPackageManager = new DriverPackageManager();
             _driverInstaller = new DriverInstaller(new RealProcessRunner());
@@ -986,10 +989,9 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             string printerName = item.Printer.Name;
             string ippUrl = $"http://{serverIp}:631/printers/{Uri.EscapeDataString(printerName)}/ipp/print";
 
-            // Copy IPP URL to clipboard
-            try
+            bool copied = await _clipboardService.TrySetTextAsync(ippUrl);
+            if (copied)
             {
-                System.Windows.Clipboard.SetText(ippUrl);
                 AppLogger.Log($"[CLIENT] IPP URL copied to clipboard: {ippUrl}");
 
                 _snackbarService.Show(
@@ -998,21 +1000,38 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     ControlAppearance.Success,
                     new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Copy24),
                     TimeSpan.FromSeconds(7));
+            }
+            else
+            {
+                AppLogger.Error("[CLIENT] Failed to copy IPP URL: clipboard is unavailable after retries.");
+                _snackbarService.Show(
+                    "Clipboard unavailable",
+                    "Windows clipboard is busy. The URL is shown below so it can be copied manually.",
+                    ControlAppearance.Caution,
+                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Warning24),
+                    TimeSpan.FromSeconds(5));
+            }
 
-                // Also show the URL in a dialog for easy reference
-                var dialog = new Wpf.Ui.Controls.ContentDialog
-                {
-                    Title = "Add IPP Printer",
-                    Content = $"IPP URL has been copied to clipboard:\n\n{ippUrl}\n\nTo add this printer:\n1. Open Windows Settings\n2. Go to Bluetooth & devices → Printers & scanners\n3. Click Add device\n4. Click Add a new device manually\n5. Select IPP Device\n6. Paste the URL",
-                    PrimaryButtonText = "Open Windows Settings",
-                    CloseButtonText = "Close",
-                    DefaultButton = Wpf.Ui.Controls.ContentDialogButton.Primary,
-                };
+            // Always show the URL, even when another process temporarily owns
+            // the clipboard. This keeps IPP setup usable during RDP sessions,
+            // clipboard-manager activity, or a stuck Windows clipboard lock.
+            string copyInstruction = copied
+                ? "The URL has been copied to the clipboard:"
+                : "The clipboard is currently unavailable. Copy this URL manually:";
+            var dialog = new Wpf.Ui.Controls.ContentDialog
+            {
+                Title = "Add IPP Printer",
+                Content = $"{copyInstruction}\n\n{ippUrl}\n\nTo add this printer:\n1. Open Windows Settings\n2. Go to Bluetooth & devices → Printers & scanners\n3. Click Add device\n4. Click Add a new device manually\n5. Select IPP Device\n6. Paste the URL",
+                PrimaryButtonText = "Open Windows Settings",
+                CloseButtonText = "Close",
+                DefaultButton = Wpf.Ui.Controls.ContentDialogButton.Primary,
+            };
 
+            try
+            {
                 var result = await _contentDialogService.ShowAsync(dialog, CancellationToken.None);
                 if (result == Wpf.Ui.Controls.ContentDialogResult.Primary)
                 {
-                    // Open Windows Printers settings
                     try
                     {
                         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -1029,13 +1048,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             }
             catch (Exception ex)
             {
-                AppLogger.Error("[CLIENT] Failed to copy IPP URL: " + ex.Message);
-                _snackbarService.Show(
-                    "Copy failed",
-                    $"Could not copy URL: {ex.Message}",
-                    ControlAppearance.Danger,
-                    new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
-                    TimeSpan.FromSeconds(5));
+                AppLogger.Error("[CLIENT] Failed to show IPP setup dialog: " + ex.Message);
             }
         }
 

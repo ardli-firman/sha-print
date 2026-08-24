@@ -24,6 +24,9 @@ public class ContentDialogWiringTests
 
         Assert.Contains("_contentDialogService.ShowAsync(picker", clientViewModel);
         Assert.Contains("_contentDialogService.ShowAsync(dialog", clientViewModel);
+        Assert.Contains("_clipboardService.TrySetTextAsync(ippUrl)", clientViewModel);
+        Assert.Contains("clipboard is currently unavailable", clientViewModel);
+        Assert.DoesNotContain("System.Windows.Clipboard.SetText(ippUrl)", clientViewModel);
         Assert.DoesNotContain("await picker.ShowAsync(", clientViewModel);
         Assert.DoesNotContain("await dialog.ShowAsync(", clientViewModel);
     }

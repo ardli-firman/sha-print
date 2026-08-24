@@ -30,6 +30,8 @@ namespace ShaPrint.WpfApp
                 services.AddSingleton<INavigationService, NavigationService>();
                 services.AddSingleton<ISnackbarService, SnackbarService>();
                 services.AddSingleton<IContentDialogService, ContentDialogService>();
+                services.AddSingleton<ShaPrint.WpfApp.Services.Client.IClipboardService,
+                    ShaPrint.WpfApp.Services.Client.ClipboardService>();
 
                 // Windows
                 services.AddSingleton<MainWindow>();
