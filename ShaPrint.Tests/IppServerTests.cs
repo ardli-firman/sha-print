@@ -439,6 +439,20 @@ public class IppServerTests
         Assert.Equal(largeDoc.Length, spooler.PrintedJobs[0].Data.Length);
     }
 
+    [Fact]
+    public void JobManager_CreateJobConcurrently_RetainsUniqueJobs()
+    {
+        var manager = new JobManager();
+
+        Parallel.For(0, 1_000, i => manager.CreateJob("TestPrinter", $"Job-{i}"));
+
+        var jobs = manager.GetAllJobs();
+        Assert.Equal(1_000, jobs.Count);
+        Assert.Equal(1_000, jobs.Select(job => job.Id).Distinct().Count());
+        Assert.DoesNotContain(jobs, job => job.Id <= 0);
+        Assert.Equal(jobs.Select(job => job.Id).OrderBy(id => id), jobs.Select(job => job.Id));
+    }
+
     /// <summary>
     /// Multiple concurrent requests should not crash.
     /// </summary>
@@ -450,23 +464,21 @@ public class IppServerTests
         spooler.AddPrinter(new PrinterInfo { Name = "TestPrinter", DriverName = "Generic Driver" });
         var server = new IppServer(spooler);
 
-        // Act - send 10 concurrent requests
-        var tasks = new List<Task>();
-        for (int i = 0; i < 10; i++)
+        const int requestCount = 100;
+        var tasks = Enumerable.Range(0, requestCount).Select(async _ =>
         {
-            tasks.Add(Task.Run(async () =>
-            {
-                var request = IppRequestBuilder.BuildPrintJobRequest("TestPrinter", new byte[] { 0x50, 0x44, 0x46 });
-                using var input = new MemoryStream(request);
-                using var output = new MemoryStream();
-                await server.ProcessRequestAsync(input, output);
-            }));
-        }
+            var request = IppRequestBuilder.BuildPrintJobRequest(
+                "TestPrinter", [0x50, 0x44, 0x46]);
+            using var input = new MemoryStream(request);
+            using var output = new MemoryStream();
+            await server.ProcessRequestAsync(input, output);
+        }).ToArray();
 
         await Task.WhenAll(tasks);
 
         // Assert
-        Assert.Equal(10, spooler.PrintedJobs.Count);
+        Assert.Equal(requestCount, spooler.PrintedJobs.Count);
+        Assert.Equal(requestCount, spooler.PrintedJobs.Select(job => job.JobId).Distinct().Count());
     }
 
     /// <summary>
@@ -533,10 +545,10 @@ public class IppServerTests
 public class InMemorySpoolerAdapter : ISpoolerAdapter
 {
     private readonly List<PrinterInfo> _printers = new();
-    private readonly List<PrintedJob> _printedJobs = new();
-    private int _nextJobId = 1;
+    private readonly System.Collections.Concurrent.ConcurrentQueue<PrintedJob> _printedJobs = new();
+    private int _nextJobId;
 
-    public IReadOnlyList<PrintedJob> PrintedJobs => _printedJobs;
+    public IReadOnlyList<PrintedJob> PrintedJobs => _printedJobs.ToArray();
 
     public void AddPrinter(PrinterInfo printer)
     {
@@ -551,8 +563,8 @@ public class InMemorySpoolerAdapter : ISpoolerAdapter
             return Task.FromResult(SpoolerResult.Fail($"Printer '{job.PrinterName}' not found"));
         }
 
-        var jobId = _nextJobId++;
-        _printedJobs.Add(new PrintedJob
+        var jobId = Interlocked.Increment(ref _nextJobId);
+        _printedJobs.Enqueue(new PrintedJob
         {
             JobId = jobId,
             PrinterName = job.PrinterName,

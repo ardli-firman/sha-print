@@ -16,7 +16,6 @@ namespace ShaPrint.Core.Ipp;
 public class IppServer : IIppServer
 {
     private readonly ISpoolerAdapter _spooler;
-    private readonly SharpIppServer _ippProtocol;
     private readonly PrinterState _printerState;
     private readonly JobManager _jobManager;
     private readonly string? _configuredPrinterName;
@@ -27,7 +26,6 @@ public class IppServer : IIppServer
     public IppServer(ISpoolerAdapter spooler)
     {
         _spooler = spooler;
-        _ippProtocol = new SharpIppServer();
         _printerState = new PrinterState();
         _jobManager = new JobManager();
         _configuredPrinterName = null;
@@ -39,7 +37,6 @@ public class IppServer : IIppServer
     public IppServer(ISpoolerAdapter spooler, string printerName)
     {
         _spooler = spooler;
-        _ippProtocol = new SharpIppServer();
         _printerState = new PrinterState();
         _jobManager = new JobManager();
         _configuredPrinterName = printerName;
@@ -47,10 +44,12 @@ public class IppServer : IIppServer
 
     public async Task ProcessRequestAsync(Stream inputStream, Stream outputStream, CancellationToken ct = default)
     {
+        var ippProtocol = new SharpIppServer();
+
         try
         {
             // 1. Parse IPP request
-            IIppRequest request = await _ippProtocol.ReceiveRequestAsync(inputStream);
+            IIppRequest request = await ippProtocol.ReceiveRequestAsync(inputStream);
 
             // 2. Extract printer name from request or use configured one
             var printerName = _configuredPrinterName ?? ExtractPrinterNameFromRequest(request);
@@ -68,8 +67,8 @@ public class IppServer : IIppServer
             };
 
             // 4. Serialize and send response
-            IIppResponseMessage rawResponse = await _ippProtocol.CreateRawResponseAsync(response);
-            await _ippProtocol.SendRawResponseAsync(rawResponse, outputStream);
+            IIppResponseMessage rawResponse = await ippProtocol.CreateRawResponseAsync(response);
+            await ippProtocol.SendRawResponseAsync(rawResponse, outputStream);
         }
         catch (IppRequestException ex)
         {
@@ -88,7 +87,7 @@ public class IppServer : IIppServer
                 new IppAttribute(Tag.Charset, IppAttributeNames.AttributesCharset, "utf-8"),
                 new IppAttribute(Tag.NaturalLanguage, IppAttributeNames.AttributesNaturalLanguage, "en")
             ]);
-            await _ippProtocol.SendRawResponseAsync(errorResponse, outputStream);
+            await ippProtocol.SendRawResponseAsync(errorResponse, outputStream);
         }
     }
 
@@ -397,24 +396,29 @@ internal class PrinterState
 /// </summary>
 internal class JobManager
 {
-    private readonly Dictionary<int, IppJob> _jobs = new();
-    private int _nextJobId = 1;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, IppJob> _jobs = new();
+    private int _nextJobId;
 
     public int ActiveJobCount => _jobs.Values.Count(j =>
         j.State == JobState.Pending || j.State == JobState.Processing);
 
     public IppJob CreateJob(string printerName, string documentName)
     {
+        int id = Interlocked.Increment(ref _nextJobId);
         var job = new IppJob
         {
-            Id = _nextJobId++,
+            Id = id,
             PrinterName = printerName,
             DocumentName = documentName,
             State = JobState.Processing,
             StateReasons = [JobStateReason.None],
             CreatedAt = DateTime.UtcNow
         };
-        _jobs[job.Id] = job;
+        if (!_jobs.TryAdd(id, job))
+        {
+            throw new InvalidOperationException($"IPP job ID collision: {id}.");
+        }
+
         return job;
     }
 
@@ -425,7 +429,7 @@ internal class JobManager
 
     public IReadOnlyList<IppJob> GetAllJobs()
     {
-        return _jobs.Values.ToList();
+        return _jobs.Values.OrderBy(job => job.Id).ToArray();
     }
 
     public bool CancelJob(int jobId)
