@@ -423,21 +423,12 @@ namespace ShaPrint.WpfApp.Services.Client
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 // User cancellation
-                return new DriverDownloadResult
-                {
-                    Success = false,
-                    ErrorMessage = "Download cancelled."
-                };
+                return CreateCancellationResult(userCancelled: true);
             }
             catch (OperationCanceledException)
             {
                 AppLogger.Error("[DRIVER_PKG_CLIENT] Transfer deadline elapsed.");
-                return new DriverDownloadResult
-                {
-                    Success = false,
-                    ErrorMessage = "Driver transfer timed out — server stalled.",
-                    TimedOut = true
-                };
+                return CreateCancellationResult(userCancelled: false);
             }
             catch (Exception ex)
             {
@@ -491,6 +482,16 @@ namespace ShaPrint.WpfApp.Services.Client
                 CryptographicOperations.ZeroMemory(requestJson);
             }
         }
+
+        internal static DriverDownloadResult CreateCancellationResult(bool userCancelled)
+            => userCancelled
+                ? new DriverDownloadResult { Success = false, ErrorMessage = "Download cancelled." }
+                : new DriverDownloadResult
+                {
+                    Success = false,
+                    ErrorMessage = "Driver transfer timed out — server stalled.",
+                    TimedOut = true
+                };
 
         private static void TryDeleteDirectory(string directory)
         {
