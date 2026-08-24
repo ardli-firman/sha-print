@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -99,20 +100,18 @@ public static class LegacyEnvelopeCodec
         if (frame.Length < HeaderLength)
             throw new InvalidDataException("Legacy envelope is truncated before its header.");
 
-        using var stream = new MemoryStream(frame.ToArray(), writable: false);
-        using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
-
-        if (reader.ReadUInt32() != Magic)
+        if (BinaryPrimitives.ReadUInt32LittleEndian(frame) != Magic)
             throw new InvalidDataException("Legacy envelope magic is invalid.");
 
-        byte version = reader.ReadByte();
+        byte version = frame[sizeof(uint)];
         ValidateVersion(version);
 
-        var messageType = (LegacyMessageType)reader.ReadByte();
+        var messageType = (LegacyMessageType)frame[sizeof(uint) + sizeof(byte)];
         ValidateMessageType(messageType);
 
-        long correlationId = reader.ReadInt64();
-        int payloadLength = reader.ReadInt32();
+        int correlationOffset = sizeof(uint) + sizeof(byte) + sizeof(byte);
+        long correlationId = BinaryPrimitives.ReadInt64LittleEndian(frame.Slice(correlationOffset, sizeof(long)));
+        int payloadLength = BinaryPrimitives.ReadInt32LittleEndian(frame.Slice(correlationOffset + sizeof(long), sizeof(int)));
         ValidatePayloadLength(payloadLength);
 
         int availablePayloadBytes = frame.Length - HeaderLength;
@@ -122,9 +121,7 @@ public static class LegacyEnvelopeCodec
                 $"Legacy envelope payload length mismatch: declared {payloadLength}, actual {availablePayloadBytes}.");
         }
 
-        byte[] payload = reader.ReadBytes(payloadLength);
-        if (payload.Length != payloadLength)
-            throw new InvalidDataException("Legacy envelope payload is truncated.");
+        byte[] payload = frame.Slice(HeaderLength, payloadLength).ToArray();
 
         return new LegacyEnvelope(version, messageType, correlationId, payload);
     }
