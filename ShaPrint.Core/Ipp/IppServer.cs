@@ -74,10 +74,14 @@ public class IppServer : IIppServer
         catch (IppRequestException ex)
         {
             // Return IPP error response
+            var responseVersion = ex.StatusCode == IppStatusCode.ServerErrorVersionNotSupported
+                ? new IppVersion(1, 1)
+                : ex.RequestMessage.Version;
+
             var errorResponse = new IppResponseMessage
             {
                 RequestId = ex.RequestMessage.RequestId,
-                Version = ex.RequestMessage.Version,
+                Version = responseVersion,
                 StatusCode = ex.StatusCode
             };
             errorResponse.OperationAttributes.Add([

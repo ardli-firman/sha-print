@@ -381,7 +381,12 @@ public class IppServerTests
 
         // Assert
         var responseBytes = outputStream.ToArray();
-        // Server should handle gracefully (may return error or empty)
+        Assert.True(responseBytes.Length >= 8);
+        Assert.Equal(0x01, responseBytes[0]);
+        Assert.Equal(0x01, responseBytes[1]);
+        Assert.Equal(0x05, responseBytes[2]);
+        Assert.Equal(0x03, responseBytes[3]);
+        Assert.Equal(1, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(responseBytes.AsSpan(4, 4)));
     }
 
     /// <summary>
