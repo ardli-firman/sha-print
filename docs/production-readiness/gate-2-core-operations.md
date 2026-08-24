@@ -6,18 +6,19 @@ PASS for the LAN deployment profile: one Windows server, approximately three cli
 
 ## Verified Commit
 
-The verified implementation is `e44fd6077e2d6a7e2ad368aa66f65dc4312d0d47` (`test(reliability): stabilize timeout coverage under release load`). The canonical verification below was run from this commit before adding this evidence file.
+The verified implementation is `023df35` (`fix(ipp): advertise client-reachable printer endpoints`). The canonical verification below was run from this commit before this evidence update.
 
 ## Canonical Verification
 
 - `pwsh -NoProfile -File scripts/verify-build.ps1` — restore exited 0, Release build exited 0, and the Release test run exited 0.
 - Build result: 0 errors. The final incremental build reported 0 warnings.
-- Test result: **482/482 passed, 0 failed, 0 skipped** in 12 seconds.
+- Test result: **484/484 passed, 0 failed, 0 skipped** in 12 seconds.
 - TRX: `TestResults/ShaPrint.Tests.trx`.
 - `git diff --check` exited 0; no `[DEBUG-` markers remain in production or test C# sources; no generated `*_wpftmp.csproj` residue remained after verification.
 
 ## Gate 2 Focused Evidence
 
+- IPP protocol and routing: **46/46 passed**. Coverage includes encoded printer-name routing, client-reachable `printer-uri-supported` metadata, full `/printers/{name}/ipp/print` job routing, and concurrent multi-printer handling.
 - Driver package transfer and safety: **48/48 passed**. Coverage includes strict 64-hex package IDs, bounded packet framing, cancellation/timeout classification, chunk ordering and size limits, SHA-256 verification, atomic publication, active-cache eviction protection, stalled-transfer cleanup, child-process-tree termination, and same-driver concurrent export serialization.
 - Discovery and monitor networking: **90/90 passed**. Coverage includes authenticated framing, bounded total and idle deadlines, deduplication, request/work limits, tracked start/stop lifecycle, cancellation propagation, bounded worker shutdown, restart/stop race handling, and actionable failure categories.
 - Scanner and payload validation: **11/11 scanner + 5/5 payload passed**.
