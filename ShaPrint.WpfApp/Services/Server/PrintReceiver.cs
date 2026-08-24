@@ -334,6 +334,7 @@ namespace ShaPrint.Server
         {
             ArgumentNullException.ThrowIfNull(envelope);
             PrintJobPayload? payload = null;
+            byte[]? spoolBuffer = null;
             bool admitted = false;
             try
             {
@@ -351,10 +352,31 @@ namespace ShaPrint.Server
                 if (payload.SpoolData.Length == 0)
                     throw new InvalidDataException("Print job data is empty.");
 
-                if (!PrinterExists(payload.TargetPrinterName))
+                bool printerExists = await Task.Run(() => PrinterExists(payload.TargetPrinterName), CancellationToken.None).WaitAsync(token);
+                if (!printerExists)
                     return new LegacyAcknowledgement(envelope.CorrelationId, LegacyAcknowledgementStatus.TargetUnavailable, "The target printer is unavailable.");
 
-                bool printed = await SubmitPrintAsync(payload.TargetPrinterName, payload.SpoolData, documentName).WaitAsync(token);
+                // The spooler may outlive the request deadline. Transfer its
+                // input out of the payload object so outer cleanup never zeros
+                // bytes that an in-flight native submission still owns.
+                spoolBuffer = payload.SpoolData;
+                payload.SpoolData = Array.Empty<byte>();
+                Task<bool> spoolTask = SubmitPrintAsync(payload.TargetPrinterName, spoolBuffer, documentName);
+                bool printed;
+                try
+                {
+                    printed = await spoolTask.WaitAsync(token);
+                }
+                catch (OperationCanceledException)
+                {
+                    byte[] bufferOwnedBySpooler = spoolBuffer;
+                    _ = spoolTask.ContinueWith(_ => CryptographicOperations.ZeroMemory(bufferOwnedBySpooler), TaskScheduler.Default);
+                    spoolBuffer = null;
+                    throw;
+                }
+
+                CryptographicOperations.ZeroMemory(spoolBuffer);
+                spoolBuffer = null;
                 if (!printed)
                     return new LegacyAcknowledgement(envelope.CorrelationId, LegacyAcknowledgementStatus.SpoolerRejected, "Windows Spooler rejected the job.");
 
@@ -389,6 +411,7 @@ namespace ShaPrint.Server
             {
                 if (admitted) _concurrencyLimit!.Release();
                 if (payload?.SpoolData is { Length: > 0 } spoolData) CryptographicOperations.ZeroMemory(spoolData);
+                if (spoolBuffer is { Length: > 0 }) CryptographicOperations.ZeroMemory(spoolBuffer);
                 if (envelope.Payload.Length > 0) CryptographicOperations.ZeroMemory(envelope.Payload);
             }
         }

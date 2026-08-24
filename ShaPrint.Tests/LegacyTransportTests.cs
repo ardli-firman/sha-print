@@ -144,6 +144,50 @@ public class LegacyTransportTests
     public void EnvelopePayloadLimit_AccommodatesTheMaximumSerializedPrintJob()
         => Assert.Equal(PrintJobPayload.MaxWireBytes, LegacyEnvelopeCodec.MaxPayloadBytes);
 
+    [Fact]
+    public async Task PrintReceiver_PrinterLookupDeadline_ReturnsTimeoutWithoutBlockingRequest()
+    {
+        using var gate = new ManualResetEventSlim(false);
+        var receiver = CreateReceiver(printerExists: true, spoolerAccepts: true);
+        receiver.PrinterExists = _ =>
+        {
+            gate.Wait();
+            return true;
+        };
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(25));
+
+        LegacyAcknowledgement acknowledgement = await receiver.ProcessLegacyEnvelopePrintAsync(CreateEnvelope(129), "loopback", cancellation.Token);
+        gate.Set();
+
+        Assert.Equal(LegacyAcknowledgementStatus.Timeout, acknowledgement.Status);
+    }
+
+    [Fact]
+    public async Task PrintReceiver_Timeout_DefersSpoolBufferCleanupUntilUnderlyingTaskCompletes()
+    {
+        var spoolerCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        byte[]? capturedBuffer = null;
+        var receiver = CreateReceiver(printerExists: true, spoolerAccepts: true);
+        receiver.SubmitPrintAsync = (_, data, _) =>
+        {
+            capturedBuffer = data;
+            return spoolerCompletion.Task;
+        };
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(25));
+
+        LegacyAcknowledgement acknowledgement = await receiver.ProcessLegacyEnvelopePrintAsync(CreateEnvelope(130), "loopback", cancellation.Token);
+
+        Assert.Equal(LegacyAcknowledgementStatus.Timeout, acknowledgement.Status);
+        Assert.NotNull(capturedBuffer);
+        Assert.Contains(capturedBuffer!, value => value != 0);
+
+        spoolerCompletion.SetResult(true);
+        for (int attempt = 0; attempt < 20 && capturedBuffer!.Any(value => value != 0); attempt++)
+            await Task.Delay(10);
+
+        Assert.All(capturedBuffer!, value => Assert.Equal(0, value));
+    }
+
     private static PrintReceiver CreateReceiver(bool printerExists, bool spoolerAccepts, int capacity = 1)
     {
         var receiver = new PrintReceiver(new NullNotificationService())

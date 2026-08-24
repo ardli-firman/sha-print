@@ -187,6 +187,8 @@ namespace ShaPrint.Core.Network
                     if (dataLength >= 0 && dataLength <= Constants.MaxPrintJobBytes && dataLength == remainingAfterDocName - 4)
                     {
                         payload.SpoolData = br.ReadBytes(dataLength);
+                        if (payload.SpoolData.Length != dataLength || ms.Position != ms.Length)
+                            throw new InvalidDataException("Truncated or trailing v2 print job data.");
                         if (payload.DocumentName.Length > 1024)
                         {
                             payload.DocumentName = payload.DocumentName.Substring(0, 1024);
@@ -216,6 +218,10 @@ namespace ShaPrint.Core.Network
 
                     payload.DocumentName = string.Empty;
                     payload.SpoolData = br.ReadBytes(dataLength);
+                    if (payload.SpoolData.Length != dataLength)
+                        throw new InvalidDataException($"Truncated legacy spool data: expected {dataLength}, got {payload.SpoolData.Length}.");
+                    if (ms.Position != ms.Length)
+                        throw new InvalidDataException("Unexpected trailing bytes in legacy print job payload.");
                 }
                 else
                 {

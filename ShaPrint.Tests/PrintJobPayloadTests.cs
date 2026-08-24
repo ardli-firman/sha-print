@@ -271,4 +271,23 @@ public class PrintJobPayloadTests
         Assert.Equal(string.Empty, payload.DocumentName);
         Assert.Equal(spoolData, payload.SpoolData);
     }
+
+    [Fact]
+    public void ReadEncryptedBlob_AuthenticatedTruncatedLegacyData_Throws()
+    {
+        byte[] innerPayload;
+        using (var stream = new MemoryStream())
+        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write("LegacyPrinter");
+            writer.Write(4); // Declares four bytes, but only two are present.
+            writer.Write(new byte[] { 1, 2 });
+            writer.Flush();
+            innerPayload = stream.ToArray();
+        }
+
+        byte[] encrypted = CryptoHelper.EncryptAesGcm(innerPayload);
+
+        Assert.Throws<InvalidDataException>(() => PrintJobPayload.ReadEncryptedBlob(encrypted));
+    }
 }
