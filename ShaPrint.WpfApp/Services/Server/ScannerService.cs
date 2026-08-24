@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media;
@@ -126,10 +127,13 @@ namespace ShaPrint.Server
             ActiveScans[key] = true;
             var worker = StartStaWorker(() => _scanWorker?.Invoke(key, dpi, colorMode, format, cancellationToken)
                 ?? PerformScanCore(key, dpi, colorMode, format, cancellationToken, out _));
+            bool resultOwnershipTransferred = false;
             try
             {
-                return await worker.Completion.WaitAsync(timeout ?? DefaultScanTimeout, cancellationToken)
+                byte[] result = await worker.Completion.WaitAsync(timeout ?? DefaultScanTimeout, cancellationToken)
                     .ConfigureAwait(false);
+                resultOwnershipTransferred = true;
+                return result;
             }
             finally
             {
@@ -138,6 +142,8 @@ namespace ShaPrint.Server
                 // operation actually exits, preventing a second scan from racing it.
                 if (worker.Completion.IsCompleted)
                 {
+                    if (!resultOwnershipTransferred)
+                        DiscardWorkerResult(worker.Completion);
                     ActiveScans.TryRemove(key, out _);
                     LastScanTimes[key] = DateTime.UtcNow;
                     lease.Dispose();
@@ -146,12 +152,24 @@ namespace ShaPrint.Server
                 {
                     _ = worker.Completion.ContinueWith(completedTask =>
                     {
+                        if (!resultOwnershipTransferred)
+                            DiscardWorkerResult(completedTask);
                         ActiveScans.TryRemove(key, out _);
                         LastScanTimes[key] = DateTime.UtcNow;
                         lease.Dispose();
                     }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                 }
             }
+        }
+
+        private static void DiscardWorkerResult(Task<byte[]> completedTask)
+        {
+            if (!completedTask.IsCompletedSuccessfully)
+                return;
+
+            byte[] result = completedTask.GetAwaiter().GetResult();
+            if (result.Length > 0)
+                CryptographicOperations.ZeroMemory(result);
         }
 
         private List<ScannerInfo> EnumerateScannersCore()

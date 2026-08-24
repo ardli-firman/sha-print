@@ -91,6 +91,8 @@ namespace ShaPrint.Core.Network
                     throw new InvalidDataException($"Negative encrypted blob length: {encryptedLength}.");
                 if (encryptedLength > 8192) // Scan request payload is small, should never exceed 8KB
                     throw new InvalidDataException($"Encrypted blob exceeds limit: {encryptedLength} bytes.");
+                if (encryptedLength < 12 + 16) // AES-GCM nonce + authentication tag
+                    throw new InvalidDataException("Encrypted scan request blob is too short.");
 
                 encryptedBlob = new byte[encryptedLength];
                 await ReadExactlyAsync(stream, encryptedBlob, cancellationToken).ConfigureAwait(false);
@@ -129,7 +131,14 @@ namespace ShaPrint.Core.Network
                 if (ms.Position != ms.Length)
                     throw new InvalidDataException("Scan request contains trailing malformed data.");
 
-                Validate(payload, nameof(payload));
+                try
+                {
+                    Validate(payload, nameof(payload));
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new InvalidDataException($"Invalid scan request parameters: {ex.Message}", ex);
+                }
  
                 return payload;
             }

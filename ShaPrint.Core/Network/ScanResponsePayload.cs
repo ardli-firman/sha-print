@@ -80,6 +80,8 @@ namespace ShaPrint.Core.Network
             byte[] lengthBuffer = Array.Empty<byte>();
             byte[] encryptedBlob = Array.Empty<byte>();
             byte[] innerPayload = Array.Empty<byte>();
+            ScanResponsePayload? payload = null;
+            bool fileOwnershipTransferred = false;
             try
             {
                 lengthBuffer = new byte[sizeof(int)];
@@ -89,6 +91,8 @@ namespace ShaPrint.Core.Network
                     throw new InvalidDataException($"Negative encrypted blob length: {encryptedLength}.");
                 if (encryptedLength > Constants.MaxPrintJobBytes + 1024) // allow overhead
                     throw new InvalidDataException($"Encrypted blob exceeds limit: {encryptedLength} bytes.");
+                if (encryptedLength < 12 + 16) // AES-GCM nonce + authentication tag
+                    throw new InvalidDataException("Encrypted scan response blob is too short.");
 
                 encryptedBlob = new byte[encryptedLength];
                 await ScanRequestPayload.ReadExactlyAsync(stream, encryptedBlob, cancellationToken).ConfigureAwait(false);
@@ -107,7 +111,7 @@ namespace ShaPrint.Core.Network
                 using var ms = new MemoryStream(innerPayload, writable: false);
                 using var br = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
 
-                var payload = new ScanResponsePayload();
+                payload = new ScanResponsePayload();
                 payload.Success = br.ReadBoolean();
                 payload.ErrorMessage = ReadBoundedString(br, MaxErrorMessageBytes, "ErrorMessage");
 
@@ -122,7 +126,8 @@ namespace ShaPrint.Core.Network
                     throw new InvalidDataException($"Truncated scan file: expected {fileLength}, got {payload.FileBytes.Length}.");
                 if (ms.Position != ms.Length)
                     throw new InvalidDataException("Scan response contains trailing malformed data.");
-                return payload;
+                fileOwnershipTransferred = true;
+                return payload!;
             }
             catch (EndOfStreamException ex)
             {
@@ -133,6 +138,8 @@ namespace ShaPrint.Core.Network
                 if (lengthBuffer.Length > 0) CryptographicOperations.ZeroMemory(lengthBuffer);
                 if (encryptedBlob.Length > 0) CryptographicOperations.ZeroMemory(encryptedBlob);
                 if (innerPayload.Length > 0) CryptographicOperations.ZeroMemory(innerPayload);
+                if (!fileOwnershipTransferred && payload?.FileBytes is { Length: > 0 })
+                    CryptographicOperations.ZeroMemory(payload.FileBytes);
             }
         }
 
