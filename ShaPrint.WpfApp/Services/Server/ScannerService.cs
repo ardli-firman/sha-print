@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Collections.Concurrent;
@@ -12,8 +13,56 @@ namespace ShaPrint.Server
 {
     public class ScannerService
     {
+        public static readonly TimeSpan DefaultScanTimeout = TimeSpan.FromMinutes(2);
+        public static readonly TimeSpan DefaultEnumerationTimeout = TimeSpan.FromSeconds(15);
         public static readonly ConcurrentDictionary<string, DateTime> LastScanTimes = new();
         public static readonly ConcurrentDictionary<string, bool> ActiveScans = new();
+        private static readonly ConcurrentDictionary<string, ScannerAdmission> ScanAdmissions =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private readonly ConcurrentDictionary<int, Task> _activeWorkers = new();
+        private int _nextWorkerId;
+        private readonly Func<string, int, int, string, CancellationToken, byte[]>? _scanWorker;
+        private readonly Func<CancellationToken, List<ScannerInfo>>? _enumerationWorker;
+
+        public ScannerService(
+            Func<string, int, int, string, CancellationToken, byte[]>? scanWorker = null,
+            Func<CancellationToken, List<ScannerInfo>>? enumerationWorker = null)
+        {
+            _scanWorker = scanWorker;
+            _enumerationWorker = enumerationWorker;
+        }
+
+        private sealed class ScannerAdmission
+        {
+            public ScannerAdmission(string key) => Key = key;
+            public string Key { get; }
+            public SemaphoreSlim Semaphore { get; } = new(1, 1);
+            public int References;
+        }
+
+        private sealed class ScannerAdmissionLease : IDisposable
+        {
+            private readonly ScannerAdmission _admission;
+            private int _disposed;
+
+            public ScannerAdmissionLease(ScannerAdmission admission) => _admission = admission;
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                    return;
+
+                _admission.Semaphore.Release();
+                if (Interlocked.Decrement(ref _admission.References) == 0)
+                    ScanAdmissions.TryRemove(new KeyValuePair<string, ScannerAdmission>(_admission.Key, _admission));
+            }
+        }
+
+        private sealed class StaWorker<T>
+        {
+            public required Task<T> Completion { get; init; }
+        }
         // WIA Format GUIDs
         private const string WiaFormatBMP = "{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}";
         private const string WiaFormatJPEG = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}";
@@ -22,56 +71,133 @@ namespace ShaPrint.Server
 
         public List<ScannerInfo> GetLocalScanners()
         {
-            var list = new List<ScannerInfo>();
-            
-            // WIA requires STA, so run listing on an STA thread
-            var thread = new Thread(() =>
+            return GetLocalScannersAsync().GetAwaiter().GetResult();
+        }
+
+        public async Task<List<ScannerInfo>> GetLocalScannersAsync(
+            CancellationToken cancellationToken = default,
+            TimeSpan? timeout = null)
+        {
+            var worker = StartStaWorker(() => _enumerationWorker?.Invoke(cancellationToken) ?? EnumerateScannersCore());
+            try
             {
-                try
-                {
-                    Type? wiaType = Type.GetTypeFromProgID("WIA.DeviceManager");
-                    if (wiaType == null)
-                    {
-                        AppLogger.Error("[SCANNER] WIA.DeviceManager is not registered (WIA not installed).");
-                        return;
-                    }
-
-                    dynamic deviceManager = Activator.CreateInstance(wiaType)!;
-                    foreach (dynamic info in deviceManager.DeviceInfos)
-                    {
-                        // Type == 1 means Scanner Device
-                        if (info.Type == 1)
-                        {
-                            string friendlyName = GetScannerFriendlyName(info);
-                            string desc = GetScannerDescription(info);
-
-                            list.Add(new ScannerInfo
-                            {
-                                Name = friendlyName,
-                                Description = desc
-                            });
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.Error("[SCANNER] Failed to list scanners", ex);
-                }
-            });
-
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            thread.Join();
-
-            return list;
+                return await worker.Completion.WaitAsync(timeout ?? DefaultEnumerationTimeout, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                AppLogger.Error("[SCANNER] Scanner enumeration timed out; WIA worker remains tracked until it exits.");
+                return new List<ScannerInfo>();
+            }
+            catch (OperationCanceledException)
+            {
+                AppLogger.Log("[SCANNER] Scanner enumeration cancelled.");
+                return new List<ScannerInfo>();
+            }
         }
 
         public byte[] PerformScan(string scannerName, int dpi, int colorMode, string format, out string actualFormat)
         {
-            ActiveScans[scannerName] = true;
+            actualFormat = GetOutputExtension(format);
+            return PerformScanAsync(scannerName, dpi, colorMode, format).GetAwaiter().GetResult();
+        }
+
+        public async Task<byte[]> PerformScanAsync(
+            string scannerName,
+            int dpi,
+            int colorMode,
+            string format,
+            CancellationToken cancellationToken = default,
+            TimeSpan? timeout = null)
+        {
+            var request = new ScanRequestPayload
+            {
+                TargetScannerName = scannerName,
+                Dpi = dpi,
+                ColorMode = colorMode,
+                Format = format
+            };
+            ScanRequestPayload.Validate(request);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string key = scannerName.Trim();
+            if (!TryAcquireScanner(key, out ScannerAdmissionLease lease))
+                throw new ScannerBusyException($"Scanner '{key}' is busy with another scan.");
+
+            ActiveScans[key] = true;
+            var worker = StartStaWorker(() => _scanWorker?.Invoke(key, dpi, colorMode, format, cancellationToken)
+                ?? PerformScanCore(key, dpi, colorMode, format, cancellationToken, out _));
             try
             {
-                byte[] resultBytes = Array.Empty<byte>();
+                return await worker.Completion.WaitAsync(timeout ?? DefaultScanTimeout, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                // A timed-out/cancelled WIA call cannot be forcefully aborted. Keep
+                // ownership of the admission and worker-owned buffers until the STA
+                // operation actually exits, preventing a second scan from racing it.
+                if (worker.Completion.IsCompleted)
+                {
+                    ActiveScans.TryRemove(key, out _);
+                    LastScanTimes[key] = DateTime.UtcNow;
+                    lease.Dispose();
+                }
+                else
+                {
+                    _ = worker.Completion.ContinueWith(completedTask =>
+                    {
+                        ActiveScans.TryRemove(key, out _);
+                        LastScanTimes[key] = DateTime.UtcNow;
+                        lease.Dispose();
+                    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                }
+            }
+        }
+
+        private List<ScannerInfo> EnumerateScannersCore()
+        {
+            var list = new List<ScannerInfo>();
+            try
+            {
+                Type? wiaType = Type.GetTypeFromProgID("WIA.DeviceManager");
+                if (wiaType == null)
+                {
+                    AppLogger.Error("[SCANNER] WIA.DeviceManager is not registered (WIA not installed).");
+                    return list;
+                }
+
+                dynamic deviceManager = Activator.CreateInstance(wiaType)!;
+                foreach (dynamic info in deviceManager.DeviceInfos)
+                {
+                    if (info.Type == 1)
+                    {
+                        list.Add(new ScannerInfo
+                        {
+                            Name = GetScannerFriendlyName(info),
+                            Description = GetScannerDescription(info)
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[SCANNER] Failed to list scanners", ex);
+            }
+
+            return list;
+        }
+
+        private byte[] PerformScanCore(
+            string scannerName,
+            int dpi,
+            int colorMode,
+            string format,
+            CancellationToken cancellationToken,
+            out string actualFormat)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] resultBytes = Array.Empty<byte>();
             string ext = "jpg";
  
             if (format.Equals("PNG", StringComparison.OrdinalIgnoreCase))
@@ -280,7 +406,8 @@ namespace ShaPrint.Server
  
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
-            thread.Join();
+            if (!thread.Join(DefaultScanTimeout))
+                throw new TimeoutException("Scanner WIA operation timed out.");
  
             if (threadException != null)
             {
@@ -299,13 +426,75 @@ namespace ShaPrint.Server
                 return WrapJpegInPdf(rawBytes);
             }
  
-                return rawBytes;
-            }
-            finally
+            return rawBytes;
+        }
+
+        private static string GetOutputExtension(string format)
+            => format.Equals("PNG", StringComparison.OrdinalIgnoreCase) ? "png"
+                : format.Equals("PDF", StringComparison.OrdinalIgnoreCase) ? "pdf" : "jpg";
+
+        private static bool TryAcquireScanner(string key, out ScannerAdmissionLease lease)
+        {
+            while (true)
             {
-                ActiveScans.TryRemove(scannerName, out _);
-                LastScanTimes[scannerName] = DateTime.UtcNow;
+                var admission = ScanAdmissions.GetOrAdd(key, static scannerKey => new ScannerAdmission(scannerKey));
+                Interlocked.Increment(ref admission.References);
+
+                // If the last owner removed this gate between GetOrAdd and the
+                // reference increment, retry against the current dictionary entry.
+                if (!ScanAdmissions.TryGetValue(key, out var current) || !ReferenceEquals(current, admission))
+                {
+                    Interlocked.Decrement(ref admission.References);
+                    continue;
+                }
+
+                if (!admission.Semaphore.Wait(0))
+                {
+                    Interlocked.Decrement(ref admission.References);
+                    lease = null!;
+                    return false;
+                }
+
+                lease = new ScannerAdmissionLease(admission);
+                return true;
             }
+        }
+
+        private StaWorker<T> StartStaWorker<T>(Func<T> operation)
+        {
+            var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int workerId = Interlocked.Increment(ref _nextWorkerId);
+            _activeWorkers[workerId] = completion.Task;
+
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    completion.TrySetResult(operation());
+                }
+                catch (Exception ex)
+                {
+                    completion.TrySetException(ex);
+                }
+                finally
+                {
+                    _activeWorkers.TryRemove(workerId, out _);
+                }
+            });
+
+            thread.IsBackground = true;
+            thread.SetApartmentState(ApartmentState.STA);
+            try
+            {
+                thread.Start();
+            }
+            catch (Exception ex)
+            {
+                _activeWorkers.TryRemove(workerId, out _);
+                completion.TrySetException(ex);
+            }
+
+            return new StaWorker<T> { Completion = completion.Task };
         }
 
         private static void SetWiaProperty(dynamic properties, int propId, object value)
@@ -583,5 +772,10 @@ namespace ShaPrint.Server
 
             return !string.IsNullOrEmpty(description) ? description : "WIA Scanner Device";
         }
+    }
+
+    public sealed class ScannerBusyException : InvalidOperationException
+    {
+        public ScannerBusyException(string message) : base(message) { }
     }
 }

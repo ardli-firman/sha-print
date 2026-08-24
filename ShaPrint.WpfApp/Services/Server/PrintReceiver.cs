@@ -428,21 +428,20 @@ namespace ShaPrint.Server
 
         private async Task HandleScanRequestAsync(NetworkStream stream, string remoteIp, CancellationToken token)
         {
+            ScanResponsePayload response = new();
             try
             {
-                var request = await ScanRequestPayload.ReadAsync(stream);
+                var request = await ScanRequestPayload.ReadAsync(stream, token);
                 AppLogger.Log($"[SERVER] Received scan request from {remoteIp} for scanner '{request.TargetScannerName}' (DPI={request.Dpi}, ColorMode={request.ColorMode}, Format={request.Format})");
 
-                var response = new ScanResponsePayload();
                 try
                 {
-                    string actualFormat;
-                    byte[] scannedBytes = _scannerService.PerformScan(
+                    byte[] scannedBytes = await _scannerService.PerformScanAsync(
                         request.TargetScannerName, 
                         request.Dpi, 
                         request.ColorMode, 
-                        request.Format, 
-                        out actualFormat);
+                        request.Format,
+                        token);
                     response.Success = true;
                     response.FileBytes = scannedBytes;
                     response.ErrorMessage = string.Empty;
@@ -461,7 +460,7 @@ namespace ShaPrint.Server
                 {
                     AppLogger.Error($"[SERVER] Scan execution failed for {remoteIp}", ex);
                     response.Success = false;
-                    response.ErrorMessage = ex.Message;
+                    response.ErrorMessage = BoundScanError(ex);
                     response.FileBytes = Array.Empty<byte>();
 
                     _onJobLog?.Invoke(new JobHistoryEntry
@@ -482,12 +481,42 @@ namespace ShaPrint.Server
                 }
 
                 AppLogger.Log($"[SERVER] Sending scan response to {remoteIp}. Success={response.Success}, Size={response.FileBytes.Length} bytes.");
-                await ScanResponsePayload.WriteAsync(stream, response);
+                await ScanResponsePayload.WriteAsync(stream, response, token);
+            }
+            catch (InvalidDataException ex)
+            {
+                // Send a bounded actionable failure for malformed-but-readable
+                // requests. The client must not wait forever for a response.
+                response.Success = false;
+                response.ErrorMessage = BoundScanError(ex);
+                response.FileBytes = Array.Empty<byte>();
+                try { await ScanResponsePayload.WriteAsync(stream, response, token); }
+                catch (Exception writeEx) { AppLogger.Error($"[SERVER] Failed to send scan validation response to {remoteIp}", writeEx); }
             }
             catch (Exception ex)
             {
                 AppLogger.Error($"[SERVER] Error reading/writing scan payload from {remoteIp}", ex);
             }
+            finally
+            {
+                if (response.FileBytes.Length > 0)
+                    CryptographicOperations.ZeroMemory(response.FileBytes);
+            }
+        }
+
+        private static string BoundScanError(Exception exception)
+        {
+            string message = string.IsNullOrWhiteSpace(exception.Message)
+                ? "Scanner request failed."
+                : exception.Message.Trim();
+            if (System.Text.Encoding.UTF8.GetByteCount(message) <= ScanResponsePayload.MaxErrorMessageBytes)
+                return message;
+
+            const string suffix = " (message truncated)";
+            int maxChars = Math.Max(1, ScanResponsePayload.MaxErrorMessageBytes - suffix.Length);
+            while (maxChars > 1 && System.Text.Encoding.UTF8.GetByteCount(message[..maxChars] + suffix) > ScanResponsePayload.MaxErrorMessageBytes)
+                maxChars--;
+            return message[..maxChars] + suffix;
         }
 
         /// <summary>
