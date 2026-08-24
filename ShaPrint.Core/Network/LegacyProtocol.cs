@@ -155,8 +155,11 @@ public static class LegacyEnvelopeCodec
 /// </summary>
 public static class LegacyAcknowledgementCodec
 {
+    private const int AesGcmMinimumEncryptedBytes = 12 + 16; // nonce + authentication tag
+    private const int FixedAcknowledgementBytes = sizeof(byte) + sizeof(long) + sizeof(byte);
     private const int MaxMessageBytes = 512;
     private const int MaxEncryptedAcknowledgementBytes = 2_048;
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     public static byte[] Write(LegacyAcknowledgement acknowledgement)
     {
@@ -183,32 +186,43 @@ public static class LegacyAcknowledgementCodec
 
     public static LegacyAcknowledgement Read(ReadOnlySpan<byte> encryptedAcknowledgement)
     {
-        if (encryptedAcknowledgement.Length == 0 || encryptedAcknowledgement.Length > MaxEncryptedAcknowledgementBytes)
+        if (encryptedAcknowledgement.Length < AesGcmMinimumEncryptedBytes ||
+            encryptedAcknowledgement.Length > MaxEncryptedAcknowledgementBytes)
             throw new InvalidDataException("Encrypted acknowledgement length is invalid.");
 
         byte[] plaintext = CryptoHelper.DecryptAesGcm(encryptedAcknowledgement.ToArray());
         try
         {
-            using var stream = new MemoryStream(plaintext, writable: false);
-            using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
+            if (plaintext.Length <= FixedAcknowledgementBytes)
+                throw new InvalidDataException("Acknowledgement is truncated.");
 
-            byte version = reader.ReadByte();
+            int offset = 0;
+            byte version = plaintext[offset++];
             if (version != LegacyProtocolVersion.Current)
                 throw new InvalidDataException($"Unsupported acknowledgement version: {version}.");
 
-            long correlationId = reader.ReadInt64();
-            var status = (LegacyAcknowledgementStatus)reader.ReadByte();
+            long correlationId = BinaryPrimitives.ReadInt64LittleEndian(plaintext.AsSpan(offset, sizeof(long)));
+            offset += sizeof(long);
+            var status = (LegacyAcknowledgementStatus)plaintext[offset++];
             ValidateStatus(status);
-            string message = reader.ReadString();
 
-            if (stream.Position != stream.Length)
-                throw new InvalidDataException("Acknowledgement contains trailing data.");
+            int messageLength = Read7BitEncodedMessageLength(plaintext, ref offset);
+            if (messageLength > MaxMessageBytes)
+                throw new InvalidDataException("Acknowledgement message exceeds its bounded size.");
 
+            int remainingBytes = plaintext.Length - offset;
+            if (messageLength != remainingBytes)
+            {
+                throw new InvalidDataException(
+                    $"Acknowledgement message length mismatch: declared {messageLength}, actual {remainingBytes}.");
+            }
+
+            string message = StrictUtf8.GetString(plaintext, offset, messageLength);
             return new LegacyAcknowledgement(correlationId, status, SanitizeMessage(message));
         }
-        catch (EndOfStreamException ex)
+        catch (DecoderFallbackException ex)
         {
-            throw new InvalidDataException("Acknowledgement is truncated.", ex);
+            throw new InvalidDataException("Acknowledgement message is not valid UTF-8.", ex);
         }
         finally
         {
@@ -220,6 +234,26 @@ public static class LegacyAcknowledgementCodec
     {
         if (!Enum.IsDefined(status))
             throw new InvalidDataException($"Unsupported acknowledgement status: {(byte)status}.");
+    }
+
+    private static int Read7BitEncodedMessageLength(ReadOnlySpan<byte> plaintext, ref int offset)
+    {
+        uint value = 0;
+        for (int index = 0; index < 5; index++)
+        {
+            if (offset >= plaintext.Length)
+                throw new InvalidDataException("Acknowledgement message length is truncated.");
+
+            byte current = plaintext[offset++];
+            if (index == 4 && current > 0x07)
+                throw new InvalidDataException("Acknowledgement message length is malformed.");
+
+            value |= (uint)(current & 0x7f) << (index * 7);
+            if ((current & 0x80) == 0)
+                return (int)value;
+        }
+
+        throw new InvalidDataException("Acknowledgement message length is malformed.");
     }
 
     private static string SanitizeMessage(string? message)

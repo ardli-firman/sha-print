@@ -108,6 +108,101 @@ public class LegacyProtocolCodecTests
     }
 
     [Fact]
+    public void Acknowledgement_ShortCiphertext_ThrowsInvalidDataException()
+    {
+        Assert.Throws<InvalidDataException>(() =>
+            LegacyAcknowledgementCodec.Read(new byte[27]));
+    }
+
+    [Fact]
+    public void Acknowledgement_TruncatedMessage_ThrowsInvalidDataException()
+    {
+        byte[] wire = EncryptAcknowledgementPlaintext(writer =>
+        {
+            writer.Write(LegacyProtocolVersion.Current);
+            writer.Write(1L);
+            writer.Write((byte)LegacyAcknowledgementStatus.Accepted);
+            writer.Write((byte)5);
+            writer.Write((byte)'x');
+        });
+
+        Assert.Throws<InvalidDataException>(() => LegacyAcknowledgementCodec.Read(wire));
+    }
+
+    [Fact]
+    public void Acknowledgement_OversizedMessageLength_ThrowsBeforeAllocation()
+    {
+        byte[] wire = EncryptAcknowledgementPlaintext(writer =>
+        {
+            writer.Write(LegacyProtocolVersion.Current);
+            writer.Write(1L);
+            writer.Write((byte)LegacyAcknowledgementStatus.Accepted);
+            writer.Write((byte)0x81);
+            writer.Write((byte)0x04); // 513 in BinaryWriter's 7-bit integer encoding
+            writer.Write(new byte[513]);
+        });
+
+        Assert.Throws<InvalidDataException>(() => LegacyAcknowledgementCodec.Read(wire));
+    }
+
+    [Fact]
+    public void Acknowledgement_MalformedMessageLength_ThrowsInvalidDataException()
+    {
+        byte[] wire = EncryptAcknowledgementPlaintext(writer =>
+        {
+            writer.Write(LegacyProtocolVersion.Current);
+            writer.Write(1L);
+            writer.Write((byte)LegacyAcknowledgementStatus.Accepted);
+            writer.Write(new byte[] { 0xff, 0xff, 0xff, 0xff, 0xff });
+        });
+
+        Assert.Throws<InvalidDataException>(() => LegacyAcknowledgementCodec.Read(wire));
+    }
+
+    [Fact]
+    public void Acknowledgement_UnknownVersion_ThrowsInvalidDataException()
+    {
+        byte[] wire = EncryptAcknowledgementPlaintext(writer =>
+        {
+            writer.Write((byte)2);
+            writer.Write(1L);
+            writer.Write((byte)LegacyAcknowledgementStatus.Accepted);
+            writer.Write(string.Empty);
+        });
+
+        Assert.Throws<InvalidDataException>(() => LegacyAcknowledgementCodec.Read(wire));
+    }
+
+    [Fact]
+    public void Acknowledgement_UnknownStatus_ThrowsInvalidDataException()
+    {
+        byte[] wire = EncryptAcknowledgementPlaintext(writer =>
+        {
+            writer.Write(LegacyProtocolVersion.Current);
+            writer.Write(1L);
+            writer.Write((byte)99);
+            writer.Write(string.Empty);
+        });
+
+        Assert.Throws<InvalidDataException>(() => LegacyAcknowledgementCodec.Read(wire));
+    }
+
+    [Fact]
+    public void Acknowledgement_TrailingPlaintextBytes_ThrowsInvalidDataException()
+    {
+        byte[] wire = EncryptAcknowledgementPlaintext(writer =>
+        {
+            writer.Write(LegacyProtocolVersion.Current);
+            writer.Write(1L);
+            writer.Write((byte)LegacyAcknowledgementStatus.Accepted);
+            writer.Write(string.Empty);
+            writer.Write((byte)0x01);
+        });
+
+        Assert.Throws<InvalidDataException>(() => LegacyAcknowledgementCodec.Read(wire));
+    }
+
+    [Fact]
     public void PrintJobPayload_LegacyV2Payload_RemainsReadable()
     {
         byte[] spoolData = Encoding.UTF8.GetBytes("legacy data");
@@ -131,5 +226,17 @@ public class LegacyProtocolCodecTests
         Assert.Equal("LegacyPrinter", payload.TargetPrinterName);
         Assert.Empty(payload.DocumentName);
         Assert.Equal(spoolData, payload.SpoolData);
+    }
+
+    private static byte[] EncryptAcknowledgementPlaintext(Action<BinaryWriter> writePlaintext)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+        {
+            writePlaintext(writer);
+            writer.Flush();
+        }
+
+        return CryptoHelper.EncryptAesGcm(stream.ToArray());
     }
 }
