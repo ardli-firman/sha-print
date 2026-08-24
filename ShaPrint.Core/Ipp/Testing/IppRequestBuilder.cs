@@ -49,11 +49,8 @@ public static class IppRequestBuilder
             // 0x44 = document-format keyword attribute
             WriteStringAttribute(writer, 0x44, "document-format", documentFormat);
         }
-        writer.Write((byte)0x03);
-
-        // Document data
+        writer.Write((byte)0x03); // end-of-attributes; document begins immediately after this byte
         writer.Write(documentData);
-        writer.Write((byte)0x03);
 
         return ms.ToArray();
     }
