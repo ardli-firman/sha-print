@@ -17,22 +17,27 @@ namespace ShaPrint.WpfApp.Services.Server;
 public sealed class MonitorTcpServer : IDisposable
 {
     private const int MaxConcurrentHandlers = 8;
+    private const int MaxTrackedStatusWorkers = 8;
     private const int MaxRequestsPerWindow = 6;
     private const int MaxRateLimitEntries = 256;
     private static readonly TimeSpan RateLimitWindow = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan RequestDeadline = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan StreamIdleDeadline = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan OverloadWriteDeadline = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan StopShutdownDeadline = TimeSpan.FromSeconds(2);
 
     private readonly Func<CancellationToken, ServerStatusPayload> _statusFactory;
     private readonly object _lifecycleLock = new();
     private readonly SemaphoreSlim _concurrencySlot = new(MaxConcurrentHandlers, MaxConcurrentHandlers);
+    private readonly SemaphoreSlim _statusWorkerSlots = new(MaxTrackedStatusWorkers, MaxTrackedStatusWorkers);
     private readonly ConcurrentDictionary<int, Task> _handlerTasks = new();
+    private readonly ConcurrentDictionary<int, Task> _statusWorkerTasks = new();
     private readonly ConcurrentDictionary<string, RateLimitEntry> _rateLimiter = new(StringComparer.Ordinal);
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
     private Task? _acceptTask;
     private int _nextHandlerId;
+    private int _nextStatusWorkerId;
     private bool _disposed;
 
     private sealed class RateLimitEntry
@@ -95,11 +100,36 @@ public sealed class MonitorTcpServer : IDisposable
 
         try
         {
+            using var shutdownDeadline = new CancellationTokenSource(StopShutdownDeadline);
             if (acceptTask != null)
-                await acceptTask.ConfigureAwait(false);
+            {
+                try { await acceptTask.WaitAsync(shutdownDeadline.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+            }
             Task[] handlers = _handlerTasks.Values.ToArray();
             if (handlers.Length > 0)
-                await Task.WhenAll(handlers).ConfigureAwait(false);
+            {
+                try { await Task.WhenAll(handlers).WaitAsync(shutdownDeadline.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { AppLogger.Log($"[MONITOR SERVER] Handler stopped with {ex.GetType().Name}."); }
+            }
+
+            Task[] workers = _statusWorkerTasks.Values.ToArray();
+            if (workers.Length > 0)
+            {
+                try
+                {
+                    await Task.WhenAll(workers).WaitAsync(shutdownDeadline.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    AppLogger.Log("[MONITOR SERVER] Status worker shutdown deadline reached; remaining workers stay tracked.");
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Log($"[MONITOR SERVER] Status worker completed with {ex.GetType().Name} during shutdown.");
+                }
+            }
         }
         catch (OperationCanceledException) { }
         finally
@@ -229,12 +259,16 @@ public sealed class MonitorTcpServer : IDisposable
                     return;
                 }
 
-                // BuildStatus is synchronous platform work. Running it directly inside this
-                // tracked handler ensures StopAsync awaits it instead of abandoning a timed-out
-                // Task.Run worker. The total request token is checked on both sides.
-                deadline.Token.ThrowIfCancellationRequested();
-                ServerStatusPayload status = _statusFactory(deadline.Token);
-                deadline.Token.ThrowIfCancellationRequested();
+                Task<ServerStatusPayload>? statusWorker = StartStatusWorker(deadline.Token);
+                if (statusWorker == null)
+                {
+                    await MonitorFrameCodec.WriteOverloadedAsync(
+                        stream,
+                        deadline.Token,
+                        StreamIdleDeadline).ConfigureAwait(false);
+                    return;
+                }
+                ServerStatusPayload status = await statusWorker.WaitAsync(deadline.Token).ConfigureAwait(false);
                 jsonBytes = JsonSerializer.SerializeToUtf8Bytes(status);
                 if (jsonBytes.Length > Constants.MaxMonitorResponseBytes - Constants.AesGcmMinimumPayloadBytes)
                     throw new InvalidDataException("Monitor status response exceeds the protocol limit.");
@@ -248,6 +282,10 @@ public sealed class MonitorTcpServer : IDisposable
                     StreamIdleDeadline).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested) { }
+            catch (OperationCanceledException)
+            {
+                AppLogger.Log($"[MONITOR SERVER] Request deadline reached for {remoteIp}.");
+            }
             catch (Exception ex) when (ex is IOException or SocketException or TimeoutException or InvalidDataException or JsonException)
             {
                 AppLogger.Log($"[MONITOR SERVER] Request from {remoteIp} failed: {ex.GetType().Name}.");
@@ -306,6 +344,38 @@ public sealed class MonitorTcpServer : IDisposable
         {
             return "unknown";
         }
+    }
+
+    private Task<ServerStatusPayload>? StartStatusWorker(CancellationToken token)
+    {
+        if (!_statusWorkerSlots.Wait(0))
+            return null;
+
+        int workerId = Interlocked.Increment(ref _nextStatusWorkerId);
+        Task<ServerStatusPayload> worker = Task.Run(() =>
+        {
+            try
+            {
+                return _statusFactory(token);
+            }
+            finally
+            {
+                _statusWorkerSlots.Release();
+            }
+        }, CancellationToken.None);
+        _statusWorkerTasks[workerId] = worker;
+        _ = worker.ContinueWith(
+            (completed, state) =>
+            {
+                _ = completed.Exception;
+                var tuple = ((ConcurrentDictionary<int, Task> Tasks, int Id))state!;
+                tuple.Tasks.TryRemove(tuple.Id, out Task? _);
+            },
+            (_statusWorkerTasks, workerId),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return worker;
     }
 
     private static void Zero(byte[]? buffer)

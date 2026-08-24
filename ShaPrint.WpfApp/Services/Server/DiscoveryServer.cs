@@ -21,17 +21,21 @@ public class DiscoveryServer
     private const int MaxRequestsPerSecond = 5;
     private const int MaxRateLimitEntries = 256;
     private const int MaxConcurrentRequests = 4;
+    private const int MaxTrackedPrinterWorkers = 4;
     private const int MaxExposedDevices = 64;
     private const int MaxRequestBytes = 256;
     private static readonly TimeSpan RateLimitWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan RequestDeadline = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan StopShutdownDeadline = TimeSpan.FromSeconds(2);
 
     private readonly INotificationService _notificationService;
     private readonly Func<CancellationToken, List<PrinterInfo>> _printerDetailsProvider;
     private readonly ScannerService _scannerService = new();
     private readonly object _lifecycleLock = new();
     private readonly SemaphoreSlim _requestSlots = new(MaxConcurrentRequests, MaxConcurrentRequests);
+    private readonly SemaphoreSlim _printerWorkerSlots = new(MaxTrackedPrinterWorkers, MaxTrackedPrinterWorkers);
     private readonly ConcurrentDictionary<int, Task> _requestTasks = new();
+    private readonly ConcurrentDictionary<int, Task> _printerWorkerTasks = new();
     private readonly ConcurrentDictionary<string, RateLimitEntry> _rateLimits = new(StringComparer.Ordinal);
     private readonly HashSet<string> _connectedClients = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTime> _lastSeenByClient = new(StringComparer.OrdinalIgnoreCase);
@@ -46,6 +50,7 @@ public class DiscoveryServer
     private DriverPackageService? _driverPackageService;
     private volatile bool _driverSharingEnabled = true;
     private int _nextRequestId;
+    private int _nextPrinterWorkerId;
     private int _requestCount;
 
     private sealed class RateLimitEntry
@@ -130,12 +135,37 @@ public class DiscoveryServer
 
         try
         {
+            using var shutdownDeadline = new CancellationTokenSource(StopShutdownDeadline);
             if (listenerTask != null)
-                await listenerTask.ConfigureAwait(false);
+            {
+                try { await listenerTask.WaitAsync(shutdownDeadline.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+            }
 
             Task[] handlers = _requestTasks.Values.ToArray();
             if (handlers.Length > 0)
-                await Task.WhenAll(handlers).ConfigureAwait(false);
+            {
+                try { await Task.WhenAll(handlers).WaitAsync(shutdownDeadline.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { AppLogger.Log($"[DISCOVERY] Request handler stopped with {ex.GetType().Name}."); }
+            }
+
+            Task[] workers = _printerWorkerTasks.Values.ToArray();
+            if (workers.Length > 0)
+            {
+                try
+                {
+                    await Task.WhenAll(workers).WaitAsync(shutdownDeadline.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    AppLogger.Log("[DISCOVERY] Printer worker shutdown deadline reached; remaining workers stay tracked.");
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Log($"[DISCOVERY] Printer worker completed with {ex.GetType().Name} during shutdown.");
+                }
+            }
         }
         catch (OperationCanceledException) { }
         finally
@@ -263,11 +293,8 @@ public class DiscoveryServer
         List<PrinterInfo> localPrinters;
         try
         {
-            // This synchronous platform call runs inside the tracked request task. StopAsync
-            // awaits that task, so no timed-out spooler worker can escape lifecycle ownership.
-            token.ThrowIfCancellationRequested();
-            localPrinters = _printerDetailsProvider(token);
-            token.ThrowIfCancellationRequested();
+            Task<List<PrinterInfo>> printerWorker = StartPrinterWorker(token);
+            localPrinters = await printerWorker.WaitAsync(token).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -456,6 +483,38 @@ public class DiscoveryServer
         List<PrinterInfo> result = SpoolerApi.GetLocalPrintersDetailed();
         token.ThrowIfCancellationRequested();
         return result;
+    }
+
+    private Task<List<PrinterInfo>> StartPrinterWorker(CancellationToken token)
+    {
+        if (!_printerWorkerSlots.Wait(0))
+            throw new InvalidOperationException("Discovery printer worker capacity is exhausted.");
+
+        int workerId = Interlocked.Increment(ref _nextPrinterWorkerId);
+        Task<List<PrinterInfo>> worker = Task.Run(() =>
+        {
+            try
+            {
+                return _printerDetailsProvider(token);
+            }
+            finally
+            {
+                _printerWorkerSlots.Release();
+            }
+        }, CancellationToken.None);
+        _printerWorkerTasks[workerId] = worker;
+        _ = worker.ContinueWith(
+            (completed, state) =>
+            {
+                _ = completed.Exception;
+                var tuple = ((ConcurrentDictionary<int, Task> Tasks, int Id))state!;
+                tuple.Tasks.TryRemove(tuple.Id, out Task? _);
+            },
+            (_printerWorkerTasks, workerId),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return worker;
     }
 
     private static string GetLocalIPAddress()

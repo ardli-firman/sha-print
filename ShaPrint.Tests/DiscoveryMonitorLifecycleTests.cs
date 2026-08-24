@@ -130,6 +130,37 @@ public sealed class DiscoveryMonitorLifecycleTests
     }
 
     [Fact]
+    public async Task DiscoveryServer_StopAsync_HasBoundedWaitForStuckPrinterWorker()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var server = new DiscoveryServer(new NullNotificationService(), _ =>
+        {
+            entered.Set();
+            release.Wait();
+            return new List<PrinterInfo>();
+        });
+
+        try
+        {
+            server.Start();
+            using var client = new UdpClient();
+            byte[] request = Encoding.UTF8.GetBytes(Constants.DiscoveryRequestMessage);
+            await client.SendAsync(request, new IPEndPoint(IPAddress.Loopback, Constants.DiscoveryUdpPort));
+            Assert.True(await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(2))));
+
+            Task stop = server.StopAsync();
+            Task completed = await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(4)));
+            Assert.Same(stop, completed);
+        }
+        finally
+        {
+            release.Set();
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task MonitorFrameCodec_TruncatedBody_IsRejected()
     {
         byte[] frame = new byte[sizeof(int) + 2];
@@ -289,6 +320,47 @@ public sealed class DiscoveryMonitorLifecycleTests
     }
 
     [Fact]
+    public async Task MonitorTcpServer_StopAsync_HasBoundedWaitForStuckStatusWorker()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var server = new MonitorTcpServer(_ =>
+        {
+            entered.Set();
+            release.Wait();
+            return new ServerStatusPayload();
+        });
+        server.Start();
+        try
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, Constants.MonitorTcpPort);
+            using NetworkStream stream = client.GetStream();
+            byte[] raw = Encoding.UTF8.GetBytes("GET_STATUS");
+            byte[] encrypted = CryptoHelper.EncryptAesGcm(raw);
+            try
+            {
+                await MonitorFrameCodec.WriteAsync(stream, encrypted, Constants.MaxMonitorRequestBytes, CancellationToken.None);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(raw);
+                CryptographicOperations.ZeroMemory(encrypted);
+            }
+            Assert.True(await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(2))));
+
+            Task stop = server.StopAsync();
+            Task completed = await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(4)));
+            Assert.Same(stop, completed);
+        }
+        finally
+        {
+            release.Set();
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task MonitorService_AuthenticationFailureFrame_UpdatesNodeAsAuthMismatch()
     {
         var listener = new TcpListener(IPAddress.Loopback, Constants.MonitorTcpPort);
@@ -345,6 +417,23 @@ public sealed class DiscoveryMonitorLifecycleTests
         await service.StopAsync();
 
         Assert.True(refresh.IsCompleted);
+    }
+
+    [Fact]
+    public async Task MonitorService_CompletedStopTask_DoesNotMaskStopAfterRestart()
+    {
+        var service = new MonitorService(new MonitorViewModel());
+        await service.TriggerManualRefreshAsync();
+        await service.StopAsync();
+
+        service.Start();
+        await service.StopAsync();
+
+        var ctsField = typeof(MonitorService).GetField(
+            "_cts",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(ctsField);
+        Assert.Null(ctsField!.GetValue(service));
     }
 
     private sealed class NullNotificationService : INotificationService

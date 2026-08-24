@@ -54,6 +54,8 @@ public sealed class MonitorService
     {
         lock (_lifecycleLock)
         {
+            if (_stopTask?.IsCompleted == true)
+                _stopTask = null;
             if (_isStarted || _isStopping)
                 return;
 
@@ -75,6 +77,8 @@ public sealed class MonitorService
     {
         lock (_lifecycleLock)
         {
+            if (_stopTask?.IsCompleted == true)
+                _stopTask = null;
             if (_stopTask != null)
                 return _stopTask;
             if (_cts == null)
@@ -116,7 +120,6 @@ public sealed class MonitorService
                     _pollTask = null;
                     _isStarted = false;
                     _isStopping = false;
-                    _stopTask = null;
                 }
             }
             cts.Dispose();
