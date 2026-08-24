@@ -1,0 +1,269 @@
+using System;
+using System.IO;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace ShaPrint.Core.Network;
+
+/// <summary>
+/// Version constants for the explicit legacy TCP envelope. Version 1 is written
+/// with <see cref="BinaryWriter"/>, so all integer fields are little-endian.
+/// </summary>
+public static class LegacyProtocolVersion
+{
+    public const byte Current = 1;
+}
+
+/// <summary>
+/// New legacy-envelope message types. The numeric values retain the established
+/// legacy packet type assignments where they already existed.
+/// </summary>
+public enum LegacyMessageType : byte
+{
+    PrintJob = Constants.PacketTypePrint,
+    ScanRequest = Constants.PacketTypeScan,
+    DriverPackageRequest = Constants.PacketTypeDriverPackageRequest,
+    DriverPackageChunk = Constants.PacketTypeDriverPackageChunk,
+    DriverPackageComplete = Constants.PacketTypeDriverPackageComplete,
+    DriverPackageError = Constants.PacketTypeDriverPackageError,
+    Acknowledgement = 0x7f
+}
+
+/// <summary>
+/// Result status returned to a new legacy client. Clients must treat all values
+/// other than <see cref="Accepted"/> as terminal for the submitted operation.
+/// </summary>
+public enum LegacyAcknowledgementStatus : byte
+{
+    Accepted = 0,
+    InvalidPayload = 1,
+    Overloaded = 2,
+    TargetUnavailable = 3,
+    SpoolerRejected = 4,
+    Timeout = 5,
+    Canceled = 6,
+    ServerError = 7
+}
+
+/// <summary>
+/// Transport-independent frame for new legacy clients.
+/// </summary>
+public sealed record LegacyEnvelope(
+    byte Version,
+    LegacyMessageType MessageType,
+    long CorrelationId,
+    byte[] Payload);
+
+/// <summary>
+/// An encrypted, terminal acknowledgement for a legacy request.
+/// </summary>
+public sealed record LegacyAcknowledgement(
+    long CorrelationId,
+    LegacyAcknowledgementStatus Status,
+    string Message);
+
+/// <summary>
+/// Serializes the new legacy envelope as little-endian:
+/// [magic:uint32][version:byte][type:byte][correlationId:int64][payloadLength:int32][payload].
+/// The envelope is deliberately transport-agnostic; stream deadline and exact-read
+/// handling belongs to the transport layer.
+/// </summary>
+public static class LegacyEnvelopeCodec
+{
+    // "SPRT" when viewed as the little-endian uint32 written by BinaryWriter.
+    private const uint Magic = 0x54525053;
+    private const int HeaderLength = sizeof(uint) + sizeof(byte) + sizeof(byte) + sizeof(long) + sizeof(int);
+
+    public static byte[] Write(LegacyEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        ValidateVersion(envelope.Version);
+        ValidateMessageType(envelope.MessageType);
+        ArgumentNullException.ThrowIfNull(envelope.Payload);
+        ValidatePayloadLength(envelope.Payload.Length);
+
+        using var stream = new MemoryStream(HeaderLength + envelope.Payload.Length);
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        writer.Write(Magic);
+        writer.Write(envelope.Version);
+        writer.Write((byte)envelope.MessageType);
+        writer.Write(envelope.CorrelationId);
+        writer.Write(envelope.Payload.Length);
+        writer.Write(envelope.Payload);
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    public static LegacyEnvelope Read(ReadOnlySpan<byte> frame)
+    {
+        if (frame.Length < HeaderLength)
+            throw new InvalidDataException("Legacy envelope is truncated before its header.");
+
+        using var stream = new MemoryStream(frame.ToArray(), writable: false);
+        using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
+
+        if (reader.ReadUInt32() != Magic)
+            throw new InvalidDataException("Legacy envelope magic is invalid.");
+
+        byte version = reader.ReadByte();
+        ValidateVersion(version);
+
+        var messageType = (LegacyMessageType)reader.ReadByte();
+        ValidateMessageType(messageType);
+
+        long correlationId = reader.ReadInt64();
+        int payloadLength = reader.ReadInt32();
+        ValidatePayloadLength(payloadLength);
+
+        int availablePayloadBytes = frame.Length - HeaderLength;
+        if (payloadLength != availablePayloadBytes)
+        {
+            throw new InvalidDataException(
+                $"Legacy envelope payload length mismatch: declared {payloadLength}, actual {availablePayloadBytes}.");
+        }
+
+        byte[] payload = reader.ReadBytes(payloadLength);
+        if (payload.Length != payloadLength)
+            throw new InvalidDataException("Legacy envelope payload is truncated.");
+
+        return new LegacyEnvelope(version, messageType, correlationId, payload);
+    }
+
+    private static void ValidateVersion(byte version)
+    {
+        if (version != LegacyProtocolVersion.Current)
+            throw new InvalidDataException($"Unsupported legacy protocol version: {version}.");
+    }
+
+    private static void ValidateMessageType(LegacyMessageType messageType)
+    {
+        if (!Enum.IsDefined(messageType))
+            throw new InvalidDataException($"Unsupported legacy message type: {(byte)messageType}.");
+    }
+
+    private static void ValidatePayloadLength(int payloadLength)
+    {
+        if (payloadLength < 0 || payloadLength > Constants.MaxPrintJobBytes)
+        {
+            throw new InvalidDataException(
+                $"Legacy envelope payload length {payloadLength} is outside the allowed range.");
+        }
+    }
+}
+
+/// <summary>
+/// Encrypts acknowledgement data with the existing network-channel AES-GCM key.
+/// The inner acknowledgement is little-endian:
+/// [version:byte][correlationId:int64][status:byte][message:BinaryWriter string].
+/// </summary>
+public static class LegacyAcknowledgementCodec
+{
+    private const int MaxMessageBytes = 512;
+    private const int MaxEncryptedAcknowledgementBytes = 2_048;
+
+    public static byte[] Write(LegacyAcknowledgement acknowledgement)
+    {
+        ArgumentNullException.ThrowIfNull(acknowledgement);
+        ValidateStatus(acknowledgement.Status);
+
+        string message = SanitizeMessage(acknowledgement.Message);
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(LegacyProtocolVersion.Current);
+            writer.Write(acknowledgement.CorrelationId);
+            writer.Write((byte)acknowledgement.Status);
+            writer.Write(message);
+            writer.Flush();
+        }
+
+        byte[] encrypted = CryptoHelper.EncryptAesGcm(stream.ToArray());
+        if (encrypted.Length > MaxEncryptedAcknowledgementBytes)
+            throw new InvalidDataException("Encrypted acknowledgement exceeds its bounded size.");
+
+        return encrypted;
+    }
+
+    public static LegacyAcknowledgement Read(ReadOnlySpan<byte> encryptedAcknowledgement)
+    {
+        if (encryptedAcknowledgement.Length == 0 || encryptedAcknowledgement.Length > MaxEncryptedAcknowledgementBytes)
+            throw new InvalidDataException("Encrypted acknowledgement length is invalid.");
+
+        byte[] plaintext = CryptoHelper.DecryptAesGcm(encryptedAcknowledgement.ToArray());
+        try
+        {
+            using var stream = new MemoryStream(plaintext, writable: false);
+            using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
+
+            byte version = reader.ReadByte();
+            if (version != LegacyProtocolVersion.Current)
+                throw new InvalidDataException($"Unsupported acknowledgement version: {version}.");
+
+            long correlationId = reader.ReadInt64();
+            var status = (LegacyAcknowledgementStatus)reader.ReadByte();
+            ValidateStatus(status);
+            string message = reader.ReadString();
+
+            if (stream.Position != stream.Length)
+                throw new InvalidDataException("Acknowledgement contains trailing data.");
+
+            return new LegacyAcknowledgement(correlationId, status, SanitizeMessage(message));
+        }
+        catch (EndOfStreamException ex)
+        {
+            throw new InvalidDataException("Acknowledgement is truncated.", ex);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+        }
+    }
+
+    private static void ValidateStatus(LegacyAcknowledgementStatus status)
+    {
+        if (!Enum.IsDefined(status))
+            throw new InvalidDataException($"Unsupported acknowledgement status: {(byte)status}.");
+    }
+
+    private static string SanitizeMessage(string? message)
+    {
+        if (string.IsNullOrEmpty(message))
+            return string.Empty;
+
+        var builder = new StringBuilder(message.Length);
+        bool previousWhitespace = false;
+        foreach (char value in message)
+        {
+            if (char.IsControl(value))
+            {
+                if (char.IsWhiteSpace(value) && !previousWhitespace)
+                {
+                    builder.Append(' ');
+                    previousWhitespace = true;
+                }
+
+                continue;
+            }
+
+            if (char.IsWhiteSpace(value))
+            {
+                if (!previousWhitespace)
+                {
+                    builder.Append(' ');
+                    previousWhitespace = true;
+                }
+
+                continue;
+            }
+
+            builder.Append(value);
+            previousWhitespace = false;
+        }
+
+        string sanitized = builder.ToString().Trim();
+        while (Encoding.UTF8.GetByteCount(sanitized) > MaxMessageBytes)
+            sanitized = sanitized[..^1];
+
+        return sanitized;
+    }
+}
