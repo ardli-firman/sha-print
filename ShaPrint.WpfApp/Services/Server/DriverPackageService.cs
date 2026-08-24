@@ -27,6 +27,7 @@ namespace ShaPrint.Server
 
         // Cache: driverName → CachedPackage
         private readonly ConcurrentDictionary<string, CachedPackage> _cache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _exportLocks = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly string _cacheRoot;
         private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(Constants.DriverPackageCacheTtlHours);
@@ -51,6 +52,21 @@ namespace ShaPrint.Server
         public async Task<DriverPackageManifest?> GetDriverPackageAsync(string driverName)
         {
             if (string.IsNullOrWhiteSpace(driverName)) return null;
+
+            var exportLock = _exportLocks.GetOrAdd(driverName, _ => new SemaphoreSlim(1, 1));
+            await exportLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                return await GetDriverPackageCoreAsync(driverName).ConfigureAwait(false);
+            }
+            finally
+            {
+                exportLock.Release();
+            }
+        }
+
+        private async Task<DriverPackageManifest?> GetDriverPackageCoreAsync(string driverName)
+        {
 
             // Check cache first
             if (_cache.TryGetValue(driverName, out var cached))
@@ -90,6 +106,12 @@ namespace ShaPrint.Server
         /// </summary>
         public string? GetPackageDirectory(string driverPackageId)
         {
+            if (!DriverPackageIdValidator.IsValid(driverPackageId))
+            {
+                AppLogger.Error("[DRIVER_PKG] Rejected malformed package identifier.");
+                return null;
+            }
+
             AppLogger.Log($"[DRIVER_PKG] GetPackageDirectory: looking up '{driverPackageId[..16]}...' (cache size={_cache.Count})");
 
             // 1. Try in-memory cache first
@@ -136,6 +158,12 @@ namespace ShaPrint.Server
         /// </summary>
         public async Task<byte[]?> ReadPackageBytesAsync(string driverPackageId)
         {
+            if (!DriverPackageIdValidator.IsValid(driverPackageId))
+            {
+                AppLogger.Error("[DRIVER_PKG] Rejected malformed package identifier for byte read.");
+                return null;
+            }
+
             AppLogger.Log($"[DRIVER_PKG] ReadPackageBytesAsync: requested '{driverPackageId[..16]}...'");
             string? dir = GetPackageDirectory(driverPackageId);
             if (dir == null)
@@ -162,6 +190,102 @@ namespace ShaPrint.Server
             catch (Exception ex)
             {
                 AppLogger.Error($"[DRIVER_PKG] ReadPackageBytesAsync: error reading package.zip for '{driverPackageId[..16]}...'", ex);
+                return null;
+            }
+        }
+
+        private static async Task CreateZipFileAsync(string[] files, string destination, IStreamingFileSystem fileSystem)
+        {
+            string? directory = Path.GetDirectoryName(destination);
+            if (directory != null)
+                Directory.CreateDirectory(directory);
+
+            await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: false);
+            byte[] buffer = new byte[64 * 1024];
+            foreach (string file in files)
+            {
+                var entry = archive.CreateEntry(Path.GetFileName(file), CompressionLevel.Optimal);
+                await using Stream input = fileSystem.OpenRead(file);
+                await using Stream entryStream = entry.Open();
+                int read;
+                while ((read = await input.ReadAsync(buffer.AsMemory())) > 0)
+                    await entryStream.WriteAsync(buffer.AsMemory(0, read));
+                CryptographicOperations.ZeroMemory(buffer);
+            }
+        }
+
+        private static async Task<string> HashFileAsync(IStreamingFileSystem fileSystem, string path)
+        {
+            using Stream input = fileSystem.OpenRead(path);
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            byte[] buffer = new byte[64 * 1024];
+            try
+            {
+                int read;
+                while ((read = await input.ReadAsync(buffer.AsMemory())) > 0)
+                    hash.AppendData(buffer, 0, read);
+                return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(buffer);
+            }
+        }
+
+        private static async Task CopyFileAsync(IStreamingFileSystem fileSystem, string source, string destination)
+        {
+            string? directory = Path.GetDirectoryName(destination);
+            if (directory != null)
+                Directory.CreateDirectory(directory);
+            await using Stream input = fileSystem.OpenRead(source);
+            await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await input.CopyToAsync(output, 64 * 1024);
+        }
+
+        /// <summary>
+        /// Opens a package for bounded streaming. The caller owns and must dispose
+        /// the returned stream. The file is opened only after strict identifier
+        /// validation and a cache lookup, so a network value cannot escape the cache
+        /// root through path traversal.
+        /// </summary>
+        public Stream? OpenPackageReadStream(string driverPackageId, out long length)
+        {
+            length = 0;
+            if (!DriverPackageIdValidator.IsValid(driverPackageId))
+            {
+                AppLogger.Error("[DRIVER_PKG] Rejected malformed package identifier for stream read.");
+                return null;
+            }
+
+            string? dir = GetPackageDirectory(driverPackageId);
+            if (dir == null)
+                return null;
+
+            string zipPath = Path.Combine(dir, "package.zip");
+            if (!_fileSystem.FileExists(zipPath))
+                return null;
+
+            try
+            {
+                length = _fileSystem.GetFileSize(zipPath);
+                if (length <= 0 || length > Constants.MaxDriverPackageSize)
+                    return null;
+
+                if (_fileSystem is IStreamingFileSystem streaming)
+                    return streaming.OpenRead(zipPath);
+
+                // Test/fallback implementations may not expose a stream. Do not
+                // pretend a large production package is safe to buffer; this path is
+                // only retained for compatibility with small custom fakes.
+                byte[] bytes = _fileSystem.ReadAllBytesAsync(zipPath).GetAwaiter().GetResult();
+                if (bytes.LongLength != length)
+                    return null;
+                return new MemoryStream(bytes, writable: false);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[DRIVER_PKG] Could not open package stream.", ex);
                 return null;
             }
         }
@@ -345,10 +469,25 @@ namespace ShaPrint.Server
 
                 AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: zipping {files.Length} file(s): {string.Join(", ", files.Select(Path.GetFileName))}");
 
-                // Create zip archive in memory from driver files
-                byte[] zipBytes;
-                using (var zipMs = new MemoryStream())
+                // Production uses a file-backed archive and hashes it in bounded
+                // blocks. The compatibility fallback is retained for small test
+                // fakes that only implement ReadAllBytesAsync.
+                IStreamingFileSystem? streamingFs = _fileSystem as IStreamingFileSystem;
+                string packageZipPath = Path.Combine(exportDir, "package.zip");
+                byte[]? zipBytes = null;
+                long zipLength;
+                string packageHash;
+                if (streamingFs != null)
                 {
+                    string tempZipPath = packageZipPath + $".tmp_{Guid.NewGuid():N}";
+                    await CreateZipFileAsync(files, tempZipPath, streamingFs);
+                    File.Move(tempZipPath, packageZipPath, overwrite: true);
+                    zipLength = _fileSystem.GetFileSize(packageZipPath);
+                    packageHash = await HashFileAsync(streamingFs, packageZipPath);
+                }
+                else
+                {
+                    using var zipMs = new MemoryStream();
                     using (var archive = new ZipArchive(zipMs, ZipArchiveMode.Create, leaveOpen: true))
                     {
                         foreach (var f in files)
@@ -361,11 +500,12 @@ namespace ShaPrint.Server
                         }
                     }
                     zipBytes = zipMs.ToArray();
+                    zipLength = zipBytes.LongLength;
+                    packageHash = Convert.ToHexString(SHA256.HashData(zipBytes)).ToLowerInvariant();
                 }
-
-                // Compute SHA-256 from zip bytes (canonical package hash)
-                string packageHash = Convert.ToHexString(SHA256.HashData(zipBytes)).ToLowerInvariant();
-                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: zip={zipBytes.Length:N0} bytes, SHA-256={packageHash[..16]}...");
+                if (!DriverPackageIdValidator.IsValid(packageHash))
+                    throw new InvalidDataException("Computed package hash is invalid.");
+                AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: zip={zipLength:N0} bytes, SHA-256={packageHash[..16]}...");
 
                 // Resolve actual INF filename from the exported files (NOT the Windows oem##.inf store name).
                 // pnputil /export-driver restores the original vendor INF name.
@@ -396,7 +536,7 @@ namespace ShaPrint.Server
                     // e.g., prefer "CNMC3280ZK.inf" over "CNMC3280ZK_x64.inf"
                     var archSuffixes = new[] { "_x64", "_x86", "_arm64", "_arm", "_ia64", "64", "86" };
                     var neutralInf = nonOemInfs.FirstOrDefault(n =>
-                        !archSuffixes.Any(s => Path.GetFileNameWithoutExtension(n)
+                        !archSuffixes.Any(s => Path.GetFileNameWithoutExtension(n!)
                             .EndsWith(s, StringComparison.OrdinalIgnoreCase)));
                     actualInfName = neutralInf ?? nonOemInfs[0]!;
                     AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: multiple vendor INFs found: {string.Join(", ", nonOemInfs)} — selected '{actualInfName}'");
@@ -415,7 +555,7 @@ namespace ShaPrint.Server
                     InfName = actualInfName,
                     DriverName = driverName,
                     Sha256 = packageHash,
-                    TotalSizeBytes = zipBytes.Length,
+                    TotalSizeBytes = zipLength,
                     FileCount = files.Length,
                     ExportedAt = DateTime.UtcNow.ToString("o"),
                     WindowsVersion = Environment.OSVersion.Version.ToString(),
@@ -424,8 +564,10 @@ namespace ShaPrint.Server
 
                 string manifestJson = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
 
-                // Write to exportDir (infHash-based, for pnputil output)
-                await _fileSystem.WriteAllBytesAsync(Path.Combine(exportDir, "package.zip"), zipBytes);
+                // Write to exportDir (infHash-based, for pnputil output). The
+                // streaming branch already wrote package.zip atomically.
+                if (zipBytes != null)
+                    await _fileSystem.WriteAllBytesAsync(packageZipPath, zipBytes);
                 await _fileSystem.WriteAllBytesAsync(Path.Combine(exportDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson));
 
                 // Write to finalDir (packageHash-based, where ReadPackageBytesAsync looks)
@@ -434,13 +576,20 @@ namespace ShaPrint.Server
                 {
                     AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: writing final package to SHA-256 dir → {finalDir}");
                     _fileSystem.CreateDirectory(finalDir);
-                    foreach (var f in files)
+                    if (streamingFs != null)
                     {
-                        string dest = Path.Combine(finalDir, Path.GetFileName(f));
-                        var content = await _fileSystem.ReadAllBytesAsync(f);
-                        await _fileSystem.WriteAllBytesAsync(dest, content);
+                        await CopyFileAsync(streamingFs, packageZipPath, Path.Combine(finalDir, "package.zip"));
                     }
-                    await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "package.zip"), zipBytes);
+                    else
+                    {
+                        foreach (var f in files)
+                        {
+                            string dest = Path.Combine(finalDir, Path.GetFileName(f));
+                            var content = await _fileSystem.ReadAllBytesAsync(f);
+                            await _fileSystem.WriteAllBytesAsync(dest, content);
+                        }
+                        await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "package.zip"), zipBytes!);
+                    }
                     await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson));
                 }
                 else
@@ -448,12 +597,13 @@ namespace ShaPrint.Server
                     AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: exportDir matches packageHash dir — no copy needed.");
                 }
 
-                AppLogger.Log($"[DRIVER_PKG] Exported driver '{driverName}' → {files.Length} files, zip {zipBytes.Length:N0} bytes, SHA-256={packageHash[..16]}...");
+                AppLogger.Log($"[DRIVER_PKG] Exported driver '{driverName}' → {files.Length} files, zip {zipLength:N0} bytes, SHA-256={packageHash[..16]}...");
                 return manifest;
             }
             catch (Exception ex)
             {
                 AppLogger.Error($"[DRIVER_PKG] ExportDriverAsync: error building manifest for '{driverName}'", ex);
+                try { _fileSystem.DeleteDirectory(exportDir, true); } catch { }
                 return null;
             }
         }

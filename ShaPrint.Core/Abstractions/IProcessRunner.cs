@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ShaPrint.Core.Abstractions
@@ -21,5 +22,17 @@ namespace ShaPrint.Core.Abstractions
     public interface IProcessRunner
     {
         Task<ProcessResult> RunAsync(string fileName, string arguments, TimeSpan? timeout = null);
+
+        /// <summary>
+        /// Cancellation-aware process execution. The default implementation keeps
+        /// existing test doubles/source compatibility while production runners may
+        /// provide true process cancellation.
+        /// </summary>
+        Task<ProcessResult> RunAsync(
+            string fileName,
+            string arguments,
+            TimeSpan? timeout,
+            CancellationToken cancellationToken)
+            => RunAsync(fileName, arguments, timeout);
     }
 }

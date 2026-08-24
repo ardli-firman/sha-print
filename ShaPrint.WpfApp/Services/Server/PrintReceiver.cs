@@ -177,7 +177,10 @@ namespace ShaPrint.Server
                             }
                             else if (firstInt == Constants.PacketTypeDriverPackageRequest) // 0x20
                             {
-                                await HandleDriverPackageRequestAsync(stream, reader, remoteIp, requestToken);
+                                // Driver transfers have a dedicated bounded deadline;
+                                // the short print-request deadline must not truncate a
+                                // legitimate 200 MB LAN transfer.
+                                await HandleDriverPackageRequestAsync(stream, remoteIp, shutdownToken);
                             }
                             else
                             {
@@ -563,8 +566,11 @@ namespace ShaPrint.Server
         /// Handles a client request to download a driver package.
         /// Reads DriverPackageRequest, then streams chunks (AES-GCM encrypted, HMAC signed) back to client.
         /// </summary>
-        private async Task HandleDriverPackageRequestAsync(NetworkStream stream, BinaryReader reader, string remoteIp, CancellationToken token)
+        private async Task HandleDriverPackageRequestAsync(NetworkStream stream, string remoteIp, CancellationToken token)
         {
+            using var transferDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            transferDeadline.CancelAfter(Constants.DriverPackageTransferTimeoutMs);
+            token = transferDeadline.Token;
             try
             {
                 if (!_driverSharingEnabled || _driverPackageService == null)
@@ -573,22 +579,43 @@ namespace ShaPrint.Server
                     return;
                 }
 
-                // Read request: length-prefixed JSON
-                int jsonLength = reader.ReadInt32();
+                // Read request: length-prefixed JSON. BinaryReader.ReadBytes may
+                // return a short buffer on a fragmented socket, so use exact async
+                // reads with the transfer cancellation token.
+                int jsonLength = await ReadInt32Async(stream, token);
                 if (jsonLength <= 0 || jsonLength > 10240) // max 10KB for the request
                 {
                     await SendDriverPackageErrorAsync(stream, "Invalid request length.");
                     return;
                 }
-                byte[] jsonBytes = reader.ReadBytes(jsonLength);
-                var request = System.Text.Json.JsonSerializer.Deserialize<DriverPackageRequest>(
-                    System.Text.Encoding.UTF8.GetString(jsonBytes));
-
-                if (request == null || string.IsNullOrEmpty(request.PrinterName))
+                byte[] jsonBytes = await ReadBytesAsync(stream, jsonLength, token);
+                DriverPackageRequest? request;
+                try
                 {
+                    request = System.Text.Json.JsonSerializer.Deserialize<DriverPackageRequest>(
+                        System.Text.Encoding.UTF8.GetString(jsonBytes));
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    CryptographicOperations.ZeroMemory(jsonBytes);
                     await SendDriverPackageErrorAsync(stream, "Invalid driver package request.");
                     return;
                 }
+
+                if (request == null || string.IsNullOrEmpty(request.PrinterName))
+                {
+                    CryptographicOperations.ZeroMemory(jsonBytes);
+                    await SendDriverPackageErrorAsync(stream, "Invalid driver package request.");
+                    return;
+                }
+
+                if (!DriverPackageIdValidator.IsValid(request.DriverPackageId))
+                {
+                    CryptographicOperations.ZeroMemory(jsonBytes);
+                    await SendDriverPackageErrorAsync(stream, "Invalid driver package identifier.");
+                    return;
+                }
+                CryptographicOperations.ZeroMemory(jsonBytes);
 
                 AppLogger.Log($"[SERVER] Driver package request from {remoteIp} for printer '{request.PrinterName}' (PackageId={request.DriverPackageId?[..16]}...)");
 
@@ -617,6 +644,11 @@ namespace ShaPrint.Server
                     await SendDriverPackageErrorAsync(stream, $"Driver package not found for printer '{request.PrinterName}' (driver: '{driverName}').");
                     return;
                 }
+                if (!DriverPackageIdValidator.IsValid(manifest.Sha256))
+                {
+                    await SendDriverPackageErrorAsync(stream, "Server returned an invalid driver package manifest.");
+                    return;
+                }
                 AppLogger.Log($"[SERVER] Package manifest found: SHA-256={manifest.Sha256[..16]}..., size={manifest.TotalSizeBytes:N0} bytes, inf={manifest.InfName}");
 
                 // Verify requested package ID matches (if provided)
@@ -628,34 +660,38 @@ namespace ShaPrint.Server
                     return;
                 }
 
-                // Read package bytes
-                AppLogger.Log($"[SERVER] Reading package bytes for SHA-256={manifest.Sha256[..16]}...");
-                byte[]? packageBytes = await _driverPackageService.ReadPackageBytesAsync(manifest.Sha256);
-                if (packageBytes == null || packageBytes.Length == 0)
+                // Open the archive once and stream bounded chunks. Do not allocate
+                // another 200 MB buffer per connected client.
+                AppLogger.Log($"[SERVER] Opening package stream for SHA-256={manifest.Sha256[..16]}...");
+                using Stream? packageStream = _driverPackageService.OpenPackageReadStream(manifest.Sha256, out long packageLength);
+                if (packageStream == null || packageLength <= 0 || packageLength > Constants.MaxDriverPackageSize)
                 {
                     AppLogger.Error($"[SERVER] Failed to read package bytes for SHA-256={manifest.Sha256[..16]}... — aborting transfer.");
                     await SendDriverPackageErrorAsync(stream, "Failed to read driver package data.");
                     return;
                 }
-                AppLogger.Log($"[SERVER] Sending driver package to {remoteIp}: {packageBytes.Length:N0} bytes.");
+                AppLogger.Log($"[SERVER] Sending driver package to {remoteIp}: {packageLength:N0} bytes.");
 
                 // Stream chunks
                 int chunkSize = Constants.DriverPackageChunkSize;
-                int totalChunks = (int)Math.Ceiling((double)packageBytes.Length / chunkSize);
+                int totalChunks = checked((int)((packageLength + chunkSize - 1) / chunkSize));
+                byte[] rawChunk = new byte[chunkSize];
+                long bytesSent = 0;
 
                 for (int i = 0; i < totalChunks; i++)
                 {
                     token.ThrowIfCancellationRequested();
 
-                    int offset = i * chunkSize;
-                    int length = Math.Min(chunkSize, packageBytes.Length - offset);
-                    byte[] rawChunk = new byte[length];
-                    Buffer.BlockCopy(packageBytes, offset, rawChunk, 0, length);
+                    int length = await ReadAtMostAsync(packageStream, rawChunk, token);
+                    if (length <= 0 || length > chunkSize)
+                        throw new InvalidDataException("Package stream ended before the declared size.");
+                    bytesSent += length;
 
                     // Encrypt chunk with AES-GCM
-                    byte[] encryptedChunk = CryptoHelper.EncryptAesGcm(rawChunk);
+                    byte[] chunkBytes = length == rawChunk.Length ? rawChunk : rawChunk[..length];
+                    byte[] encryptedChunk = CryptoHelper.EncryptAesGcm(chunkBytes);
                     // Sign the raw chunk with HMAC
-                    string chunkHmac = CryptoHelper.SignHmac(rawChunk);
+                    string chunkHmac = CryptoHelper.SignHmac(chunkBytes);
 
                     var chunkMsg = new DriverPackageChunk
                     {
@@ -675,14 +711,27 @@ namespace ShaPrint.Server
                         writer.Write(chunkJson);
                     }
                     byte[] packet = ms.ToArray();
-                    await stream.WriteAsync(packet, token);
-                    await stream.FlushAsync(token);
+                    CryptographicOperations.ZeroMemory(encryptedChunk);
+                    CryptographicOperations.ZeroMemory(rawChunk);
+                    try
+                    {
+                        await stream.WriteAsync(packet, token);
+                        await stream.FlushAsync(token);
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(packet);
+                        CryptographicOperations.ZeroMemory(chunkJson);
+                    }
                 }
+
+                if (bytesSent != packageLength)
+                    throw new InvalidDataException("Package changed while it was being transferred.");
 
                 // Send completion message
                 var completeMsg = new DriverPackageComplete
                 {
-                    TotalBytes = packageBytes.Length,
+                    TotalBytes = packageLength,
                     TotalChunks = totalChunks
                 };
 
@@ -698,12 +747,53 @@ namespace ShaPrint.Server
                 await stream.WriteAsync(completePacket, token);
                 await stream.FlushAsync(token);
 
-                AppLogger.Log($"[SERVER] Driver package transfer complete to {remoteIp}: {totalChunks} chunks, {packageBytes.Length} bytes.");
+                AppLogger.Log($"[SERVER] Driver package transfer complete to {remoteIp}: {totalChunks} chunks, {packageLength} bytes.");
             }
             catch (Exception ex)
             {
                 AppLogger.Error($"[SERVER] Driver package transfer error from {remoteIp}", ex);
                 try { await SendDriverPackageErrorAsync(stream, "Server error during driver package transfer."); } catch { }
+            }
+        }
+
+        private static async Task<int> ReadAtMostAsync(Stream stream, byte[] buffer, CancellationToken token)
+        {
+            int total = 0;
+            while (total < buffer.Length)
+            {
+                int read = await stream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), token);
+                if (read == 0) break;
+                total += read;
+            }
+            return total;
+        }
+
+        private static async Task<int> ReadInt32Async(Stream stream, CancellationToken token)
+        {
+            byte[] buffer = new byte[sizeof(int)];
+            try
+            {
+                await LegacyEnvelopeCodec.ReadExactlyAsync(stream, buffer, token);
+                return BinaryPrimitives.ReadInt32LittleEndian(buffer);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(buffer);
+            }
+        }
+
+        private static async Task<byte[]> ReadBytesAsync(Stream stream, int count, CancellationToken token)
+        {
+            byte[] buffer = new byte[count];
+            try
+            {
+                await LegacyEnvelopeCodec.ReadExactlyAsync(stream, buffer, token);
+                return buffer;
+            }
+            catch
+            {
+                CryptographicOperations.ZeroMemory(buffer);
+                throw;
             }
         }
 

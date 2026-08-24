@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -22,7 +23,8 @@ namespace ShaPrint.WpfApp.Services.Client
     public class DriverPackageManager
     {
         private readonly string _cacheRoot;
-        private static readonly SemaphoreSlim _downloadLock = new(1, 1);
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> _downloadLocks = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, int> _activeDownloads = new(StringComparer.OrdinalIgnoreCase);
 
         public DriverPackageManager()
         {
@@ -44,6 +46,15 @@ namespace ShaPrint.WpfApp.Services.Client
             IProgress<double>? progress = null,
             CancellationToken cancellationToken = default)
         {
+            if (!DriverPackageIdValidator.IsValid(expectedPackageId))
+            {
+                return new DriverDownloadResult
+                {
+                    Success = false,
+                    ErrorMessage = "Driver package identifier must be exactly 64 hexadecimal characters."
+                };
+            }
+
             // H5: Size-cap pre-check
             if (expectedSize <= 0 || expectedSize > Constants.MaxDriverPackageSize)
             {
@@ -54,57 +65,35 @@ namespace ShaPrint.WpfApp.Services.Client
                 };
             }
 
-            // H3: Cache check with re-verification via .verified.json
-            string cachedDir = Path.Combine(_cacheRoot, expectedPackageId);
-            if (Directory.Exists(cachedDir))
+            var downloadLock = _downloadLocks.GetOrAdd(expectedPackageId, _ => new SemaphoreSlim(1, 1));
+            if (!await downloadLock.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false))
             {
-                string markerPath = Path.Combine(cachedDir, ".verified.json");
-                if (File.Exists(markerPath))
-                {
-                    try
-                    {
-                        var markerJson = File.ReadAllText(markerPath);
-                        var marker = JsonSerializer.Deserialize<DriverPackageVerifiedMarker>(markerJson);
-                        if (marker != null &&
-                            marker.Sha256.Equals(expectedPackageId, StringComparison.OrdinalIgnoreCase))
-                        {
-                            AppLogger.Log($"[DRIVER_PKG_CLIENT] Cache verified: {expectedPackageId[..16]}...");
-                            progress?.Report(1.0);
-                            return new DriverDownloadResult
-                            {
-                                Success = true,
-                                PackageDirectory = cachedDir,
-                                FromCache = true
-                            };
-                        }
-                        AppLogger.Log($"[DRIVER_PKG_CLIENT] Cache marker mismatch — re-downloading.");
-                    }
-                    catch (Exception ex)
-                    {
-                        AppLogger.Log($"[DRIVER_PKG_CLIENT] Cache marker unreadable — re-downloading: {ex.Message}");
-                    }
-                }
-                else
-                {
-                    AppLogger.Log($"[DRIVER_PKG_CLIENT] Legacy cache (no .verified.json) — re-downloading once.");
-                }
-                // Marker missing or mismatched → delete stale cache entry
-                try { Directory.Delete(cachedDir, true); } catch { }
-            }
-
-            // Acquire download semaphore (only one concurrent download)
-            if (!await _downloadLock.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken))
-            {
-                return new DriverDownloadResult { Success = false, ErrorMessage = "Download already in progress." };
+                return new DriverDownloadResult { Success = false, ErrorMessage = "Download already in progress for this package." };
             }
 
             try
             {
+                _activeDownloads.AddOrUpdate(expectedPackageId, 1, (_, count) => count + 1);
+                // H3: cache check occurs under the package lock, so two clients
+                // cannot delete an active extraction or accept a partial marker.
+                string cachedDir = Path.Combine(_cacheRoot, expectedPackageId);
+                if (TryGetVerifiedCache(cachedDir, expectedPackageId, expectedSize, out _))
+                {
+                    AppLogger.Log($"[DRIVER_PKG_CLIENT] Cache verified: {expectedPackageId[..16]}...");
+                    progress?.Report(1.0);
+                    return new DriverDownloadResult { Success = true, PackageDirectory = cachedDir, FromCache = true };
+                }
+                TryDeleteDirectory(cachedDir);
                 return await DownloadFromServerAsync(serverIp, printerName, expectedPackageId, expectedSize, progress, cancellationToken);
             }
             finally
             {
-                _downloadLock.Release();
+                if (_activeDownloads.TryGetValue(expectedPackageId, out int activeCount)
+                    && activeCount <= 1)
+                    _activeDownloads.TryRemove(expectedPackageId, out _);
+                else
+                    _activeDownloads.AddOrUpdate(expectedPackageId, 0, (_, count) => Math.Max(0, count - 1));
+                downloadLock.Release();
             }
         }
 
@@ -117,6 +106,7 @@ namespace ShaPrint.WpfApp.Services.Client
             CancellationToken cancellationToken)
         {
             string tempDir = Path.Combine(_cacheRoot, $"tmp_{Guid.NewGuid():N}");
+            string tempZipPath = Path.Combine(tempDir, "package.zip");
             Directory.CreateDirectory(tempDir);
 
             try
@@ -124,10 +114,12 @@ namespace ShaPrint.WpfApp.Services.Client
                 using var client = new TcpClient();
                 AppLogger.Log($"[DRIVER_PKG_CLIENT] Connecting to {serverIp}:{Constants.PrintTcpPort}...");
                 var connectTask = client.ConnectAsync(serverIp, Constants.PrintTcpPort);
-                if (await Task.WhenAny(connectTask, Task.Delay(Constants.DriverPackageTransferTimeoutMs, cancellationToken)) != connectTask)
+                using var transferDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                transferDeadline.CancelAfter(Constants.DriverPackageTransferTimeoutMs);
+                if (await Task.WhenAny(connectTask, Task.Delay(Timeout.InfiniteTimeSpan, transferDeadline.Token)).ConfigureAwait(false) != connectTask)
                 {
-                    AppLogger.Error($"[DRIVER_PKG_CLIENT] Connection timeout to {serverIp}:{Constants.PrintTcpPort}");
-                    return new DriverDownloadResult { Success = false, ErrorMessage = "Connection timeout." };
+                    transferDeadline.Token.ThrowIfCancellationRequested();
+                    return new DriverDownloadResult { Success = false, ErrorMessage = "Connection timeout.", TimedOut = true };
                 }
                 await connectTask;
                 AppLogger.Log($"[DRIVER_PKG_CLIENT] Connected. Sending DriverPackageRequest for printer='{printerName}', PackageId={expectedPackageId[..16]}...");
@@ -149,24 +141,26 @@ namespace ShaPrint.WpfApp.Services.Client
                     bw.Write(requestJson.Length);
                     bw.Write(requestJson);
                 }
-                await stream.FlushAsync(cancellationToken);
+                await stream.FlushAsync(transferDeadline.Token);
 
-                // Receive chunks
-                byte[] allBytes;
+                // Receive and hash chunks directly into a bounded temporary file.
                 DriverPackageComplete? completeMessage = null;
-                using (var ms = new MemoryStream())
+                int totalChunks = 0;
+                long receivedBytes = 0;
+                using (var packageFile = new FileStream(tempZipPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+                using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
                 {
-                    int totalChunks = 0;
                     int receivedChunks = 0;
+                    DriverChunkSequence? sequence = null;
 
                     while (true)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
+                        transferDeadline.Token.ThrowIfCancellationRequested();
 
-                        var packetType = await ReadInt32Async(stream, cancellationToken);
-                        var payloadLength = await ReadInt32Async(stream, cancellationToken);
+                        var packetType = await ReadInt32Async(stream, transferDeadline.Token);
+                        var payloadLength = await ReadInt32Async(stream, transferDeadline.Token);
 
-                        if (payloadLength <= 0 || payloadLength > Constants.MaxDriverPackageSize)
+                        if (payloadLength <= 0 || payloadLength > Constants.DriverPackageChunkSize * 2 + 16 * 1024)
                         {
                             return new DriverDownloadResult
                             {
@@ -186,8 +180,10 @@ namespace ShaPrint.WpfApp.Services.Client
                             };
                         }
 
-                        byte[] payload = await ReadBytesAsync(stream, payloadLength, cancellationToken);
+                        byte[] payload = await ReadBytesAsync(stream, payloadLength, transferDeadline.Token);
 
+                        try
+                        {
                         if (packetType == Constants.PacketTypeDriverPackageChunk)
                         {
                             var chunk = JsonSerializer.Deserialize<DriverPackageChunk>(
@@ -197,24 +193,53 @@ namespace ShaPrint.WpfApp.Services.Client
                                 return new DriverDownloadResult { Success = false, ErrorMessage = "Invalid chunk data." };
                             }
 
-                            // Decrypt the chunk
-                            byte[] rawChunk = CryptoHelper.DecryptAesGcm(chunk.Data);
-
-                            // Verify per-chunk HMAC
-                            if (!CryptoHelper.VerifyHmac(rawChunk, chunk.ChunkHmac))
+                            if (chunk.TotalChunks <= 0 || chunk.TotalChunks > (Constants.MaxDriverPackageSize + Constants.DriverPackageChunkSize - 1) / Constants.DriverPackageChunkSize)
                             {
-                                return new DriverDownloadResult
-                                {
-                                    Success = false,
-                                    ErrorMessage = $"Chunk {chunk.ChunkIndex} HMAC verification failed."
-                                };
+                                CryptographicOperations.ZeroMemory(payload);
+                                return new DriverDownloadResult { Success = false, ErrorMessage = "Invalid total chunk count." };
+                            }
+                            sequence ??= new DriverChunkSequence(chunk.TotalChunks);
+                            if (!sequence.TryAccept(chunk.ChunkIndex, chunk.TotalChunks, out string sequenceError))
+                            {
+                                CryptographicOperations.ZeroMemory(chunk.Data);
+                                CryptographicOperations.ZeroMemory(payload);
+                                return new DriverDownloadResult { Success = false, ErrorMessage = sequenceError };
                             }
 
-                            await ms.WriteAsync(rawChunk, cancellationToken);
-                            receivedChunks++;
-                            totalChunks = chunk.TotalChunks;
-                            AppLogger.Log($"[DRIVER_PKG_CLIENT] Chunk {chunk.ChunkIndex + 1}/{totalChunks} received ({rawChunk.Length:N0} bytes).");
-                            progress?.Report((double)receivedChunks / totalChunks);
+                            byte[] rawChunk = Array.Empty<byte>();
+                            try
+                            {
+                                // Decrypt the chunk
+                                rawChunk = CryptoHelper.DecryptAesGcm(chunk.Data);
+
+                                if (rawChunk.Length <= 0 || rawChunk.Length > Constants.DriverPackageChunkSize || receivedBytes > Constants.MaxDriverPackageSize - rawChunk.Length)
+                                    return new DriverDownloadResult { Success = false, ErrorMessage = "Invalid driver package chunk size." };
+
+                                // Verify per-chunk HMAC
+                                if (!CryptoHelper.VerifyHmac(rawChunk, chunk.ChunkHmac))
+                                {
+                                    return new DriverDownloadResult
+                                    {
+                                        Success = false,
+                                        ErrorMessage = $"Chunk {chunk.ChunkIndex} HMAC verification failed."
+                                    };
+                                }
+
+                                await packageFile.WriteAsync(rawChunk, transferDeadline.Token).ConfigureAwait(false);
+                                hash.AppendData(rawChunk);
+                                receivedBytes += rawChunk.Length;
+                                receivedChunks++;
+                                totalChunks = chunk.TotalChunks;
+                                AppLogger.Log($"[DRIVER_PKG_CLIENT] Chunk {chunk.ChunkIndex + 1}/{totalChunks} received ({rawChunk.Length:N0} bytes).");
+                                progress?.Report((double)receivedChunks / totalChunks);
+                            }
+                            finally
+                            {
+                                if (rawChunk.Length > 0)
+                                    CryptographicOperations.ZeroMemory(rawChunk);
+                                if (chunk.Data.Length > 0)
+                                    CryptographicOperations.ZeroMemory(chunk.Data);
+                            }
                         }
                         else if (packetType == Constants.PacketTypeDriverPackageComplete)
                         {
@@ -225,17 +250,20 @@ namespace ShaPrint.WpfApp.Services.Client
                                 return new DriverDownloadResult { Success = false, ErrorMessage = "Invalid completion message." };
                             }
 
-                            allBytes = ms.ToArray();
-                            AppLogger.Log($"[DRIVER_PKG_CLIENT] All chunks received: {allBytes.Length:N0} bytes total (expected={expectedSize:N0}).");
+                            if (sequence == null || !sequence.IsComplete || completeMessage.TotalChunks != totalChunks)
+                                return new DriverDownloadResult { Success = false, ErrorMessage = "Driver package has missing chunks." };
+                            await packageFile.FlushAsync(transferDeadline.Token).ConfigureAwait(false);
+                            string actualHash = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+                            AppLogger.Log($"[DRIVER_PKG_CLIENT] All chunks received: {receivedBytes:N0} bytes total (expected={expectedSize:N0}).");
 
                             // Verify total size — skip if expectedSize is 0 (stale discovery metadata)
-                            if (expectedSize > 0 && allBytes.Length != expectedSize)
+                            if (expectedSize > 0 && receivedBytes != expectedSize)
                             {
-                                AppLogger.Error($"[DRIVER_PKG_CLIENT] Size mismatch: expected {expectedSize:N0}, got {allBytes.Length:N0}");
+                                AppLogger.Error($"[DRIVER_PKG_CLIENT] Size mismatch: expected {expectedSize:N0}, got {receivedBytes:N0}");
                                 return new DriverDownloadResult
                                 {
                                     Success = false,
-                                    ErrorMessage = $"Size mismatch: expected {expectedSize}, got {allBytes.Length}"
+                                    ErrorMessage = $"Size mismatch: expected {expectedSize}, got {receivedBytes}"
                                 };
                             }
 
@@ -251,7 +279,6 @@ namespace ShaPrint.WpfApp.Services.Client
                             }
 
                             // Verify SHA-256
-                            string actualHash = Convert.ToHexString(SHA256.HashData(allBytes)).ToLowerInvariant();
                             AppLogger.Log($"[DRIVER_PKG_CLIENT] SHA-256 verify: expected={expectedPackageId[..16]}..., got={actualHash[..16]}...");
                             if (!actualHash.Equals(expectedPackageId, StringComparison.OrdinalIgnoreCase))
                             {
@@ -265,20 +292,21 @@ namespace ShaPrint.WpfApp.Services.Client
                             AppLogger.Log($"[DRIVER_PKG_CLIENT] SHA-256 OK. Extracting package...");
 
                             // H8: Cancel-during-verify (between verify and extract)
-                            cancellationToken.ThrowIfCancellationRequested();
+                            transferDeadline.Token.ThrowIfCancellationRequested();
 
                             // Success — extract zip to final cache directory using safe extractor (H2)
                             string finalDir = Path.Combine(_cacheRoot, expectedPackageId);
-                            if (Directory.Exists(finalDir))
-                                Directory.Delete(finalDir, true);
+                            string extractionDir = Path.Combine(tempDir, "extracted");
 
                             try
                             {
-                                using (var zipStream = new MemoryStream(allBytes))
-                                using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Read))
+                                using (var packageRead = new FileStream(tempZipPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan))
+                                using (var archive = new ZipArchive(packageRead, ZipArchiveMode.Read))
                                 {
-                                    SafeZipExtractor.ExtractSafely(archive, finalDir);
+                                    SafeZipExtractor.ExtractSafely(archive, extractionDir);
                                 }
+                                TryDeleteDirectory(finalDir);
+                                Directory.Move(extractionDir, finalDir);
                             }
                             catch
                             {
@@ -291,7 +319,7 @@ namespace ShaPrint.WpfApp.Services.Client
                             var marker = new DriverPackageVerifiedMarker
                             {
                                 Sha256 = actualHash,
-                                TotalSizeBytes = allBytes.Length,
+                                TotalSizeBytes = receivedBytes,
                                 FileCount = Directory.GetFiles(finalDir, "*", SearchOption.AllDirectories).Length,
                                 ExtractedAtUtc = DateTime.UtcNow
                             };
@@ -299,7 +327,7 @@ namespace ShaPrint.WpfApp.Services.Client
                             File.WriteAllText(Path.Combine(finalDir, ".verified.json"), markerJson);
 
                             progress?.Report(1.0);
-                            AppLogger.Log($"[DRIVER_PKG_CLIENT] Driver package downloaded, verified, and extracted: {allBytes.Length} bytes zip, SHA-256={actualHash[..16]}...");
+                            AppLogger.Log($"[DRIVER_PKG_CLIENT] Driver package downloaded, verified, and extracted: {receivedBytes} bytes zip, SHA-256={actualHash[..16]}...");
 
                             return new DriverDownloadResult
                             {
@@ -325,6 +353,11 @@ namespace ShaPrint.WpfApp.Services.Client
                                 Success = false,
                                 ErrorMessage = $"Unexpected packet type: 0x{packetType:X2}"
                             };
+                        }
+                        }
+                        finally
+                        {
+                            CryptographicOperations.ZeroMemory(payload);
                         }
                     }
                 }
@@ -360,9 +393,32 @@ namespace ShaPrint.WpfApp.Services.Client
             }
             finally
             {
-                // Clean up temp directory on failure
-                try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
+                // Temporary archive/extraction is never retained after success or failure.
+                TryDeleteDirectory(tempDir);
             }
+        }
+
+        private static bool TryGetVerifiedCache(string directory, string packageId, long expectedSize, out DriverPackageVerifiedMarker? marker)
+        {
+            marker = null;
+            string markerPath = Path.Combine(directory, ".verified.json");
+            if (!Directory.Exists(directory) || !File.Exists(markerPath))
+                return false;
+            try
+            {
+                marker = JsonSerializer.Deserialize<DriverPackageVerifiedMarker>(File.ReadAllText(markerPath));
+                return marker != null
+                    && DriverPackageIdValidator.IsValid(marker.Sha256)
+                    && marker.Sha256.Equals(packageId, StringComparison.OrdinalIgnoreCase)
+                    && marker.TotalSizeBytes == expectedSize;
+            }
+            catch { return false; }
+        }
+
+        private static void TryDeleteDirectory(string directory)
+        {
+            try { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+            catch { /* cleanup is best effort; never mask the transfer result */ }
         }
 
         /// <summary>
@@ -375,7 +431,9 @@ namespace ShaPrint.WpfApp.Services.Client
                 if (!Directory.Exists(_cacheRoot)) return;
 
                 var dirs = Directory.GetDirectories(_cacheRoot)
-                    .Where(d => !Path.GetFileName(d).StartsWith("tmp_"))
+                    .Where(d => !Path.GetFileName(d).StartsWith("tmp_")
+                        && DriverPackageIdValidator.IsValid(Path.GetFileName(d))
+                        && !_activeDownloads.ContainsKey(Path.GetFileName(d)))
                     .Select(d => new DirectoryInfo(d))
                     .OrderByDescending(d => d.LastAccessTimeUtc)
                     .ToList();
@@ -387,6 +445,22 @@ namespace ShaPrint.WpfApp.Services.Client
                 {
                     var oldest = dirs.Last();
                     long dirSize = oldest.EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
+                    string packageId = oldest.Name;
+                    var packageLock = _downloadLocks.GetOrAdd(packageId, _ => new SemaphoreSlim(1, 1));
+                    if (!packageLock.Wait(0))
+                    {
+                        // A transfer owns the package lock (or has already marked
+                        // itself active); never delete its directory. Remove this
+                        // candidate from this pass and let a later pass retry it.
+                        dirs.RemoveAt(dirs.Count - 1);
+                        continue;
+                    }
+                    if (_activeDownloads.ContainsKey(packageId))
+                    {
+                        packageLock.Release();
+                        dirs.RemoveAt(dirs.Count - 1);
+                        continue;
+                    }
                     try
                     {
                         oldest.Delete(true);
@@ -397,6 +471,10 @@ namespace ShaPrint.WpfApp.Services.Client
                     catch
                     {
                         break; // Can't delete, stop evicting
+                    }
+                    finally
+                    {
+                        packageLock.Release();
                     }
                 }
             }

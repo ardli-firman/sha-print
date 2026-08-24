@@ -20,9 +20,19 @@ namespace ShaPrint.Core.Abstractions
     }
 
     /// <summary>
+    /// Optional streaming seam for large artifacts. Keeping this separate from
+    /// IFileSystem preserves existing fakes while production avoids allocating an
+    /// entire driver archive for each client.
+    /// </summary>
+    public interface IStreamingFileSystem
+    {
+        Stream OpenRead(string path);
+    }
+
+    /// <summary>
     /// Default implementation using System.IO.
     /// </summary>
-    public class RealFileSystem : IFileSystem
+    public class RealFileSystem : IFileSystem, IStreamingFileSystem
     {
         public async Task WriteAllBytesAsync(string path, byte[] data)
         {
@@ -34,6 +44,14 @@ namespace ShaPrint.Core.Abstractions
 
         public async Task<byte[]> ReadAllBytesAsync(string path)
             => await File.ReadAllBytesAsync(path);
+
+        public Stream OpenRead(string path) => new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 64 * 1024,
+            options: FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         public bool FileExists(string path) => File.Exists(path);
 
