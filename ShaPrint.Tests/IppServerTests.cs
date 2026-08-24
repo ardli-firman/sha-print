@@ -479,6 +479,7 @@ public class IppServerTests
         // Assert
         Assert.Equal(requestCount, spooler.PrintedJobs.Count);
         Assert.Equal(requestCount, spooler.PrintedJobs.Select(job => job.JobId).Distinct().Count());
+        Assert.DoesNotContain(spooler.PrintedJobs, job => job.JobId <= 0);
     }
 
     /// <summary>
