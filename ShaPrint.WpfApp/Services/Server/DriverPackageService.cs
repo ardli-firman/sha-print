@@ -675,7 +675,7 @@ namespace ShaPrint.Server
                 await _fileSystem.WriteAllBytesAsync(Path.Combine(tempFinalDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson)).WaitAsync(cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (IsCompleteFinalPackage(finalDir, packageHash))
+                if (await IsCompleteFinalPackageAsync(finalDir, packageHash, cancellationToken).ConfigureAwait(false))
                 {
                     // A prior verified package is immutable and already serves the
                     // same hash. Preserve it and discard this redundant staging.
@@ -736,7 +736,7 @@ namespace ShaPrint.Server
             }
         }
 
-        private bool IsCompleteFinalPackage(string directory, string packageHash)
+        private async Task<bool> IsCompleteFinalPackageAsync(string directory, string packageHash, CancellationToken cancellationToken)
         {
             if (!DriverPackageIdValidator.IsValid(packageHash)
                 || !_fileSystem.DirectoryExists(directory)
@@ -746,8 +746,8 @@ namespace ShaPrint.Server
 
             try
             {
-                byte[] manifestBytes = _fileSystem.ReadAllBytesAsync(Path.Combine(directory, "manifest.json"))
-                    .GetAwaiter().GetResult();
+                byte[] manifestBytes = await _fileSystem.ReadAllBytesAsync(Path.Combine(directory, "manifest.json"))
+                    .WaitAsync(cancellationToken).ConfigureAwait(false);
                 DriverPackageManifest? manifest;
                 try
                 {
@@ -757,13 +757,39 @@ namespace ShaPrint.Server
                 {
                     CryptographicOperations.ZeroMemory(manifestBytes);
                 }
-                return manifest != null
+                bool metadataValid = manifest != null
                     && DriverPackageIdValidator.IsValid(manifest.Sha256)
                     && manifest.Sha256.Equals(packageHash, StringComparison.OrdinalIgnoreCase)
                     && manifest.TotalSizeBytes > 0
                     && manifest.TotalSizeBytes <= Constants.MaxDriverPackageSize
                     && _fileSystem.GetFileSize(Path.Combine(directory, "package.zip")) == manifest.TotalSizeBytes;
+
+                if (manifest == null || !metadataValid)
+                    return false;
+
+                string actualHash;
+                string packagePath = Path.Combine(directory, "package.zip");
+                if (_fileSystem is IStreamingFileSystem streaming)
+                {
+                    actualHash = await HashFileAsync(streaming, packagePath, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    byte[] packageBytes = await _fileSystem.ReadAllBytesAsync(packagePath)
+                        .WaitAsync(cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        actualHash = Convert.ToHexString(SHA256.HashData(packageBytes)).ToLowerInvariant();
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(packageBytes);
+                    }
+                }
+
+                return actualHash.Equals(packageHash, StringComparison.OrdinalIgnoreCase);
             }
+            catch (OperationCanceledException) { throw; }
             catch
             {
                 return false;
