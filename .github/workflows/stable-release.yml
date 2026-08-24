@@ -9,6 +9,7 @@ on:
       - 'ShaPrint.Updater/**'
       - 'ShaPrint.Core/**'
       - 'ShaPrint.Tests/**'
+      - 'scripts/**'
       - 'ShaPrint.sln'
       - 'installer.iss'
       
@@ -95,8 +96,17 @@ jobs:
         echo "Commits analyzed:"
         echo "$COMMITS" | head -20
 
-    - name: Run Tests
-      run: dotnet test -c Release
+    - name: Verify Release Build
+      shell: pwsh
+      run: ./scripts/verify-build.ps1
+
+    - name: Upload Test Results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-${{ github.job }}-${{ github.run_attempt }}
+        path: TestResults/*.trx
+        if-no-files-found: error
 
     - name: Validate PSK Secret
       shell: bash
