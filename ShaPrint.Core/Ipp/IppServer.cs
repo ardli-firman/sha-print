@@ -141,7 +141,11 @@ public class IppServer : IIppServer
                     new IppVersion(1, 1),
                     new IppVersion(2, 0)
                 ],
-                PrinterUriSupported = [new Uri($"ipp://localhost:631/printers/{resolvedName}")],
+                // Echo the endpoint authority/path supplied by the client when
+                // possible. Windows' IPP class driver validates this attribute
+                // against the URL it is installing; advertising localhost or a
+                // path without /ipp/print makes a reachable queue look invalid.
+                PrinterUriSupported = [BuildPrinterUri(request.OperationAttributes?.PrinterUri, resolvedName)],
                 QueuedJobCount = _jobManager.ActiveJobCount
             }
         };
@@ -150,7 +154,7 @@ public class IppServer : IIppServer
     private async Task<PrintJobResponse> HandlePrintJobAsync(PrintJobRequest request, string? printerName, CancellationToken ct)
     {
         // Use provided printer name or extract from request
-        var targetPrinter = printerName ?? ExtractPrinterName(request.OperationAttributes?.PrinterUri);
+        var targetPrinter = printerName ?? ExtractPrinterName(request.OperationAttributes?.PrinterUri) ?? "Unknown";
         var documentName = request.OperationAttributes?.JobName ?? "Untitled";
         var documentData = ReadDocumentData(request.Document);
         var documentFormat = GetDocumentFormat(request);
@@ -330,12 +334,53 @@ public class IppServer : IIppServer
         return null;
     }
 
-    private static string ExtractPrinterName(Uri? printerUri)
+    private static string? ExtractPrinterName(Uri? printerUri)
     {
-        if (printerUri == null) return "Unknown";
-        var segments = printerUri.Segments;
-        return segments.Length > 0 ? segments.Last().TrimEnd('/') : "Unknown";
+        if (printerUri == null)
+            return null;
+
+        string[] segments = printerUri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Select(Uri.UnescapeDataString)
+            .ToArray();
+        int printersIndex = Array.FindIndex(segments,
+            segment => segment.Equals("printers", StringComparison.OrdinalIgnoreCase));
+        if (printersIndex >= 0 && printersIndex + 1 < segments.Length)
+        {
+            string name = segments[printersIndex + 1];
+            if (!name.Equals("ipp", StringComparison.OrdinalIgnoreCase)
+                && !name.Equals("print", StringComparison.OrdinalIgnoreCase))
+                return name;
+        }
+
+        return null;
     }
+
+    private static Uri BuildPrinterUri(Uri? requestedUri, string resolvedName)
+    {
+        if (requestedUri != null
+            && IsPrinterUriScheme(requestedUri.Scheme)
+            && requestedUri.AbsolutePath.EndsWith("/ipp/print", StringComparison.OrdinalIgnoreCase))
+        {
+            return requestedUri;
+        }
+
+        string scheme = requestedUri?.Scheme is { Length: > 0 } value
+            && IsPrinterUriScheme(value)
+            ? value
+            : "ipp";
+        string authority = requestedUri?.Authority is { Length: > 0 } requestedAuthority
+            ? requestedAuthority
+            : "localhost:631";
+        string encodedName = Uri.EscapeDataString(resolvedName);
+        return new Uri($"{scheme}://{authority}/printers/{encodedName}/ipp/print");
+    }
+
+    private static bool IsPrinterUriScheme(string scheme)
+        => scheme.Equals("ipp", StringComparison.OrdinalIgnoreCase)
+            || scheme.Equals("ipps", StringComparison.OrdinalIgnoreCase)
+            || scheme.Equals("http", StringComparison.OrdinalIgnoreCase)
+            || scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
 
     private static byte[] ReadDocumentData(Stream? document)
     {

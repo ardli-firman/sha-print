@@ -6,7 +6,7 @@ namespace ShaPrint.Core.Ipp.Testing;
 /// </summary>
 public static class IppRequestBuilder
 {
-    public static byte[] BuildGetPrinterAttributesRequest()
+    public static byte[] BuildGetPrinterAttributesRequest(string printerUri = "ipp://localhost:631/printers")
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms);
@@ -19,7 +19,7 @@ public static class IppRequestBuilder
         writer.Write((byte)0x01); // begin-operation-attributes
         WriteStringAttribute(writer, 0x47, "attributes-charset", "utf-8");
         WriteStringAttribute(writer, 0x48, "attributes-natural-language", "en");
-        WriteStringAttribute(writer, 0x45, "printer-uri", "ipp://localhost:631/printers");
+        WriteStringAttribute(writer, 0x45, "printer-uri", printerUri);
         writer.Write((byte)0x03); // end-operation-attributes
         writer.Write((byte)0x03); // end-of-attributes
 
@@ -29,7 +29,11 @@ public static class IppRequestBuilder
     public static byte[] BuildPrintJobRequest(string printerName, byte[] documentData)
         => BuildPrintJobRequest(printerName, documentData, documentFormat: null);
 
-    public static byte[] BuildPrintJobRequest(string printerName, byte[] documentData, string? documentFormat)
+    public static byte[] BuildPrintJobRequest(
+        string printerName,
+        byte[] documentData,
+        string? documentFormat,
+        string? printerUri = null)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms);
@@ -42,7 +46,8 @@ public static class IppRequestBuilder
         writer.Write((byte)0x01);
         WriteStringAttribute(writer, 0x47, "attributes-charset", "utf-8");
         WriteStringAttribute(writer, 0x48, "attributes-natural-language", "en");
-        WriteStringAttribute(writer, 0x45, "printer-uri", $"ipp://localhost:631/printers/{printerName}");
+        WriteStringAttribute(writer, 0x45, "printer-uri",
+            printerUri ?? $"ipp://localhost:631/printers/{printerName}");
         WriteStringAttribute(writer, 0x42, "job-name", "TestJob");
         if (documentFormat != null)
         {

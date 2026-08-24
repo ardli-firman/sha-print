@@ -40,6 +40,23 @@ public class IppServerTests
         Assert.Contains("TestPrinter", responseText);
     }
 
+    [Fact]
+    public async Task GetPrinterAttributes_AdvertisesUsableIppEndpoint()
+    {
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "EPSON L3210 Series (Copy 1)", DriverName = "Generic Driver" });
+        var server = new IppServer(spooler);
+        const string requestedUri = "http://10.102.10.21:631/printers/EPSON%20L3210%20Series%20%28Copy%201%29/ipp/print";
+
+        using var inputStream = new MemoryStream(IppRequestBuilder.BuildGetPrinterAttributesRequest(requestedUri));
+        using var outputStream = new MemoryStream();
+
+        await server.ProcessRequestAsync(inputStream, outputStream);
+
+        string responseText = System.Text.Encoding.ASCII.GetString(outputStream.ToArray());
+        Assert.Contains("http://10.102.10.21:631/printers/EPSON L3210 Series %28Copy 1%29/ipp/print", responseText);
+    }
+
     /// <summary>
     /// RED: Print-Job should send data to spooler and return job-id.
     /// </summary>
@@ -64,6 +81,27 @@ public class IppServerTests
         Assert.Single(spooler.PrintedJobs);
         Assert.Equal("TestPrinter", spooler.PrintedJobs[0].PrinterName);
         Assert.Equal(documentData, spooler.PrintedJobs[0].Data);
+    }
+
+    [Fact]
+    public async Task PrintJob_ExtractsPrinterNameFromFullIppEndpoint()
+    {
+        var spooler = new InMemorySpoolerAdapter();
+        spooler.AddPrinter(new PrinterInfo { Name = "TestPrinter", DriverName = "Generic Driver" });
+        var server = new IppServer(spooler);
+
+        byte[] requestBytes = IppRequestBuilder.BuildPrintJobRequest(
+            "TestPrinter",
+            [0x50, 0x44, 0x46],
+            documentFormat: "application/pdf",
+            printerUri: "ipp://10.102.10.21:631/printers/TestPrinter/ipp/print");
+        using var inputStream = new MemoryStream(requestBytes);
+        using var outputStream = new MemoryStream();
+
+        await server.ProcessRequestAsync(inputStream, outputStream);
+
+        var job = Assert.Single(spooler.PrintedJobs);
+        Assert.Equal("TestPrinter", job.PrinterName);
     }
 
     /// <summary>
