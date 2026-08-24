@@ -91,8 +91,9 @@ public sealed class ScannerServiceTests
 
         release.Set();
         Assert.True(finished.Wait(TimeSpan.FromSeconds(2)));
-        for (int attempt = 0; attempt < 40 && ScannerService.ActiveScans.ContainsKey("Scanner C"); attempt++)
-            await Task.Delay(10);
+        Assert.True(SpinWait.SpinUntil(
+            () => !ScannerService.ActiveScans.ContainsKey("Scanner C"),
+            TimeSpan.FromSeconds(2)));
 
         byte[] completed = await service.PerformScanAsync("Scanner C", 300, 2, "JPEG");
         Assert.Equal(new byte[] { 1 }, completed);

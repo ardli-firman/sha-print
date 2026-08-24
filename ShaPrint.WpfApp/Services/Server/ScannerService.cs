@@ -16,10 +16,13 @@ namespace ShaPrint.Server
     {
         public static readonly TimeSpan DefaultScanTimeout = TimeSpan.FromMinutes(2);
         public static readonly TimeSpan DefaultEnumerationTimeout = TimeSpan.FromSeconds(15);
-        public static readonly ConcurrentDictionary<string, DateTime> LastScanTimes = new();
-        public static readonly ConcurrentDictionary<string, bool> ActiveScans = new();
+        public static readonly ConcurrentDictionary<string, DateTime> LastScanTimes =
+            new(StringComparer.OrdinalIgnoreCase);
+        public static readonly ConcurrentDictionary<string, bool> ActiveScans =
+            new(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, ScannerAdmission> ScanAdmissions =
             new(StringComparer.OrdinalIgnoreCase);
+        private static readonly object AdmissionSync = new();
 
         private readonly ConcurrentDictionary<int, Task> _activeWorkers = new();
         private int _nextWorkerId;
@@ -124,7 +127,6 @@ namespace ShaPrint.Server
             if (!TryAcquireScanner(key, out ScannerAdmissionLease lease))
                 throw new ScannerBusyException($"Scanner '{key}' is busy with another scan.");
 
-            ActiveScans[key] = true;
             var worker = StartStaWorker(() => _scanWorker?.Invoke(key, dpi, colorMode, format, cancellationToken)
                 ?? PerformScanCore(key, dpi, colorMode, format, cancellationToken, out _));
             bool resultOwnershipTransferred = false;
@@ -144,9 +146,8 @@ namespace ShaPrint.Server
                 {
                     if (!resultOwnershipTransferred)
                         DiscardWorkerResult(worker.Completion);
-                    ActiveScans.TryRemove(key, out _);
                     LastScanTimes[key] = DateTime.UtcNow;
-                    lease.Dispose();
+                    ReleaseScanner(key, lease);
                 }
                 else
                 {
@@ -154,9 +155,8 @@ namespace ShaPrint.Server
                     {
                         if (!resultOwnershipTransferred)
                             DiscardWorkerResult(completedTask);
-                        ActiveScans.TryRemove(key, out _);
                         LastScanTimes[key] = DateTime.UtcNow;
-                        lease.Dispose();
+                        ReleaseScanner(key, lease);
                     }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                 }
             }
@@ -432,28 +432,46 @@ namespace ShaPrint.Server
 
         private static bool TryAcquireScanner(string key, out ScannerAdmissionLease lease)
         {
-            while (true)
+            lock (AdmissionSync)
             {
-                var admission = ScanAdmissions.GetOrAdd(key, static scannerKey => new ScannerAdmission(scannerKey));
-                Interlocked.Increment(ref admission.References);
-
-                // If the last owner removed this gate between GetOrAdd and the
-                // reference increment, retry against the current dictionary entry.
-                if (!ScanAdmissions.TryGetValue(key, out var current) || !ReferenceEquals(current, admission))
+                while (true)
                 {
-                    Interlocked.Decrement(ref admission.References);
-                    continue;
-                }
+                    var admission = ScanAdmissions.GetOrAdd(key, static scannerKey => new ScannerAdmission(scannerKey));
+                    Interlocked.Increment(ref admission.References);
 
-                if (!admission.Semaphore.Wait(0))
-                {
-                    ReleaseAdmissionReference(admission);
-                    lease = null!;
-                    return false;
-                }
+                    // Admission mutations and ActiveScans publication are kept
+                    // under one lock so status cannot say "available" while
+                    // the semaphore is still held by the previous worker.
+                    if (!ScanAdmissions.TryGetValue(key, out var current) || !ReferenceEquals(current, admission))
+                    {
+                        Interlocked.Decrement(ref admission.References);
+                        continue;
+                    }
 
-                lease = new ScannerAdmissionLease(admission);
-                return true;
+                    if (!admission.Semaphore.Wait(0))
+                    {
+                        ReleaseAdmissionReference(admission);
+                        lease = null!;
+                        return false;
+                    }
+
+                    ActiveScans[key] = true;
+                    lease = new ScannerAdmissionLease(admission);
+                    return true;
+                }
+            }
+        }
+
+        private static void ReleaseScanner(string key, ScannerAdmissionLease lease)
+        {
+            lock (AdmissionSync)
+            {
+                // Release the gate before clearing the public status marker,
+                // while holding the same lock used by TryAcquireScanner. A
+                // new scan therefore cannot observe an unavailable gate as
+                // available, nor can stale cleanup remove its marker.
+                lease.Dispose();
+                ActiveScans.TryRemove(key, out _);
             }
         }
 
