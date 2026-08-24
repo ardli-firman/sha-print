@@ -179,7 +179,11 @@ namespace ShaPrint.WpfApp
 
             try
             {
-                GetService<MonitorService>()?.Stop();
+                var monitorService = GetService<MonitorService>();
+                if (monitorService != null)
+                {
+                    await monitorService.StopAsync();
+                }
             }
             catch { }
 

@@ -1,157 +1,226 @@
 using System;
 using System.Collections.Generic;
-using System.Net;
-using System.Net.Sockets;
-using System.Net.NetworkInformation;
 using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
 
-namespace ShaPrint.Client
+namespace ShaPrint.Client;
+
+public class DiscoveryClient
 {
-    public class DiscoveryClient
+    private const int MaxDiscoveryTargets = 256;
+    private const int MaxRequestBytes = 256;
+    private static readonly TimeSpan MaximumDiscoveryDeadline = TimeSpan.FromSeconds(30);
+
+    public async Task<List<DiscoveryResponseMessage>> DiscoverServersAsync(
+        string? targetIp = null,
+        int timeoutMs = 2000,
+        bool skipUnicastSweep = false,
+        string? requestMessage = null,
+        CancellationToken cancellationToken = default)
     {
-        public async Task<List<DiscoveryResponseMessage>> DiscoverServersAsync(
-            string? targetIp = null, 
-            int timeoutMs = 2000, 
-            bool skipUnicastSweep = false, 
-            string? requestMessage = null)
+        if (timeoutMs <= 0)
+            throw new ArgumentOutOfRangeException(nameof(timeoutMs));
+
+        var requestedDeadline = TimeSpan.FromMilliseconds(timeoutMs);
+        TimeSpan totalDeadline = requestedDeadline <= MaximumDiscoveryDeadline
+            ? requestedDeadline
+            : MaximumDiscoveryDeadline;
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(totalDeadline);
+        CancellationToken token = deadline.Token;
+
+        using var udpClient = new UdpClient { EnableBroadcast = true };
+        byte[] requestData = Encoding.UTF8.GetBytes(requestMessage ?? Constants.DiscoveryRequestMessage);
+        if (requestData.Length == 0 || requestData.Length > MaxRequestBytes)
         {
-            var servers = new List<DiscoveryResponseMessage>();
-            using var udpClient = new UdpClient();
-            udpClient.EnableBroadcast = true;
-            
-            IPAddress ip = string.IsNullOrWhiteSpace(targetIp) ? IPAddress.Broadcast : IPAddress.Parse(targetIp);
-            string msg = requestMessage ?? Constants.DiscoveryRequestMessage;
-            byte[] requestData = Encoding.UTF8.GetBytes(msg);
-            
-            if (string.IsNullOrWhiteSpace(targetIp) || ip.Equals(IPAddress.Broadcast))
+            CryptographicOperations.ZeroMemory(requestData);
+            throw new ArgumentException("Discovery request is outside the allowed size.", nameof(requestMessage));
+        }
+
+        var byAddress = new Dictionary<string, DiscoveryResponseMessage>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            IReadOnlyList<IPEndPoint> targets = BuildTargets(targetIp, skipUnicastSweep);
+            foreach (var target in targets)
             {
-                // Send standard 255.255.255.255 broadcast
-                await udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(IPAddress.Broadcast, Constants.DiscoveryUdpPort));
-                
+                token.ThrowIfCancellationRequested();
                 try
                 {
-                    foreach (var ni in NetworkInterface.GetAllNetworkInterfaces().Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType != NetworkInterfaceType.Loopback))
-                    {
-                        foreach (var uipi in ni.GetIPProperties().UnicastAddresses.Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork))
-                        {
-                            var mask = uipi.IPv4Mask;
-                            if (mask != null && !mask.Equals(IPAddress.Any))
-                            {
-                                byte[] ipBytes = uipi.Address.GetAddressBytes();
-                                byte[] maskBytes = mask.GetAddressBytes();
-                                
-                                // 1. Subnet Directed Broadcast (e.g. 192.168.1.255)
-                                byte[] broadcastBytes = new byte[ipBytes.Length];
-                                for (int i = 0; i < broadcastBytes.Length; i++)
-                                {
-                                    broadcastBytes[i] = (byte)(ipBytes[i] | (maskBytes[i] ^ 255));
-                                }
-                                var broadcastIp = new IPAddress(broadcastBytes);
-                                await udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(broadcastIp, Constants.DiscoveryUdpPort));
+                    await udpClient.SendAsync(requestData, target, token).ConfigureAwait(false);
+                }
+                catch (SocketException ex)
+                {
+                    AppLogger.Log($"[DISCOVERY] Send to {target.Address} failed: {ex.SocketErrorCode}.");
+                }
+            }
 
-                                // 2. Unicast Sweep for AP Isolation bypass
-                                if (!skipUnicastSweep)
-                                {
-                                    uint ipInt = (uint)ipBytes[0] << 24 | (uint)ipBytes[1] << 16 | (uint)ipBytes[2] << 8 | (uint)ipBytes[3];
-                                    uint maskInt = (uint)maskBytes[0] << 24 | (uint)maskBytes[1] << 16 | (uint)maskBytes[2] << 8 | (uint)maskBytes[3];
-                                    uint networkInt = ipInt & maskInt;
-                                    uint broadcastInt = networkInt | ~maskInt;
-                                    
-                                    uint hostCount = ~maskInt;
-                                    if (hostCount > 0 && hostCount <= 1024)
-                                    {
-                                        for (uint i = networkInt + 1; i < broadcastInt; i++)
-                                        {
-                                            byte[] targetIpBytes = new byte[] { (byte)(i >> 24), (byte)(i >> 16), (byte)(i >> 8), (byte)i };
-                                            _ = udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(new IPAddress(targetIpBytes), Constants.DiscoveryUdpPort));
-                                        }
-                                    }
-                                }
-                            }
-                        }
+            while (true)
+            {
+                UdpReceiveResult result;
+                try
+                {
+                    result = await udpClient.ReceiveAsync(token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    continue;
+                }
+
+                if (result.Buffer.Length == 0 || result.Buffer.Length > Constants.MaxDiscoveryResponseBytes)
+                {
+                    AppLogger.Log($"[DISCOVERY] Rejected response of {result.Buffer.Length} bytes from {result.RemoteEndPoint.Address}.");
+                    continue;
+                }
+
+                if (!TryParseResponse(result.Buffer, result.RemoteEndPoint, out var response))
+                    continue;
+
+                byAddress.TryAdd(response!.IpAddress, response);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The bounded discovery window elapsed. Return the immutable snapshot collected so far.
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(requestData);
+        }
+
+        return byAddress.Values.ToList();
+    }
+
+    internal static bool TryParseResponse(
+        byte[] responseBytes,
+        IPEndPoint remoteEndPoint,
+        out DiscoveryResponseMessage? response)
+    {
+        response = null;
+        if (responseBytes.Length == 0 || responseBytes.Length > Constants.MaxDiscoveryResponseBytes)
+            return false;
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<DiscoveryResponseMessage>(responseBytes);
+            if (parsed == null || string.IsNullOrWhiteSpace(parsed.ServerName))
+                return false;
+
+            if (!string.IsNullOrEmpty(parsed.HmacSignature))
+            {
+                string signature = parsed.HmacSignature;
+                parsed.HmacSignature = null;
+                byte[] unsignedBytes = JsonSerializer.SerializeToUtf8Bytes(parsed);
+                try
+                {
+                    if (!CryptoHelper.VerifyHmac(unsignedBytes, signature))
+                    {
+                        AppLogger.Log($"[DISCOVERY] HMAC verification failed for {remoteEndPoint.Address}.");
+                        return false;
                     }
                 }
-                catch (Exception ex)
+                finally
                 {
-                    AppLogger.Log($"[DISCOVERY] Error enumerating network interfaces: {ex.Message}");
+                    CryptographicOperations.ZeroMemory(unsignedBytes);
+                    parsed.HmacSignature = signature;
                 }
             }
             else
             {
-                await udpClient.SendAsync(requestData, requestData.Length, new IPEndPoint(ip, Constants.DiscoveryUdpPort));
+                AppLogger.Log($"[DISCOVERY] Warning: received unsigned response from {remoteEndPoint.Address}.");
             }
 
-            var tcs = new TaskCompletionSource<bool>();
-            _ = Task.Delay(timeoutMs).ContinueWith(t => tcs.TrySetResult(true));
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    while (!tcs.Task.IsCompleted)
-                    {
-                        UdpReceiveResult result;
-                        try
-                        {
-                            result = await udpClient.ReceiveAsync();
-                        }
-                        catch (SocketException se) when (se.SocketErrorCode == SocketError.ConnectionReset)
-                        {
-                            continue; // Ignore ICMP Port Unreachable
-                        }
-
-                        string jsonResponse = Encoding.UTF8.GetString(result.Buffer);
-
-                        // Parse without signature first
-                        var response = JsonSerializer.Deserialize<DiscoveryResponseMessage>(jsonResponse);
-                        if (response == null)
-                            continue;
-
-                        // HMAC verification
-                        if (!string.IsNullOrEmpty(response.HmacSignature))
-                        {
-                            // Reconstruct the JSON that was signed (without HmacSignature)
-                            string savedSig = response.HmacSignature;
-                            response.HmacSignature = null;
-                            string unsignedJson = JsonSerializer.Serialize(response);
-
-                            if (!CryptoHelper.VerifyHmac(Encoding.UTF8.GetBytes(unsignedJson), savedSig))
-                            {
-                                AppLogger.Log($"[DISCOVERY] HMAC verification failed for response from {result.RemoteEndPoint.Address}. Rejecting.");
-                                continue; // Drop unauthenticated response
-                            }
-
-                            // Restore signature for completeness
-                            response.HmacSignature = savedSig;
-                        }
-                        else
-                        {
-                            // Legacy response without HMAC — accept but warn
-                            AppLogger.Log($"[DISCOVERY] Warning: received unsigned response from {result.RemoteEndPoint.Address}.");
-                        }
-
-                        // Overwrite with the actual reachable IP address from the packet source
-                        response.IpAddress = result.RemoteEndPoint.Address.ToString();
-
-                        if (!servers.Any(s => s.IpAddress == response.IpAddress))
-                        {
-                            servers.Add(response);
-                        }
-                    }
-                }
-                catch (ObjectDisposedException) { /* udpClient closed, normal */ }
-                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.OperationAborted || ex.ErrorCode == 995) { /* udpClient closed, normal */ }
-                catch (Exception ex) { AppLogger.Error("Discovery receive error", ex); }
-            });
-
-            await tcs.Task;
-            udpClient.Close();
-            return servers;
+            parsed.IpAddress = remoteEndPoint.Address.ToString();
+            parsed.ExposedPrinters ??= new List<PrinterInfo>();
+            response = parsed;
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            AppLogger.Log($"[DISCOVERY] Protocol error from {remoteEndPoint.Address}: {ex.Message}");
+            return false;
         }
     }
+
+    private static IReadOnlyList<IPEndPoint> BuildTargets(string? targetIp, bool skipUnicastSweep)
+    {
+        if (!string.IsNullOrWhiteSpace(targetIp))
+        {
+            if (!IPAddress.TryParse(targetIp, out var parsed) || parsed.AddressFamily != AddressFamily.InterNetwork)
+                throw new ArgumentException("Discovery target must be a valid IPv4 address.", nameof(targetIp));
+            if (!parsed.Equals(IPAddress.Broadcast))
+                return new[] { new IPEndPoint(parsed, Constants.DiscoveryUdpPort) };
+        }
+
+        var targets = new HashSet<IPAddress> { IPAddress.Broadcast };
+        try
+        {
+            foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces()
+                .Where(item => item.OperationalStatus == OperationalStatus.Up &&
+                               item.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                .Take(16))
+            {
+                foreach (var unicast in networkInterface.GetIPProperties().UnicastAddresses
+                    .Where(item => item.Address.AddressFamily == AddressFamily.InterNetwork))
+                {
+                    byte[] addressBytes = unicast.Address.GetAddressBytes();
+                    byte[]? maskBytes = unicast.IPv4Mask?.GetAddressBytes();
+                    if (maskBytes == null || maskBytes.Length != addressBytes.Length)
+                        continue;
+
+                    byte[] broadcastBytes = new byte[addressBytes.Length];
+                    for (int index = 0; index < broadcastBytes.Length; index++)
+                        broadcastBytes[index] = (byte)(addressBytes[index] | (maskBytes[index] ^ 255));
+
+                    targets.Add(new IPAddress(broadcastBytes));
+                    if (skipUnicastSweep)
+                        continue;
+
+                    uint address = ToUInt32(addressBytes);
+                    uint mask = ToUInt32(maskBytes);
+                    uint network = address & mask;
+                    uint broadcast = network | ~mask;
+                    ulong usableHostCount = broadcast > network ? (ulong)broadcast - network - 1 : 0;
+                    if (usableHostCount == 0 || usableHostCount > MaxDiscoveryTargets)
+                        continue;
+
+                    for (uint candidate = network + 1;
+                         candidate < broadcast && targets.Count < MaxDiscoveryTargets;
+                         candidate++)
+                    {
+                        targets.Add(FromUInt32(candidate));
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Log($"[DISCOVERY] Network interface enumeration failed: {ex.GetType().Name}.");
+        }
+
+        return targets
+            .Take(MaxDiscoveryTargets)
+            .Select(address => new IPEndPoint(address, Constants.DiscoveryUdpPort))
+            .ToArray();
+    }
+
+    private static uint ToUInt32(byte[] bytes)
+        => (uint)bytes[0] << 24 | (uint)bytes[1] << 16 | (uint)bytes[2] << 8 | bytes[3];
+
+    private static IPAddress FromUInt32(uint value)
+        => new(new[] { (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value });
 }

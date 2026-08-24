@@ -1,264 +1,306 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using CommunityToolkit.Mvvm.Input;
+using ShaPrint.Client;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
-using ShaPrint.Client;
 using ShaPrint.WpfApp.ViewModels.Pages;
-using CommunityToolkit.Mvvm.Input;
 
-namespace ShaPrint.WpfApp.Services.Monitor
+namespace ShaPrint.WpfApp.Services.Monitor;
+
+public sealed class MonitorService
 {
-    public class MonitorService
+    private const int MaxMonitoredServers = 32;
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan QueryStagger = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan RefreshDeadline = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RequestDeadline = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan StreamIdleDeadline = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ShutdownDeadline = TimeSpan.FromSeconds(10);
+
+    private readonly MonitorViewModel _monitorViewModel;
+    private readonly DiscoveryClient _discoveryClient;
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly object _lifecycleLock = new();
+    private readonly ConcurrentDictionary<int, Task> _activeRefreshes = new();
+    private CancellationTokenSource? _cts;
+    private Task? _pollTask;
+    private int _nextRefreshId;
+
+    public MonitorService(MonitorViewModel monitorViewModel)
+        : this(monitorViewModel, new DiscoveryClient())
     {
-        private readonly MonitorViewModel _monitorViewModel;
-        private readonly DiscoveryClient _discoveryClient;
-        private CancellationTokenSource? _cts;
-        private int _isRefreshing = 0;
-        private readonly List<Task> _inFlightTasks = new();
-        private readonly object _inFlightLock = new();
+    }
 
-        public MonitorService(MonitorViewModel monitorViewModel)
+    internal MonitorService(MonitorViewModel monitorViewModel, DiscoveryClient discoveryClient)
+    {
+        _monitorViewModel = monitorViewModel;
+        _discoveryClient = discoveryClient;
+        _monitorViewModel.RefreshCommand = new AsyncRelayCommand(TriggerManualRefreshAsync);
+    }
+
+    public void Start()
+    {
+        lock (_lifecycleLock)
         {
-            _monitorViewModel = monitorViewModel;
-            _monitorViewModel.RefreshCommand = new AsyncRelayCommand(TriggerManualRefreshAsync);
-            _discoveryClient = new DiscoveryClient();
+            if (_cts != null)
+                return;
+
+            var cts = new CancellationTokenSource();
+            _cts = cts;
+            _pollTask = Task.Run(() => PollLoopAsync(cts.Token), CancellationToken.None);
+        }
+        AppLogger.Log("[MONITOR SERVICE] Service started.");
+    }
+
+    /// <summary>
+    /// Compatibility wrapper for legacy callers. UI and shutdown paths should await
+    /// <see cref="StopAsync"/> so they do not block their calling thread.
+    /// </summary>
+    public void Stop() => StopAsync().GetAwaiter().GetResult();
+
+    public async Task StopAsync()
+    {
+        CancellationTokenSource? cts;
+        Task? pollTask;
+        lock (_lifecycleLock)
+        {
+            cts = _cts;
+            pollTask = _pollTask;
+            if (cts == null)
+                return;
+            cts.Cancel();
         }
 
-        public void Start()
+        try
         {
-            if (_cts != null) return;
-            _cts = new CancellationTokenSource();
-            Task.Run(() => PollLoopAsync(_cts.Token));
-            AppLogger.Log("[MONITOR SERVICE] Service started.");
+            var tasks = new List<Task>();
+            if (pollTask != null)
+                tasks.Add(pollTask);
+            tasks.AddRange(_activeRefreshes.Values);
+            if (tasks.Count > 0)
+                await Task.WhenAll(tasks).WaitAsync(ShutdownDeadline).ConfigureAwait(false);
         }
-
-        public void Stop()
+        catch (OperationCanceledException) { }
+        catch (TimeoutException)
         {
-            if (_cts == null) return;
-            _cts.Cancel();
-            _cts = null;
-
-            Task? waitTask;
-            lock (_inFlightLock)
+            AppLogger.Log("[MONITOR SERVICE] Shutdown deadline reached while awaiting active requests.");
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("[MONITOR SERVICE] Error while stopping", ex);
+        }
+        finally
+        {
+            lock (_lifecycleLock)
             {
-                waitTask = _inFlightTasks.Count > 0
-                    ? Task.WhenAll(_inFlightTasks.ToArray())
-                    : null;
-            }
-            if (waitTask != null)
-            {
-                try { waitTask.Wait(TimeSpan.FromSeconds(10)); }
-                catch (AggregateException) { /* expected */ }
-                catch (Exception ex)
+                if (ReferenceEquals(_cts, cts))
                 {
-                    AppLogger.Error("[MONITOR SERVICE] Error awaiting in-flight tasks during stop", ex);
+                    _cts = null;
+                    _pollTask = null;
                 }
             }
-
-            AppLogger.Log("[MONITOR SERVICE] Service stopped.");
+            cts.Dispose();
         }
 
-        public async Task TriggerManualRefreshAsync()
+        AppLogger.Log("[MONITOR SERVICE] Service stopped.");
+    }
+
+    public Task TriggerManualRefreshAsync()
+    {
+        CancellationToken token;
+        lock (_lifecycleLock)
+            token = _cts?.Token ?? CancellationToken.None;
+        return TrackRefreshAsync(skipUnicastSweep: false, token);
+    }
+
+    private async Task PollLoopAsync(CancellationToken token)
+    {
+        await TrackRefreshAsync(skipUnicastSweep: false, token).ConfigureAwait(false);
+
+        while (!token.IsCancellationRequested)
         {
-            if (Interlocked.CompareExchange(ref _isRefreshing, 1, 0) == 1) return;
-            AppLogger.Log("[MONITOR SERVICE] Triggering manual full refresh (with unicast sweep)...");
             try
             {
-                var cts = _cts;
-                var token = cts?.Token ?? CancellationToken.None;
-
-                // Unicast sweep allowed on manual refresh to find AP isolated servers
-                var discovered = await _discoveryClient.DiscoverServersAsync(
-                    skipUnicastSweep: false, 
-                    requestMessage: Constants.MonitorDiscoveryRequestMessage);
-                
-                await QueryAllServersStaggeredAsync(discovered, token);
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Error("[MONITOR SERVICE] Manual refresh failed", ex);
-            }
-            finally
-            {
-                Interlocked.Exchange(ref _isRefreshing, 0);
-            }
-        }
-
-        private async Task PollLoopAsync(CancellationToken token)
-        {
-            // --- Wait for any ongoing manual refresh to complete ---
-            while (Interlocked.CompareExchange(ref _isRefreshing, 0, 0) == 1 && !token.IsCancellationRequested)
-            {
-                try { await Task.Delay(500, token); } catch (OperationCanceledException) { return; }
-            }
-
-            // Initial poll at startup
-            try
-            {
-                if (Interlocked.CompareExchange(ref _isRefreshing, 1, 0) == 0)
-                {
-                    var initialDiscovered = await _discoveryClient.DiscoverServersAsync(
-                        skipUnicastSweep: false, 
-                        requestMessage: Constants.MonitorDiscoveryRequestMessage);
-                    await QueryAllServersStaggeredAsync(initialDiscovered, token);
-                }
-            }
-            catch (OperationCanceledException) { /* Graceful shutdown */ }
-            catch (Exception ex)
-            {
-                AppLogger.Error("[MONITOR SERVICE] Initial discovery failed", ex);
-            }
-            finally
-            {
-                Interlocked.Exchange(ref _isRefreshing, 0);
-            }
-
-            while (!token.IsCancellationRequested)
-            {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(15), token);
-
-                    if (Interlocked.CompareExchange(ref _isRefreshing, 1, 0) == 1) continue;
-
-                    try
-                    {
-                        var discovered = await _discoveryClient.DiscoverServersAsync(
-                            skipUnicastSweep: true, 
-                            requestMessage: Constants.MonitorDiscoveryRequestMessage);
-
-                        await QueryAllServersStaggeredAsync(discovered, token);
-                    }
-                    finally
-                    {
-                        Interlocked.Exchange(ref _isRefreshing, 0);
-                    }
-                }
-                catch (OperationCanceledException) { break; }
-                catch (Exception ex)
-                {
-                    AppLogger.Error("[MONITOR SERVICE] Error in polling loop", ex);
-                }
-            }
-        }
-
-        private async Task QueryAllServersStaggeredAsync(List<DiscoveryResponseMessage> discoveredServers, CancellationToken token)
-        {
-            // Ensure all discovered servers exist in the ViewModel
-            _monitorViewModel.RegisterDiscoveredServers(discoveredServers);
-
-            foreach (var server in discoveredServers)
-            {
-                Task queryTask;
-                lock (_inFlightLock)
-                {
-                    if (token.IsCancellationRequested) break;
-
-                    queryTask = QueryServerStatusAsync(server.ServerName, server.IpAddress, token);
-                    _inFlightTasks.Add(queryTask);
-                }
-
-                _ = queryTask.ContinueWith(t => 
-                { 
-                    lock (_inFlightLock) _inFlightTasks.Remove(queryTask); 
-                }, TaskContinuationOptions.ExecuteSynchronously);
-
-                // Stagger requests by 1 second to avoid network and CPU spikes
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(1), token);
-                }
-                catch (OperationCanceledException) { break; }
-            }
-
-            // Flag offline servers that were NOT in the discovered list
-            _monitorViewModel.FlagUndiscoveredServers(discoveredServers);
-            
-            _monitorViewModel.LastRefreshTime = DateTime.UtcNow;
-        }
-
-        private async Task QueryServerStatusAsync(string hostName, string ipAddress, CancellationToken token)
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(5)); // 5 second TCP timeout
-
-            try
-            {
-                using var tcpClient = new TcpClient();
-                await tcpClient.ConnectAsync(ipAddress, Constants.MonitorTcpPort, timeoutCts.Token);
-
-                using var stream = tcpClient.GetStream();
-                stream.ReadTimeout = 5000;
-                stream.WriteTimeout = 5000;
-                
-                // Write GET_STATUS request encrypted
-                byte[] requestBytes = Encoding.UTF8.GetBytes("GET_STATUS");
-                byte[] encryptedRequest = CryptoHelper.EncryptAesGcm(requestBytes);
-
-                var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
-                writer.Write(encryptedRequest.Length);
-                writer.Write(encryptedRequest);
-                writer.Flush();
-
-                // Read encrypted response
-                var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
-                int encryptedLength = reader.ReadInt32();
-                if (encryptedLength < 0 || encryptedLength > 1024 * 1024) // limit to 1MB
-                {
-                    throw new InvalidDataException($"Response payload size out of range: {encryptedLength}");
-                }
-
-                byte[] encryptedResponse = reader.ReadBytes(encryptedLength);
-                if (encryptedResponse.Length != encryptedLength)
-                {
-                    throw new InvalidDataException("Truncated response payload received.");
-                }
-
-                byte[] decryptedBytes = CryptoHelper.DecryptAesGcm(encryptedResponse);
-                string json = Encoding.UTF8.GetString(decryptedBytes);
-
-                var payload = JsonSerializer.Deserialize<ServerStatusPayload>(json, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
-
-                if (payload != null)
-                {
-                    payload.HostName = hostName; // Normalise hostname
-                    _monitorViewModel.UpdateServerStatus(payload, ipAddress, isOnline: true);
-                }
+                await Task.Delay(PollInterval, token).ConfigureAwait(false);
+                await TrackRefreshAsync(skipUnicastSweep: true, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
-                // Graceful cancellation on service stop, ignore
-            }
-            catch (System.Security.Cryptography.CryptographicException ex)
-            {
-                AppLogger.Log($"[MONITOR SERVICE] Server '{hostName}' ({ipAddress}) auth mismatch: {ex.Message}");
-                _monitorViewModel.UpdateServerFailure(hostName, ipAddress, "AuthMismatch");
-            }
-            catch (Exception ex) when (ex is IOException || ex is SocketException || ex is TimeoutException)
-            {
-                AppLogger.Log($"[MONITOR SERVICE] Server '{hostName}' ({ipAddress}) is unreachable: {ex.Message}");
-                _monitorViewModel.UpdateServerFailure(hostName, ipAddress, "Unreachable");
-            }
-            catch (Exception ex) when (ex is JsonException || ex is InvalidDataException)
-            {
-                AppLogger.Log($"[MONITOR SERVICE] Server '{hostName}' ({ipAddress}) protocol error: {ex.Message}");
-                _monitorViewModel.UpdateServerFailure(hostName, ipAddress, "Unreachable");
+                break;
             }
             catch (Exception ex)
             {
-                AppLogger.Log($"[MONITOR SERVICE] Server '{hostName}' ({ipAddress}) unexpected error: {ex.Message}");
-                _monitorViewModel.UpdateServerFailure(hostName, ipAddress, "Unreachable");
+                AppLogger.Error("[MONITOR SERVICE] Poll failed", ex);
             }
         }
+    }
+
+    private Task TrackRefreshAsync(bool skipUnicastSweep, CancellationToken token)
+    {
+        int refreshId = Interlocked.Increment(ref _nextRefreshId);
+        Task task = RefreshAsync(skipUnicastSweep, token);
+        _activeRefreshes[refreshId] = task;
+        _ = task.ContinueWith(
+            (_, state) =>
+            {
+                var tuple = ((ConcurrentDictionary<int, Task> Tasks, int Id))state!;
+                tuple.Tasks.TryRemove(tuple.Id, out Task? _);
+            },
+            (_activeRefreshes, refreshId),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return task;
+    }
+
+    private async Task RefreshAsync(bool skipUnicastSweep, CancellationToken cancellationToken)
+    {
+        if (!await _refreshGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+            return;
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(RefreshDeadline);
+        try
+        {
+            List<DiscoveryResponseMessage> discovered = await _discoveryClient.DiscoverServersAsync(
+                timeoutMs: 2000,
+                skipUnicastSweep: skipUnicastSweep,
+                requestMessage: Constants.MonitorDiscoveryRequestMessage,
+                cancellationToken: deadline.Token).ConfigureAwait(false);
+
+            await QueryAllServersStaggeredAsync(discovered, deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Service shutdown: no UI state transition.
+        }
+        catch (OperationCanceledException)
+        {
+            AppLogger.Log("[MONITOR SERVICE] Refresh exceeded its total deadline.");
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("[MONITOR SERVICE] Refresh failed", ex);
+        }
+        finally
+        {
+            _refreshGate.Release();
+        }
+    }
+
+    private async Task QueryAllServersStaggeredAsync(
+        List<DiscoveryResponseMessage> discoveredServers,
+        CancellationToken token)
+    {
+        DiscoveryResponseMessage[] snapshot = discoveredServers
+            .Where(server => !string.IsNullOrWhiteSpace(server.ServerName) &&
+                             !string.IsNullOrWhiteSpace(server.IpAddress))
+            .GroupBy(server => server.ServerName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .Take(MaxMonitoredServers)
+            .ToArray();
+
+        var snapshotList = snapshot.ToList();
+        _monitorViewModel.RegisterDiscoveredServers(snapshotList);
+
+        var queries = new List<Task>(snapshot.Length);
+        for (int index = 0; index < snapshot.Length; index++)
+        {
+            token.ThrowIfCancellationRequested();
+            DiscoveryResponseMessage server = snapshot[index];
+            queries.Add(QueryServerStatusAsync(server.ServerName, server.IpAddress, token));
+            if (index + 1 < snapshot.Length)
+                await Task.Delay(QueryStagger, token).ConfigureAwait(false);
+        }
+
+        if (queries.Count > 0)
+            await Task.WhenAll(queries).ConfigureAwait(false);
+
+        _monitorViewModel.FlagUndiscoveredServers(snapshotList);
+        _monitorViewModel.LastRefreshTime = DateTime.UtcNow;
+    }
+
+    private async Task QueryServerStatusAsync(string hostName, string ipAddress, CancellationToken serviceToken)
+    {
+        using var requestDeadline = CancellationTokenSource.CreateLinkedTokenSource(serviceToken);
+        requestDeadline.CancelAfter(RequestDeadline);
+        CancellationToken token = requestDeadline.Token;
+        byte[]? requestBytes = null;
+        byte[]? encryptedRequest = null;
+        byte[]? encryptedResponse = null;
+        byte[]? decryptedResponse = null;
+
+        try
+        {
+            using var tcpClient = new TcpClient();
+            await tcpClient.ConnectAsync(ipAddress, Constants.MonitorTcpPort, token).ConfigureAwait(false);
+            using NetworkStream stream = tcpClient.GetStream();
+
+            requestBytes = Encoding.UTF8.GetBytes("GET_STATUS");
+            encryptedRequest = CryptoHelper.EncryptAesGcm(requestBytes);
+            await MonitorFrameCodec.WriteAsync(
+                stream,
+                encryptedRequest,
+                Constants.MaxMonitorRequestBytes,
+                token,
+                StreamIdleDeadline).ConfigureAwait(false);
+
+            encryptedResponse = await MonitorFrameCodec.ReadAsync(
+                stream,
+                Constants.MaxMonitorResponseBytes,
+                token,
+                StreamIdleDeadline).ConfigureAwait(false);
+            if (encryptedResponse.Length < Constants.AesGcmMinimumPayloadBytes)
+                throw new InvalidDataException("Encrypted monitor response is too short.");
+
+            decryptedResponse = CryptoHelper.DecryptAesGcm(encryptedResponse);
+            var payload = JsonSerializer.Deserialize<ServerStatusPayload>(decryptedResponse, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+            if (payload == null)
+                throw new InvalidDataException("Monitor response did not contain a status payload.");
+            if (payload.Printers == null || payload.Scanners == null || payload.ActiveClients == null ||
+                payload.RecentJobs == null || payload.Errors == null)
+            {
+                throw new InvalidDataException("Monitor response contains null collection fields.");
+            }
+
+            payload.HostName = hostName;
+            _monitorViewModel.UpdateServerStatus(payload, ipAddress, isOnline: true);
+        }
+        catch (OperationCanceledException) when (serviceToken.IsCancellationRequested)
+        {
+            // Service stop: do not flip status.
+        }
+        catch (Exception ex)
+        {
+            MonitorFailureCategory category = MonitorFailureClassifier.Classify(ex);
+            AppLogger.Log($"[MONITOR SERVICE] Server '{hostName}' ({ipAddress}) failed: {category}.");
+            _monitorViewModel.UpdateServerFailure(hostName, ipAddress, category.ToString());
+        }
+        finally
+        {
+            Zero(requestBytes);
+            Zero(encryptedRequest);
+            Zero(encryptedResponse);
+            Zero(decryptedResponse);
+        }
+    }
+
+    private static void Zero(byte[]? buffer)
+    {
+        if (buffer != null)
+            CryptographicOperations.ZeroMemory(buffer);
     }
 }

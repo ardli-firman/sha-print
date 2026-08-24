@@ -27,6 +27,11 @@ namespace ShaPrint.Core
         public const int MaxDiscoveryResponseBytes = 8192;
         public const int MaxConcurrentPrintJobs    = 10;
 
+        // ── Monitor protocol limits ─────────────────────────────────────
+        public const int MaxMonitorRequestBytes    = 4_096;
+        public const int MaxMonitorResponseBytes   = 1_048_576;
+        public const int AesGcmMinimumPayloadBytes = 28; // 12-byte nonce + 16-byte tag
+
         // ── Driver provisioning constants ────────────────────────────────
         public const int DriverPackageChunkSize        = 65_536;     // 64 KB per chunk
         public const long MaxDriverPackageSize         = 209_715_200; // 200 MB

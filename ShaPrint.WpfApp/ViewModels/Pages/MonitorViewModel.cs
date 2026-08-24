@@ -55,6 +55,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         {
             "Offline" => 1,
             "AuthMismatch" => 2,
+            "ProtocolError" => 3,
+            "Overloaded" => 3,
             "Unreachable" => 3,
             "Warning" => 4,
             "Online" => 5,
@@ -73,6 +75,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         "Warning" => "SystemFillColorCautionBrush",
                         "Offline" => "SystemFillColorCriticalBrush",
                         "AuthMismatch" => "SystemFillColorCriticalBrush",
+                        "ProtocolError" => "SystemFillColorCriticalBrush",
+                        "Overloaded" => "SystemFillColorCautionBrush",
                         "Unreachable" => "SystemFillColorCautionBrush",
                         _ => "TextFillColorDisabledBrush"
                     };
@@ -87,6 +91,8 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                         "Warning" => Brushes.Orange,
                         "Offline" => Brushes.Red,
                         "AuthMismatch" => Brushes.Red,
+                        "ProtocolError" => Brushes.Red,
+                        "Overloaded" => Brushes.Orange,
                         "Unreachable" => Brushes.Orange,
                         _ => Brushes.Gray
                     };
@@ -474,6 +480,10 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                     {
                         server.Status = "AuthMismatch";
                         server.Payload = null;
+                    }
+                    else if (category == "ProtocolError" || category == "Overloaded")
+                    {
+                        server.Status = category;
                     }
                     else
                     {
