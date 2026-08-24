@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 
@@ -15,7 +16,8 @@ namespace ShaPrint.Core.Ipp;
 public class IppHttpServer : IDisposable
 {
     private readonly ISpoolerAdapter _spooler;
-    private readonly Dictionary<string, IppServer> _printerServers = new();
+    private readonly ConcurrentDictionary<string, Lazy<IppServer>> _printerServers =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly IppServer _defaultServer;
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
@@ -198,15 +200,18 @@ public class IppHttpServer : IDisposable
     /// <summary>
     /// Get or create a printer-specific server instance.
     /// </summary>
-    private IppServer GetOrCreatePrinterServer(string printerName)
+    internal IppServer GetOrCreatePrinterServer(string printerName)
     {
-        var key = printerName.ToLowerInvariant();
-        if (!_printerServers.TryGetValue(key, out var server))
-        {
-            server = new IppServer(_spooler, printerName);
-            _printerServers[key] = server;
-            AppLogger.Log($"[IPP] Created server instance for printer: {printerName}");
-        }
-        return server;
+        var lazyServer = _printerServers.GetOrAdd(
+            printerName,
+            name => new Lazy<IppServer>(
+                () =>
+                {
+                    AppLogger.Log($"[IPP] Created server instance for printer: {name}");
+                    return new IppServer(_spooler, name);
+                },
+                LazyThreadSafetyMode.ExecutionAndPublication));
+
+        return lazyServer.Value;
     }
 }
