@@ -54,8 +54,7 @@ namespace ShaPrint.Server
                     return;
 
                 _admission.Semaphore.Release();
-                if (Interlocked.Decrement(ref _admission.References) == 0)
-                    ScanAdmissions.TryRemove(new KeyValuePair<string, ScannerAdmission>(_admission.Key, _admission));
+                ReleaseAdmissionReference(_admission);
             }
         }
 
@@ -211,12 +210,7 @@ namespace ShaPrint.Server
  
             actualFormat = ext;
             byte[] rawBytes = Array.Empty<byte>();
-            Exception? threadException = null;
  
-            var thread = new Thread(() =>
-            {
-                try
-                {
                     Type? wiaType = Type.GetTypeFromProgID("WIA.DeviceManager");
                     if (wiaType == null)
                         throw new InvalidOperationException("WIA is not installed on this machine.");
@@ -397,22 +391,7 @@ namespace ShaPrint.Server
                             try { File.Delete(tempPath); } catch { }
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    threadException = ex;
-                }
-            });
  
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            if (!thread.Join(DefaultScanTimeout))
-                throw new TimeoutException("Scanner WIA operation timed out.");
- 
-            if (threadException != null)
-            {
-                throw threadException;
-            }
  
             if (rawBytes.Length > 0)
             {
@@ -450,7 +429,7 @@ namespace ShaPrint.Server
 
                 if (!admission.Semaphore.Wait(0))
                 {
-                    Interlocked.Decrement(ref admission.References);
+                    ReleaseAdmissionReference(admission);
                     lease = null!;
                     return false;
                 }
@@ -458,6 +437,12 @@ namespace ShaPrint.Server
                 lease = new ScannerAdmissionLease(admission);
                 return true;
             }
+        }
+
+        private static void ReleaseAdmissionReference(ScannerAdmission admission)
+        {
+            if (Interlocked.Decrement(ref admission.References) == 0)
+                ScanAdmissions.TryRemove(new KeyValuePair<string, ScannerAdmission>(admission.Key, admission));
         }
 
         private StaWorker<T> StartStaWorker<T>(Func<T> operation)

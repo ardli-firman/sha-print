@@ -114,17 +114,20 @@ namespace ShaPrint.Server
                 return;
             }
 
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-            deadline.CancelAfter(ClientRequestTimeout);
+            using var requestDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            requestDeadline.CancelAfter(ClientRequestTimeout);
             try
             {
-                await HandleClientAsync(client, deadline.Token);
+                await HandleClientAsync(client, token, requestDeadline.Token);
             }
             catch (Exception ex) { AppLogger.Error("[SERVER] Client handler failed", ex); }
             finally { connectionAdmission.Release(); }
         }
 
-        private async Task HandleClientAsync(TcpClient client, CancellationToken token)
+        private async Task HandleClientAsync(
+            TcpClient client,
+            CancellationToken shutdownToken,
+            CancellationToken requestToken)
         {
             using (client)
             {
@@ -145,10 +148,10 @@ namespace ShaPrint.Server
                         byte[] firstHeader = new byte[sizeof(int)];
                         try
                         {
-                            await LegacyEnvelopeCodec.ReadExactlyAsync(stream, firstHeader, token);
+                            await LegacyEnvelopeCodec.ReadExactlyAsync(stream, firstHeader, requestToken);
                             if (BinaryPrimitives.ReadUInt32LittleEndian(firstHeader) == LegacyEnvelopeCodec.Magic)
                             {
-                                await HandleEnvelopePrintRequestAsync(stream, firstHeader, remoteIp, token);
+                                await HandleEnvelopePrintRequestAsync(stream, firstHeader, remoteIp, requestToken);
                                 return;
                             }
                             firstInt = BinaryPrimitives.ReadInt32LittleEndian(firstHeader);
@@ -170,11 +173,11 @@ namespace ShaPrint.Server
                         {
                             if (firstInt == Constants.PacketTypeScan) // 0x00000002
                             {
-                                await HandleScanRequestAsync(stream, remoteIp, token);
+                                await HandleScanRequestAsync(stream, remoteIp, shutdownToken, requestToken);
                             }
                             else if (firstInt == Constants.PacketTypeDriverPackageRequest) // 0x20
                             {
-                                await HandleDriverPackageRequestAsync(stream, reader, remoteIp, token);
+                                await HandleDriverPackageRequestAsync(stream, reader, remoteIp, requestToken);
                             }
                             else
                             {
@@ -184,7 +187,7 @@ namespace ShaPrint.Server
                                 byte[] lengthBuffer = new byte[sizeof(int)];
                                 try
                                 {
-                                    await LegacyEnvelopeCodec.ReadExactlyAsync(stream, lengthBuffer, token);
+                                    await LegacyEnvelopeCodec.ReadExactlyAsync(stream, lengthBuffer, requestToken);
                                     encryptedLength = BinaryPrimitives.ReadInt32LittleEndian(lengthBuffer);
                                 }
                                 finally { CryptographicOperations.ZeroMemory(lengthBuffer); }
@@ -203,7 +206,7 @@ namespace ShaPrint.Server
                             byte[] encrypted = new byte[encryptedLength];
                             try
                             {
-                                await LegacyEnvelopeCodec.ReadExactlyAsync(stream, encrypted, token);
+                                await LegacyEnvelopeCodec.ReadExactlyAsync(stream, encrypted, requestToken);
                                 var payload = PrintJobPayload.ReadEncryptedBlob(encrypted);
                                 try
                                 {
@@ -426,14 +429,23 @@ namespace ShaPrint.Server
             catch { }
         }
 
-        private async Task HandleScanRequestAsync(NetworkStream stream, string remoteIp, CancellationToken token)
+        private async Task HandleScanRequestAsync(
+            NetworkStream stream,
+            string remoteIp,
+            CancellationToken shutdownToken,
+            CancellationToken requestToken)
         {
             ScanResponsePayload response = new();
             try
             {
-                var request = await ScanRequestPayload.ReadAsync(stream, token);
+                // Request framing is still protected by the short connection
+                // deadline. Once a valid request is received, scanner hardware
+                // gets its own bounded operation deadline.
+                var request = await ScanRequestPayload.ReadAsync(stream, requestToken);
                 AppLogger.Log($"[SERVER] Received scan request from {remoteIp} for scanner '{request.TargetScannerName}' (DPI={request.Dpi}, ColorMode={request.ColorMode}, Format={request.Format})");
 
+                using var scanDeadline = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+                scanDeadline.CancelAfter(ScannerService.DefaultScanTimeout);
                 try
                 {
                     byte[] scannedBytes = await _scannerService.PerformScanAsync(
@@ -441,7 +453,8 @@ namespace ShaPrint.Server
                         request.Dpi, 
                         request.ColorMode, 
                         request.Format,
-                        token);
+                        scanDeadline.Token,
+                        ScannerService.DefaultScanTimeout);
                     response.Success = true;
                     response.FileBytes = scannedBytes;
                     response.ErrorMessage = string.Empty;
@@ -456,32 +469,24 @@ namespace ShaPrint.Server
                         Timestamp = DateTime.UtcNow
                     });
                 }
+                catch (OperationCanceledException) when (!shutdownToken.IsCancellationRequested)
+                {
+                    response.Success = false;
+                    response.ErrorMessage = "Scanner operation timed out or was cancelled.";
+                    response.FileBytes = Array.Empty<byte>();
+                    LogScanFailure(request, remoteIp, response.ErrorMessage);
+                }
                 catch (Exception ex)
                 {
                     AppLogger.Error($"[SERVER] Scan execution failed for {remoteIp}", ex);
                     response.Success = false;
                     response.ErrorMessage = BoundScanError(ex);
                     response.FileBytes = Array.Empty<byte>();
-
-                    _onJobLog?.Invoke(new JobHistoryEntry
-                    {
-                        Type = "scan",
-                        Document = $"Scan - {request.TargetScannerName}",
-                        PrinterName = request.TargetScannerName,
-                        ClientIp = remoteIp,
-                        Status = "failed",
-                        Timestamp = DateTime.UtcNow
-                    });
-                    _onErrorLog?.Invoke(new ServerErrorEntry
-                    {
-                        Source = "PrintReceiver-Scan",
-                        Message = $"Scan failed for scanner '{request.TargetScannerName}': {ex.Message}",
-                        Timestamp = DateTime.UtcNow
-                    });
+                    LogScanFailure(request, remoteIp, response.ErrorMessage);
                 }
 
                 AppLogger.Log($"[SERVER] Sending scan response to {remoteIp}. Success={response.Success}, Size={response.FileBytes.Length} bytes.");
-                await ScanResponsePayload.WriteAsync(stream, response, token);
+                await WriteScanResponseBestEffortAsync(stream, response, shutdownToken);
             }
             catch (InvalidDataException ex)
             {
@@ -490,8 +495,7 @@ namespace ShaPrint.Server
                 response.Success = false;
                 response.ErrorMessage = BoundScanError(ex);
                 response.FileBytes = Array.Empty<byte>();
-                try { await ScanResponsePayload.WriteAsync(stream, response, token); }
-                catch (Exception writeEx) { AppLogger.Error($"[SERVER] Failed to send scan validation response to {remoteIp}", writeEx); }
+                await WriteScanResponseBestEffortAsync(stream, response, shutdownToken);
             }
             catch (Exception ex)
             {
@@ -502,6 +506,42 @@ namespace ShaPrint.Server
                 if (response.FileBytes.Length > 0)
                     CryptographicOperations.ZeroMemory(response.FileBytes);
             }
+        }
+
+        private async Task WriteScanResponseBestEffortAsync(
+            NetworkStream stream,
+            ScanResponsePayload response,
+            CancellationToken shutdownToken)
+        {
+            using var responseDeadline = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+            responseDeadline.CancelAfter(TimeSpan.FromSeconds(2));
+            try
+            {
+                await ScanResponsePayload.WriteAsync(stream, response, responseDeadline.Token);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[SERVER] Failed to send scan response", ex);
+            }
+        }
+
+        private void LogScanFailure(ScanRequestPayload request, string remoteIp, string message)
+        {
+            _onJobLog?.Invoke(new JobHistoryEntry
+            {
+                Type = "scan",
+                Document = $"Scan - {request.TargetScannerName}",
+                PrinterName = request.TargetScannerName,
+                ClientIp = remoteIp,
+                Status = "failed",
+                Timestamp = DateTime.UtcNow
+            });
+            _onErrorLog?.Invoke(new ServerErrorEntry
+            {
+                Source = "PrintReceiver-Scan",
+                Message = $"Scan failed for scanner '{request.TargetScannerName}': {message}",
+                Timestamp = DateTime.UtcNow
+            });
         }
 
         private static string BoundScanError(Exception exception)

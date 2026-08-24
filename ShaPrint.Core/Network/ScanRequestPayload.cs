@@ -34,33 +34,44 @@ namespace ShaPrint.Core.Network
         {
             Validate(payload, nameof(payload));
 
-            // Step 1: serialize the inner payload
-            byte[] innerPayload;
-            using (var ms = new MemoryStream())
+            byte[] innerPayload = Array.Empty<byte>();
+            byte[] encryptedBlob = Array.Empty<byte>();
+            byte[] length = Array.Empty<byte>();
+            try
             {
-                using (var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
+                // Step 1: serialize the inner payload
+                using (var ms = new MemoryStream())
                 {
-                    bw.Write(payload.TargetScannerName);
-                    bw.Write(payload.Dpi);
-                    bw.Write(payload.ColorMode);
-                    bw.Write(payload.Format);
-                    bw.Write(payload.Brightness);
-                    bw.Write(payload.Contrast);
-                    bw.Flush();
+                    using (var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
+                    {
+                        bw.Write(payload.TargetScannerName);
+                        bw.Write(payload.Dpi);
+                        bw.Write(payload.ColorMode);
+                        bw.Write(payload.Format);
+                        bw.Write(payload.Brightness);
+                        bw.Write(payload.Contrast);
+                        bw.Flush();
+                    }
+                    innerPayload = ms.ToArray();
                 }
-                innerPayload = ms.ToArray();
+
+                // Step 2: encrypt with AES-256-GCM
+                encryptedBlob = CryptoHelper.EncryptAesGcm(innerPayload);
+
+                // Step 3: send [length][encrypted blob]. Use the async stream API so
+                // a disconnected client can cancel a slow write instead of blocking a
+                // receiver thread indefinitely.
+                length = BitConverter.GetBytes(encryptedBlob.Length);
+                await stream.WriteAsync(length, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(encryptedBlob, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
- 
-            // Step 2: encrypt with AES-256-GCM
-            byte[] encryptedBlob = CryptoHelper.EncryptAesGcm(innerPayload);
- 
-            // Step 3: send [length][encrypted blob]. Use the async stream API so
-            // a disconnected client can cancel a slow write instead of blocking a
-            // receiver thread indefinitely.
-            byte[] length = BitConverter.GetBytes(encryptedBlob.Length);
-            await stream.WriteAsync(length, cancellationToken).ConfigureAwait(false);
-            await stream.WriteAsync(encryptedBlob, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            finally
+            {
+                if (length.Length > 0) CryptographicOperations.ZeroMemory(length);
+                if (encryptedBlob.Length > 0) CryptographicOperations.ZeroMemory(encryptedBlob);
+                if (innerPayload.Length > 0) CryptographicOperations.ZeroMemory(innerPayload);
+            }
         }
  
         public static Task<ScanRequestPayload> ReadAsync(Stream stream)
@@ -68,9 +79,12 @@ namespace ShaPrint.Core.Network
 
         public static async Task<ScanRequestPayload> ReadAsync(Stream stream, CancellationToken cancellationToken)
         {
+            byte[] lengthBuffer = Array.Empty<byte>();
+            byte[] encryptedBlob = Array.Empty<byte>();
+            byte[] innerPayload = Array.Empty<byte>();
             try
             {
-                byte[] lengthBuffer = new byte[sizeof(int)];
+                lengthBuffer = new byte[sizeof(int)];
                 await ReadExactlyAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
                 int encryptedLength = BitConverter.ToInt32(lengthBuffer, 0);
                 if (encryptedLength < 0)
@@ -78,11 +92,10 @@ namespace ShaPrint.Core.Network
                 if (encryptedLength > 8192) // Scan request payload is small, should never exceed 8KB
                     throw new InvalidDataException($"Encrypted blob exceeds limit: {encryptedLength} bytes.");
 
-                byte[] encryptedBlob = new byte[encryptedLength];
+                encryptedBlob = new byte[encryptedLength];
                 await ReadExactlyAsync(stream, encryptedBlob, cancellationToken).ConfigureAwait(false);
  
                 // Decrypt with AES-256-GCM
-                byte[] innerPayload;
                 try
                 {
                     innerPayload = CryptoHelper.DecryptAesGcm(encryptedBlob);
@@ -123,6 +136,12 @@ namespace ShaPrint.Core.Network
             catch (EndOfStreamException ex)
             {
                 throw new InvalidDataException("Truncated scan request payload.", ex);
+            }
+            finally
+            {
+                if (lengthBuffer.Length > 0) CryptographicOperations.ZeroMemory(lengthBuffer);
+                if (encryptedBlob.Length > 0) CryptographicOperations.ZeroMemory(encryptedBlob);
+                if (innerPayload.Length > 0) CryptographicOperations.ZeroMemory(innerPayload);
             }
         }
 
