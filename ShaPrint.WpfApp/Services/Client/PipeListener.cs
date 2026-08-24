@@ -22,6 +22,8 @@ namespace ShaPrint.Client
 
 {
 
+    [Obsolete("Deprecated: IPP server handles all printing. Named pipe interception no longer needed.")]
+
     public class PipeListener
 
     {

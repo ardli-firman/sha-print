@@ -78,6 +78,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private readonly DiscoveryServer _discoveryServer;
         private readonly PrintReceiver _printReceiver;
         private readonly DriverPackageService _driverPackageService;
+        private ShaPrint.Core.Ipp.IppHttpServer? _ippHttpServer;
         private readonly ShaPrint.WpfApp.Services.Server.PrintMonitorService _printMonitorService;
         private readonly ScannerService _scannerService;
         private readonly INavigationService _navigationService;
@@ -274,6 +275,19 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _printReceiver.Start();
             _printMonitorService?.Start();
 
+            // Start IPP HTTP Server (Mobility Print)
+            try
+            {
+                var spoolerAdapter = new ShaPrint.Core.Ipp.WindowsSpoolerAdapter();
+                _ippHttpServer = new ShaPrint.Core.Ipp.IppHttpServer(spoolerAdapter);
+                _ippHttpServer.Start();
+                AppLogger.Log("[SERVER] IPP HTTP server started on port 631");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"[SERVER] Failed to start IPP HTTP server: {ex.Message}");
+            }
+
             // Start Monitor TCP Server
             _monitorTcpServer = new MonitorTcpServer(new ServerStatusProvider(this));
             _monitorTcpServer.Start();
@@ -297,6 +311,13 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _discoveryServer.Stop();
             _printReceiver.Stop();
             _printMonitorService?.Stop();
+
+            // Stop IPP HTTP Server
+            if (_ippHttpServer != null)
+            {
+                _ippHttpServer.Dispose();
+                _ippHttpServer = null;
+            }
 
             if (_monitorTcpServer != null)
             {

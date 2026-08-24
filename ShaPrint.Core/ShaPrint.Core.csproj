@@ -6,6 +6,10 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="SharpIppNext" Version="4.2.1" />
+  </ItemGroup>
+
   <!-- ─────────────────────────────────────────────
        Build-time PSK injection from GitHub Actions
        Set via:  dotnet build -p:ShaPrintPsk="key"

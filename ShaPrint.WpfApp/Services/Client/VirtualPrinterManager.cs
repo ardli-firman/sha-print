@@ -13,6 +13,7 @@ namespace ShaPrint.Client
     /// PowerShell has been eliminated to prevent command injection (RCE).
     /// All input MUST be validated by <see cref="Validators"/> before calling these methods.
     /// </summary>
+    [Obsolete("Deprecated: IPP server handles all printing. Virtual printer no longer needed.")]
     public static class VirtualPrinterManager
     {
         public static async Task<(bool Success, string ErrorMessage)> InstallPrinterAsync(string virtualPrinterName, string pipeName, string driverName)
