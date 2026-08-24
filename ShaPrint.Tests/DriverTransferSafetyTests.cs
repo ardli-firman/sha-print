@@ -1,7 +1,9 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using ShaPrint.Core;
+using ShaPrint.Core.Abstractions;
 using ShaPrint.Core.Network;
 using ShaPrint.WpfApp.Services.Client;
 using Xunit;
@@ -27,6 +29,38 @@ namespace ShaPrint.Tests
             Assert.True(DriverPackageIdValidator.IsValid("0123456789abcdef0123456789ABCDEF0123456789abcdef0123456789ABCDEF"));
             Assert.False(DriverPackageIdValidator.IsValid(new string('a', 63)));
             Assert.False(DriverPackageIdValidator.IsValid(new string('a', 65)));
+        }
+
+        [Fact]
+        public async Task DriverPackageVerify_RejectsMalformedIdBeforeFileAccess()
+        {
+            Assert.False(await DriverPackageVerify.VerifyPackageAsync(
+                Path.Combine(Path.GetTempPath(), "does-not-matter"), "short", 1));
+            Assert.False(DriverPackageVerify.VerifyBytes(new byte[] { 1 }, "short", 1));
+        }
+
+        [Fact]
+        public async Task DriverPackageService_CancellationStopsLocateProcess()
+        {
+            var service = new ShaPrint.Server.DriverPackageService(
+                new CancellationProcessRunner(), new MockFileSystem());
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                service.GetDriverPackageAsync("Test Driver", cancellation.Token));
+        }
+
+        private sealed class CancellationProcessRunner : IProcessRunner
+        {
+            public Task<ProcessResult> RunAsync(string fileName, string arguments, TimeSpan? timeout = null)
+                => Task.FromResult(new ProcessResult { ExitCode = 1 });
+
+            public async Task<ProcessResult> RunAsync(
+                string fileName, string arguments, TimeSpan? timeout, CancellationToken cancellationToken)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return new ProcessResult { ExitCode = 1 };
+            }
         }
 
         [Fact]

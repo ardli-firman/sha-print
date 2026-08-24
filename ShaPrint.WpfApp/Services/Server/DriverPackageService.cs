@@ -27,7 +27,8 @@ namespace ShaPrint.Server
 
         // Cache: driverName → CachedPackage
         private readonly ConcurrentDictionary<string, CachedPackage> _cache = new(StringComparer.OrdinalIgnoreCase);
-        private readonly ConcurrentDictionary<string, SemaphoreSlim> _exportLocks = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, ExportLockEntry> _exportLocks = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object _exportLockGate = new();
 
         private readonly string _cacheRoot;
         private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(Constants.DriverPackageCacheTtlHours);
@@ -49,24 +50,49 @@ namespace ShaPrint.Server
         /// Gets (or builds) the driver package metadata for a printer.
         /// Returns null if the driver cannot be located or exported.
         /// </summary>
-        public async Task<DriverPackageManifest?> GetDriverPackageAsync(string driverName)
+        public async Task<DriverPackageManifest?> GetDriverPackageAsync(string driverName, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(driverName)) return null;
 
-            var exportLock = _exportLocks.GetOrAdd(driverName, _ => new SemaphoreSlim(1, 1));
-            await exportLock.WaitAsync().ConfigureAwait(false);
+            ExportLockEntry exportLock;
+            lock (_exportLockGate)
+            {
+                if (!_exportLocks.TryGetValue(driverName, out exportLock!))
+                {
+                    exportLock = new ExportLockEntry();
+                    _exportLocks.Add(driverName, exportLock);
+                }
+                exportLock.RefCount++;
+            }
+
+            bool acquired = false;
             try
             {
-                return await GetDriverPackageCoreAsync(driverName).ConfigureAwait(false);
+                await exportLock.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                acquired = true;
+                return await GetDriverPackageCoreAsync(driverName, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                exportLock.Release();
+                if (acquired)
+                    exportLock.Gate.Release();
+                lock (_exportLockGate)
+                {
+                    exportLock.RefCount--;
+                    if (exportLock.RefCount == 0 && _exportLocks.Count > 256
+                        && _exportLocks.TryGetValue(driverName, out var current)
+                        && ReferenceEquals(current, exportLock))
+                    {
+                        _exportLocks.Remove(driverName);
+                        exportLock.Gate.Dispose();
+                    }
+                }
             }
         }
 
-        private async Task<DriverPackageManifest?> GetDriverPackageCoreAsync(string driverName)
+        private async Task<DriverPackageManifest?> GetDriverPackageCoreAsync(string driverName, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
 
             // Check cache first
             if (_cache.TryGetValue(driverName, out var cached))
@@ -79,7 +105,7 @@ namespace ShaPrint.Server
             }
 
             // Locate the .inf path for this driver
-            string? infPath = await LocateInfPathAsync(driverName);
+            string? infPath = await LocateInfPathAsync(driverName, cancellationToken).ConfigureAwait(false);
             if (infPath == null)
             {
                 AppLogger.Log($"[DRIVER_PKG] Could not locate .inf for driver '{driverName}'.");
@@ -87,7 +113,7 @@ namespace ShaPrint.Server
             }
 
             // Export the driver
-            var manifest = await ExportDriverAsync(infPath, driverName);
+            var manifest = await ExportDriverAsync(infPath, driverName, cancellationToken).ConfigureAwait(false);
             if (manifest != null)
             {
                 _cache[driverName] = new CachedPackage
@@ -156,8 +182,9 @@ namespace ShaPrint.Server
         /// Reads the zip archive bytes from the package directory, suitable for chunked transfer.
         /// The zip is created during ExportDriverAsync and contains all driver files.
         /// </summary>
-        public async Task<byte[]?> ReadPackageBytesAsync(string driverPackageId)
+        public async Task<byte[]?> ReadPackageBytesAsync(string driverPackageId, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!DriverPackageIdValidator.IsValid(driverPackageId))
             {
                 AppLogger.Error("[DRIVER_PKG] Rejected malformed package identifier for byte read.");
@@ -183,9 +210,13 @@ namespace ShaPrint.Server
             {
                 long fileSize = _fileSystem.GetFileSize(zipPath);
                 AppLogger.Log($"[DRIVER_PKG] ReadPackageBytesAsync: reading package.zip ({fileSize:N0} bytes) from {dir}");
-                var bytes = await _fileSystem.ReadAllBytesAsync(zipPath);
+                var bytes = await _fileSystem.ReadAllBytesAsync(zipPath).WaitAsync(cancellationToken).ConfigureAwait(false);
                 AppLogger.Log($"[DRIVER_PKG] ReadPackageBytesAsync: read {bytes.Length:N0} bytes OK.");
                 return bytes;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -194,7 +225,7 @@ namespace ShaPrint.Server
             }
         }
 
-        private static async Task CreateZipFileAsync(string[] files, string destination, IStreamingFileSystem fileSystem)
+        private static async Task CreateZipFileAsync(string[] files, string destination, IStreamingFileSystem fileSystem, CancellationToken cancellationToken)
         {
             string? directory = Path.GetDirectoryName(destination);
             if (directory != null)
@@ -206,16 +237,48 @@ namespace ShaPrint.Server
             foreach (string file in files)
             {
                 var entry = archive.CreateEntry(Path.GetFileName(file), CompressionLevel.Optimal);
+                cancellationToken.ThrowIfCancellationRequested();
                 await using Stream input = fileSystem.OpenRead(file);
                 await using Stream entryStream = entry.Open();
                 int read;
-                while ((read = await input.ReadAsync(buffer.AsMemory())) > 0)
-                    await entryStream.WriteAsync(buffer.AsMemory(0, read));
+                while ((read = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
+                    await entryStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 CryptographicOperations.ZeroMemory(buffer);
             }
         }
 
-        private static async Task<string> HashFileAsync(IStreamingFileSystem fileSystem, string path)
+        private async Task<byte[]> ReadFileBytesAsync(string path, CancellationToken cancellationToken)
+        {
+            if (_fileSystem is IStreamingFileSystem streaming)
+            {
+                await using Stream input = streaming.OpenRead(path);
+                using var output = new MemoryStream();
+                byte[] buffer = new byte[64 * 1024];
+                long total = 0;
+                try
+                {
+                    while (true)
+                    {
+                        int read = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                        if (read == 0)
+                            break;
+                        total += read;
+                        if (total > 16 * 1024 * 1024)
+                            throw new InvalidDataException("Driver INF exceeds the supported size limit.");
+                        await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                    }
+                    return output.ToArray();
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(buffer);
+                }
+            }
+
+            return await _fileSystem.ReadAllBytesAsync(path).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private static async Task<string> HashFileAsync(IStreamingFileSystem fileSystem, string path, CancellationToken cancellationToken)
         {
             using Stream input = fileSystem.OpenRead(path);
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -223,7 +286,7 @@ namespace ShaPrint.Server
             try
             {
                 int read;
-                while ((read = await input.ReadAsync(buffer.AsMemory())) > 0)
+                while ((read = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
                     hash.AppendData(buffer, 0, read);
                 return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
             }
@@ -233,14 +296,14 @@ namespace ShaPrint.Server
             }
         }
 
-        private static async Task CopyFileAsync(IStreamingFileSystem fileSystem, string source, string destination)
+        private static async Task CopyFileAsync(IStreamingFileSystem fileSystem, string source, string destination, CancellationToken cancellationToken)
         {
             string? directory = Path.GetDirectoryName(destination);
             if (directory != null)
                 Directory.CreateDirectory(directory);
             await using Stream input = fileSystem.OpenRead(source);
             await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await input.CopyToAsync(output, 64 * 1024);
+            await input.CopyToAsync(output, 64 * 1024, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -294,7 +357,7 @@ namespace ShaPrint.Server
         /// Locates the .inf file path for a given driver name using WMI (via PowerShell).
         /// Returns e.g. "C:\Windows\INF\oem25.inf" or null if not found.
         /// </summary>
-        private async Task<string?> LocateInfPathAsync(string driverName)
+        private async Task<string?> LocateInfPathAsync(string driverName, CancellationToken cancellationToken)
         {
             // Escape single quotes for safe PowerShell embedding
             string safeName = driverName.Replace("'", "''");
@@ -302,7 +365,8 @@ namespace ShaPrint.Server
             // Try WMI to get the InfPath
             var result = await _processRunner.RunAsync("powershell.exe",
                 $"-NoProfile -ExecutionPolicy Bypass -Command \"Get-WmiObject Win32_PrinterDriver | Where-Object {{ $_.Name -like '*{safeName}*' }} | Select-Object -First 1 -ExpandProperty InfPath 2>&1 | Out-String -Width 4096\"",
-                TimeSpan.FromSeconds(30));
+                TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
             {
@@ -316,7 +380,8 @@ namespace ShaPrint.Server
             // Fallback: try pnputil /enum-drivers and parse
             var pnputilResult = await _processRunner.RunAsync("pnputil",
                 "/enum-drivers /class printer",
-                TimeSpan.FromSeconds(30));
+                TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (pnputilResult.Success)
             {
@@ -348,14 +413,23 @@ namespace ShaPrint.Server
         /// Exports a driver package using pnputil /export-driver, creates a zip archive,
         /// and builds the manifest with SHA-256 computed from the zip bytes.
         /// </summary>
-        private async Task<DriverPackageManifest?> ExportDriverAsync(string infPath, string driverName)
+        private async Task<DriverPackageManifest?> ExportDriverAsync(string infPath, string driverName, CancellationToken cancellationToken)
         {
             string infName = Path.GetFileName(infPath);
             AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: starting export for '{driverName}' (inf={infName})");
 
             // Compute a preliminary hash of the inf content for the cache directory name
-            byte[] infBytes = await _fileSystem.ReadAllBytesAsync(infPath);
-            string infHash = Convert.ToHexString(SHA256.HashData(infBytes)).ToLowerInvariant();
+            byte[] infBytes = await ReadFileBytesAsync(infPath, cancellationToken).ConfigureAwait(false);
+            string infHash;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                infHash = Convert.ToHexString(SHA256.HashData(infBytes)).ToLowerInvariant();
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(infBytes);
+            }
 
             string exportDir = Path.Combine(_cacheRoot, infHash);
             _fileSystem.CreateDirectory(exportDir);
@@ -376,7 +450,8 @@ namespace ShaPrint.Server
             AppLogger.Log($"[DRIVER_PKG] ExportDriverAsync: running pnputil /export-driver...");
             var result = await _processRunner.RunAsync("pnputil",
                 $"/export-driver \"{infPath}\" \"{exportDir}\"",
-                TimeSpan.FromMinutes(2));
+                TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (!result.Success)
             {
@@ -480,10 +555,10 @@ namespace ShaPrint.Server
                 if (streamingFs != null)
                 {
                     string tempZipPath = packageZipPath + $".tmp_{Guid.NewGuid():N}";
-                    await CreateZipFileAsync(files, tempZipPath, streamingFs);
+                    await CreateZipFileAsync(files, tempZipPath, streamingFs, cancellationToken).ConfigureAwait(false);
                     File.Move(tempZipPath, packageZipPath, overwrite: true);
                     zipLength = _fileSystem.GetFileSize(packageZipPath);
-                    packageHash = await HashFileAsync(streamingFs, packageZipPath);
+                    packageHash = await HashFileAsync(streamingFs, packageZipPath, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -492,11 +567,12 @@ namespace ShaPrint.Server
                     {
                         foreach (var f in files)
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
                             string entryName = Path.GetFileName(f);
                             var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
                             using var entryStream = entry.Open();
-                            var fileBytes = await _fileSystem.ReadAllBytesAsync(f);
-                            await entryStream.WriteAsync(fileBytes);
+                            var fileBytes = await _fileSystem.ReadAllBytesAsync(f).WaitAsync(cancellationToken).ConfigureAwait(false);
+                            await entryStream.WriteAsync(fileBytes, cancellationToken).ConfigureAwait(false);
                         }
                     }
                     zipBytes = zipMs.ToArray();
@@ -567,8 +643,8 @@ namespace ShaPrint.Server
                 // Write to exportDir (infHash-based, for pnputil output). The
                 // streaming branch already wrote package.zip atomically.
                 if (zipBytes != null)
-                    await _fileSystem.WriteAllBytesAsync(packageZipPath, zipBytes);
-                await _fileSystem.WriteAllBytesAsync(Path.Combine(exportDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson));
+                    await _fileSystem.WriteAllBytesAsync(packageZipPath, zipBytes).WaitAsync(cancellationToken).ConfigureAwait(false);
+                await _fileSystem.WriteAllBytesAsync(Path.Combine(exportDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson)).WaitAsync(cancellationToken).ConfigureAwait(false);
 
                 // Write to finalDir (packageHash-based, where ReadPackageBytesAsync looks)
                 string finalDir = Path.Combine(_cacheRoot, packageHash);
@@ -578,19 +654,19 @@ namespace ShaPrint.Server
                     _fileSystem.CreateDirectory(finalDir);
                     if (streamingFs != null)
                     {
-                        await CopyFileAsync(streamingFs, packageZipPath, Path.Combine(finalDir, "package.zip"));
+                        await CopyFileAsync(streamingFs, packageZipPath, Path.Combine(finalDir, "package.zip"), cancellationToken).ConfigureAwait(false);
                     }
                     else
                     {
                         foreach (var f in files)
                         {
                             string dest = Path.Combine(finalDir, Path.GetFileName(f));
-                            var content = await _fileSystem.ReadAllBytesAsync(f);
-                            await _fileSystem.WriteAllBytesAsync(dest, content);
+                            var content = await _fileSystem.ReadAllBytesAsync(f).WaitAsync(cancellationToken).ConfigureAwait(false);
+                            await _fileSystem.WriteAllBytesAsync(dest, content).WaitAsync(cancellationToken).ConfigureAwait(false);
                         }
-                        await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "package.zip"), zipBytes!);
+                        await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "package.zip"), zipBytes!).WaitAsync(cancellationToken).ConfigureAwait(false);
                     }
-                    await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson));
+                    await _fileSystem.WriteAllBytesAsync(Path.Combine(finalDir, "manifest.json"), Encoding.UTF8.GetBytes(manifestJson)).WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -599,6 +675,11 @@ namespace ShaPrint.Server
 
                 AppLogger.Log($"[DRIVER_PKG] Exported driver '{driverName}' → {files.Length} files, zip {zipLength:N0} bytes, SHA-256={packageHash[..16]}...");
                 return manifest;
+            }
+            catch (OperationCanceledException)
+            {
+                try { _fileSystem.DeleteDirectory(exportDir, true); } catch { }
+                throw;
             }
             catch (Exception ex)
             {
@@ -642,6 +723,12 @@ namespace ShaPrint.Server
             public DriverPackageManifest Manifest { get; set; } = new();
             public string DirectoryPath { get; set; } = string.Empty;
             public DateTime ExportedAt { get; set; }
+        }
+
+        private sealed class ExportLockEntry
+        {
+            public SemaphoreSlim Gate { get; } = new(1, 1);
+            public int RefCount { get; set; }
         }
     }
 }

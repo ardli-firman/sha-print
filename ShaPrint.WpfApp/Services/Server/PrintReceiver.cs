@@ -575,7 +575,7 @@ namespace ShaPrint.Server
             {
                 if (!_driverSharingEnabled || _driverPackageService == null)
                 {
-                    await SendDriverPackageErrorAsync(stream, "Driver sharing is disabled on this server.");
+                    await SendDriverPackageErrorAsync(stream, "Driver sharing is disabled on this server.", token);
                     return;
                 }
 
@@ -585,7 +585,7 @@ namespace ShaPrint.Server
                 int jsonLength = await ReadInt32Async(stream, token);
                 if (jsonLength <= 0 || jsonLength > 10240) // max 10KB for the request
                 {
-                    await SendDriverPackageErrorAsync(stream, "Invalid request length.");
+                    await SendDriverPackageErrorAsync(stream, "Invalid request length.", token);
                     return;
                 }
                 byte[] jsonBytes = await ReadBytesAsync(stream, jsonLength, token);
@@ -598,24 +598,34 @@ namespace ShaPrint.Server
                 catch (System.Text.Json.JsonException)
                 {
                     CryptographicOperations.ZeroMemory(jsonBytes);
-                    await SendDriverPackageErrorAsync(stream, "Invalid driver package request.");
+                    await SendDriverPackageErrorAsync(stream, "Invalid driver package request.", token);
                     return;
                 }
 
                 if (request == null || string.IsNullOrEmpty(request.PrinterName))
                 {
                     CryptographicOperations.ZeroMemory(jsonBytes);
-                    await SendDriverPackageErrorAsync(stream, "Invalid driver package request.");
+                    await SendDriverPackageErrorAsync(stream, "Invalid driver package request.", token);
                     return;
                 }
 
                 if (!DriverPackageIdValidator.IsValid(request.DriverPackageId))
                 {
                     CryptographicOperations.ZeroMemory(jsonBytes);
-                    await SendDriverPackageErrorAsync(stream, "Invalid driver package identifier.");
+                    await SendDriverPackageErrorAsync(stream, "Invalid driver package identifier.", token);
                     return;
                 }
                 CryptographicOperations.ZeroMemory(jsonBytes);
+
+                try
+                {
+                    request.PrinterName = Validators.ValidatePrinterName(request.PrinterName);
+                }
+                catch (ArgumentException)
+                {
+                    await SendDriverPackageErrorAsync(stream, "Invalid printer name.", token);
+                    return;
+                }
 
                 AppLogger.Log($"[SERVER] Driver package request from {remoteIp} for printer '{request.PrinterName}' (PackageId={request.DriverPackageId?[..16]}...)");
 
@@ -637,16 +647,16 @@ namespace ShaPrint.Server
 
                 // Get or build the package
                 AppLogger.Log($"[SERVER] Fetching driver package for driver='{driverName}'...");
-                var manifest = await _driverPackageService.GetDriverPackageAsync(driverName);
+                var manifest = await _driverPackageService.GetDriverPackageAsync(driverName, token);
                 if (manifest == null)
                 {
                     AppLogger.Error($"[SERVER] Driver package not found for driver='{driverName}' (requested printer='{request.PrinterName}')");
-                    await SendDriverPackageErrorAsync(stream, $"Driver package not found for printer '{request.PrinterName}' (driver: '{driverName}').");
+                    await SendDriverPackageErrorAsync(stream, $"Driver package not found for printer '{request.PrinterName}' (driver: '{driverName}').", token);
                     return;
                 }
                 if (!DriverPackageIdValidator.IsValid(manifest.Sha256))
                 {
-                    await SendDriverPackageErrorAsync(stream, "Server returned an invalid driver package manifest.");
+                    await SendDriverPackageErrorAsync(stream, "Server returned an invalid driver package manifest.", token);
                     return;
                 }
                 AppLogger.Log($"[SERVER] Package manifest found: SHA-256={manifest.Sha256[..16]}..., size={manifest.TotalSizeBytes:N0} bytes, inf={manifest.InfName}");
@@ -656,7 +666,7 @@ namespace ShaPrint.Server
                     !request.DriverPackageId.Equals(manifest.Sha256, StringComparison.OrdinalIgnoreCase))
                 {
                     AppLogger.Error($"[SERVER] PackageId mismatch: client requested '{request.DriverPackageId[..16]}...', server has '{manifest.Sha256[..16]}...'");
-                    await SendDriverPackageErrorAsync(stream, "Driver package ID mismatch.");
+                    await SendDriverPackageErrorAsync(stream, "Driver package ID mismatch.", token);
                     return;
                 }
 
@@ -667,7 +677,7 @@ namespace ShaPrint.Server
                 if (packageStream == null || packageLength <= 0 || packageLength > Constants.MaxDriverPackageSize)
                 {
                     AppLogger.Error($"[SERVER] Failed to read package bytes for SHA-256={manifest.Sha256[..16]}... — aborting transfer.");
-                    await SendDriverPackageErrorAsync(stream, "Failed to read driver package data.");
+                    await SendDriverPackageErrorAsync(stream, "Failed to read driver package data.", token);
                     return;
                 }
                 AppLogger.Log($"[SERVER] Sending driver package to {remoteIp}: {packageLength:N0} bytes.");
@@ -752,7 +762,7 @@ namespace ShaPrint.Server
             catch (Exception ex)
             {
                 AppLogger.Error($"[SERVER] Driver package transfer error from {remoteIp}", ex);
-                try { await SendDriverPackageErrorAsync(stream, "Server error during driver package transfer."); } catch { }
+                try { await SendDriverPackageErrorAsync(stream, "Server error during driver package transfer.", token); } catch { }
             }
         }
 
@@ -797,7 +807,7 @@ namespace ShaPrint.Server
             }
         }
 
-        private async Task SendDriverPackageErrorAsync(NetworkStream stream, string message)
+        private async Task SendDriverPackageErrorAsync(NetworkStream stream, string message, CancellationToken token)
         {
             var errorMsg = new DriverPackageError { Message = message };
             byte[] errorJson = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(errorMsg);
@@ -809,8 +819,8 @@ namespace ShaPrint.Server
                 writer.Write(errorJson);
             }
             byte[] packet = ms.ToArray();
-            await stream.WriteAsync(packet);
-            await stream.FlushAsync();
+            await stream.WriteAsync(packet, token);
+            await stream.FlushAsync(token);
         }
     }
 }

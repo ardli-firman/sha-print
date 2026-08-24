@@ -3,6 +3,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using ShaPrint.Core;
+using ShaPrint.Core.Network;
 
 namespace ShaPrint.WpfApp.Services.Client
 {
@@ -22,6 +23,12 @@ namespace ShaPrint.WpfApp.Services.Client
         /// <returns>True if both size and hash match.</returns>
         public static async Task<bool> VerifyPackageAsync(string packagePath, string expectedSha256, long expectedSize)
         {
+            if (!DriverPackageIdValidator.IsValid(expectedSha256))
+            {
+                AppLogger.Log("[DRIVER_VERIFY] Rejected malformed package identifier.");
+                return false;
+            }
+
             if (string.IsNullOrEmpty(packagePath) || !File.Exists(packagePath))
             {
                 AppLogger.Log("[DRIVER_VERIFY] Package file not found: " + packagePath);
@@ -65,6 +72,12 @@ namespace ShaPrint.WpfApp.Services.Client
         /// </summary>
         public static bool VerifyBytes(byte[] data, string expectedSha256, long expectedSize)
         {
+            if (!DriverPackageIdValidator.IsValid(expectedSha256))
+            {
+                AppLogger.Log("[DRIVER_VERIFY] Rejected malformed package identifier.");
+                return false;
+            }
+
             if (data == null || data.Length == 0)
             {
                 AppLogger.Log("[DRIVER_VERIFY] Empty package data.");

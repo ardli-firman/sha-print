@@ -373,13 +373,23 @@ namespace ShaPrint.WpfApp.Services.Client
                     TimedOut = true
                 };
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 // User cancellation
                 return new DriverDownloadResult
                 {
                     Success = false,
                     ErrorMessage = "Download cancelled."
+                };
+            }
+            catch (OperationCanceledException)
+            {
+                AppLogger.Error("[DRIVER_PKG_CLIENT] Transfer deadline elapsed.");
+                return new DriverDownloadResult
+                {
+                    Success = false,
+                    ErrorMessage = "Driver transfer timed out — server stalled.",
+                    TimedOut = true
                 };
             }
             catch (Exception ex)
