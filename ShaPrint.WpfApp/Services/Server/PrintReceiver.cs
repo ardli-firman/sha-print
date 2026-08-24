@@ -17,9 +17,11 @@ namespace ShaPrint.Server
 {
     public class PrintReceiver
     {
+        private static readonly TimeSpan ClientRequestTimeout = TimeSpan.FromSeconds(30);
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
         private SemaphoreSlim? _concurrencyLimit;
+        private SemaphoreSlim? _connectionAdmission;
         private readonly ConcurrentDictionary<int, Task> _activeHandlers = new();
         private int _nextHandlerId;
         private readonly ScannerService _scannerService = new ScannerService();
@@ -54,6 +56,7 @@ namespace ShaPrint.Server
         {
             _cts = new CancellationTokenSource();
             _concurrencyLimit = new SemaphoreSlim(Constants.MaxConcurrentPrintJobs);
+            _connectionAdmission = new SemaphoreSlim(Constants.MaxConcurrentPrintJobs * 2);
             _listener = new TcpListener(IPAddress.Any, Constants.PrintTcpPort);
             _listener.Start();
             _ = AcceptLoopAsync(_cts.Token);
@@ -103,11 +106,22 @@ namespace ShaPrint.Server
 
         private async Task HandleClientThrottledAsync(TcpClient client, CancellationToken token)
         {
+            SemaphoreSlim? connectionAdmission = _connectionAdmission;
+            if (connectionAdmission is null || !connectionAdmission.Wait(0))
+            {
+                AppLogger.Log("[SERVER] Rejecting connection before request read — connection admission is full.");
+                client.Dispose();
+                return;
+            }
+
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            deadline.CancelAfter(ClientRequestTimeout);
             try
             {
-                await HandleClientAsync(client, token);
+                await HandleClientAsync(client, deadline.Token);
             }
             catch (Exception ex) { AppLogger.Error("[SERVER] Client handler failed", ex); }
+            finally { connectionAdmission.Release(); }
         }
 
         private async Task HandleClientAsync(TcpClient client, CancellationToken token)
@@ -209,7 +223,7 @@ namespace ShaPrint.Server
                             if (!string.IsNullOrEmpty(payload.TargetPrinterName) && payload.SpoolData != null && payload.SpoolData.Length > 0)
                             {
                                 string docName = !string.IsNullOrEmpty(payload.DocumentName)
-                                    ? payload.DocumentName
+                                    ? Validators.ValidateDocumentName(payload.DocumentName)
                                     : "ShaPrint Job - " + DateTime.Now.ToString("yyyyMMdd_HHmmss");
                                 AppLogger.Log($"[SERVER] Injecting {payload.SpoolData.Length} bytes into Windows Spooler for '{payload.TargetPrinterName}'");
                                 bool printed = await SubmitPrintAsync(payload.TargetPrinterName, payload.SpoolData, docName);
@@ -282,110 +296,107 @@ namespace ShaPrint.Server
             }
         }
 
-        private async Task HandleEnvelopePrintRequestAsync(NetworkStream stream, byte[] magicPrefix, string remoteIp, CancellationToken token)
+        private async Task HandleEnvelopePrintRequestAsync(Stream stream, byte[] magicPrefix, string remoteIp, CancellationToken token)
         {
-            LegacyEnvelope? envelope = null;
-            PrintJobPayload? payload = null;
+            LegacyEnvelopeHeader? header = null;
             try
             {
-                envelope = await LegacyEnvelopeCodec.ReadAfterMagicAsync(stream, magicPrefix, token);
-                if (envelope.CorrelationId == 0 || envelope.MessageType != LegacyMessageType.PrintJob)
-                    throw new InvalidDataException("Legacy envelope is not a correlated print request.");
-
-                if (_concurrencyLimit is null || !_concurrencyLimit.Wait(0))
-                {
-                    await SendAcknowledgementAsync(stream, envelope.CorrelationId, LegacyAcknowledgementStatus.Overloaded,
-                        "Server is busy; submit a new job after capacity is available.", token);
-                    return;
-                }
-
-                try
-                {
-                    payload = PrintJobPayload.ReadWire(envelope.Payload);
-                    payload.TargetPrinterName = Validators.ValidatePrinterName(payload.TargetPrinterName);
-                    string documentName = Validators.ValidateDocumentName(payload.DocumentName);
-                    if (payload.SpoolData.Length == 0)
-                        throw new InvalidDataException("Print job data is empty.");
-
-                    bool exists;
-                    try { exists = PrinterExists(payload.TargetPrinterName); }
-                    catch (Exception ex)
-                    {
-                        AppLogger.Error("[SERVER] Unable to enumerate printers for legacy request", ex);
-                        exists = true;
-                    }
-
-                    if (!exists)
-                    {
-                        await SendAcknowledgementAsync(stream, envelope.CorrelationId, LegacyAcknowledgementStatus.TargetUnavailable,
-                            "The target printer is unavailable.", token);
-                        return;
-                    }
-
-                    bool printed = await SubmitPrintAsync(payload.TargetPrinterName, payload.SpoolData, documentName);
-                    if (!printed)
-                    {
-                        await SendAcknowledgementAsync(stream, envelope.CorrelationId, LegacyAcknowledgementStatus.SpoolerRejected,
-                            "Windows Spooler rejected the job.", token);
-                        return;
-                    }
-
-                    _notificationService.ShowPrintJobCompleted(documentName, payload.TargetPrinterName);
-                    _onJobLog?.Invoke(new JobHistoryEntry
-                    {
-                        Type = "print",
-                        Document = documentName,
-                        PrinterName = payload.TargetPrinterName,
-                        ClientIp = remoteIp,
-                        Status = "completed",
-                        Timestamp = DateTime.UtcNow
-                    });
-                    await SendAcknowledgementAsync(stream, envelope.CorrelationId, LegacyAcknowledgementStatus.Accepted,
-                        "Print job accepted by Windows Spooler.", token);
-                }
-                finally
-                {
-                    _concurrencyLimit.Release();
-                }
+                header = await LegacyEnvelopeCodec.ReadHeaderAfterMagicAsync(stream, magicPrefix, token);
+                LegacyEnvelope envelope = await LegacyEnvelopeCodec.ReadPayloadAsync(stream, header, token);
+                LegacyAcknowledgement acknowledgement = await ProcessLegacyEnvelopePrintAsync(envelope, remoteIp, token);
+                await LegacyAcknowledgementCodec.WriteFramedAsync(stream, acknowledgement, token);
             }
             catch (OperationCanceledException)
             {
-                if (envelope?.CorrelationId is long correlationId && correlationId != 0)
+                if (header?.CorrelationId is long correlationId && correlationId != 0)
                     await SendAcknowledgementBestEffortAsync(stream, correlationId,
-                        token.IsCancellationRequested ? LegacyAcknowledgementStatus.Canceled : LegacyAcknowledgementStatus.Timeout,
-                        "Print request was canceled or timed out.");
+                        _cts?.IsCancellationRequested == true ? LegacyAcknowledgementStatus.Canceled : LegacyAcknowledgementStatus.Timeout,
+                        "Print request timed out.");
             }
             catch (InvalidDataException ex)
             {
                 AppLogger.Error($"[SERVER] Malformed legacy payload from {remoteIp}: {ex.Message}");
-                if (envelope?.CorrelationId is long correlationId && correlationId != 0)
+                if (header?.CorrelationId is long correlationId && correlationId != 0)
                     await SendAcknowledgementBestEffortAsync(stream, correlationId, LegacyAcknowledgementStatus.InvalidPayload, "Print payload is invalid.");
-            }
-            catch (ArgumentException ex)
-            {
-                AppLogger.Error($"[SERVER] Invalid legacy print metadata from {remoteIp}: {ex.Message}");
-                if (envelope?.CorrelationId is long correlationId && correlationId != 0)
-                    await SendAcknowledgementBestEffortAsync(stream, correlationId, LegacyAcknowledgementStatus.InvalidPayload, "Print metadata is invalid.");
             }
             catch (Exception ex)
             {
                 AppLogger.Error($"[SERVER] Legacy print request failed for {remoteIp}", ex);
-                if (envelope?.CorrelationId is long correlationId && correlationId != 0)
+                if (header?.CorrelationId is long correlationId && correlationId != 0)
                     await SendAcknowledgementBestEffortAsync(stream, correlationId, LegacyAcknowledgementStatus.ServerError, "Server error while submitting print job.");
-            }
-            finally
-            {
-                if (payload?.SpoolData is { Length: > 0 } spoolData)
-                    CryptographicOperations.ZeroMemory(spoolData);
-                if (envelope?.Payload is { Length: > 0 } envelopePayload)
-                    CryptographicOperations.ZeroMemory(envelopePayload);
             }
         }
 
-        private static async Task SendAcknowledgementAsync(NetworkStream stream, long correlationId, LegacyAcknowledgementStatus status, string message, CancellationToken token)
+        internal void InitializeLegacyTransportForTests(int workCapacity = Constants.MaxConcurrentPrintJobs)
+            => _concurrencyLimit = new SemaphoreSlim(workCapacity, Math.Max(1, workCapacity));
+
+        internal async Task<LegacyAcknowledgement> ProcessLegacyEnvelopePrintAsync(LegacyEnvelope envelope, string remoteIp, CancellationToken token)
+        {
+            ArgumentNullException.ThrowIfNull(envelope);
+            PrintJobPayload? payload = null;
+            bool admitted = false;
+            try
+            {
+                if (envelope.CorrelationId == 0 || envelope.MessageType != LegacyMessageType.PrintJob)
+                    return new LegacyAcknowledgement(envelope.CorrelationId, LegacyAcknowledgementStatus.InvalidPayload, "Legacy envelope is not a correlated print request.");
+
+                if (_concurrencyLimit is null || !_concurrencyLimit.Wait(0))
+                    return new LegacyAcknowledgement(envelope.CorrelationId, LegacyAcknowledgementStatus.Overloaded,
+                        "Server is busy; submit a new job after capacity is available.");
+                admitted = true;
+
+                payload = PrintJobPayload.ReadWire(envelope.Payload);
+                payload.TargetPrinterName = Validators.ValidatePrinterName(payload.TargetPrinterName);
+                string documentName = Validators.ValidateDocumentName(payload.DocumentName);
+                if (payload.SpoolData.Length == 0)
+                    throw new InvalidDataException("Print job data is empty.");
+
+                if (!PrinterExists(payload.TargetPrinterName))
+                    return new LegacyAcknowledgement(envelope.CorrelationId, LegacyAcknowledgementStatus.TargetUnavailable, "The target printer is unavailable.");
+
+                bool printed = await SubmitPrintAsync(payload.TargetPrinterName, payload.SpoolData, documentName).WaitAsync(token);
+                if (!printed)
+                    return new LegacyAcknowledgement(envelope.CorrelationId, LegacyAcknowledgementStatus.SpoolerRejected, "Windows Spooler rejected the job.");
+
+                _notificationService.ShowPrintJobCompleted(documentName, payload.TargetPrinterName);
+                _onJobLog?.Invoke(new JobHistoryEntry
+                {
+                    Type = "print", Document = documentName, PrinterName = payload.TargetPrinterName,
+                    ClientIp = remoteIp, Status = "completed", Timestamp = DateTime.UtcNow
+                });
+                return new LegacyAcknowledgement(envelope.CorrelationId, LegacyAcknowledgementStatus.Accepted, "Print job accepted by Windows Spooler.");
+            }
+            catch (OperationCanceledException)
+            {
+                return new LegacyAcknowledgement(envelope.CorrelationId,
+                    _cts?.IsCancellationRequested == true ? LegacyAcknowledgementStatus.Canceled : LegacyAcknowledgementStatus.Timeout,
+                    "Print request timed out.");
+            }
+            catch (InvalidDataException)
+            {
+                return new LegacyAcknowledgement(envelope.CorrelationId, LegacyAcknowledgementStatus.InvalidPayload, "Print payload is invalid.");
+            }
+            catch (ArgumentException)
+            {
+                return new LegacyAcknowledgement(envelope.CorrelationId, LegacyAcknowledgementStatus.InvalidPayload, "Print metadata is invalid.");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"[SERVER] Legacy print request failed for {remoteIp}", ex);
+                return new LegacyAcknowledgement(envelope.CorrelationId, LegacyAcknowledgementStatus.ServerError, "Server error while submitting print job.");
+            }
+            finally
+            {
+                if (admitted) _concurrencyLimit!.Release();
+                if (payload?.SpoolData is { Length: > 0 } spoolData) CryptographicOperations.ZeroMemory(spoolData);
+                if (envelope.Payload.Length > 0) CryptographicOperations.ZeroMemory(envelope.Payload);
+            }
+        }
+
+        private static async Task SendAcknowledgementAsync(Stream stream, long correlationId, LegacyAcknowledgementStatus status, string message, CancellationToken token)
             => await LegacyAcknowledgementCodec.WriteFramedAsync(stream, new LegacyAcknowledgement(correlationId, status, message), token);
 
-        private static async Task SendAcknowledgementBestEffortAsync(NetworkStream stream, long correlationId, LegacyAcknowledgementStatus status, string message)
+        private static async Task SendAcknowledgementBestEffortAsync(Stream stream, long correlationId, LegacyAcknowledgementStatus status, string message)
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             try { await SendAcknowledgementAsync(stream, correlationId, status, message, timeout.Token); }

@@ -56,6 +56,17 @@ public sealed record LegacyEnvelope(
     byte[] Payload);
 
 /// <summary>
+/// Raw envelope header parsed before version/type/payload validation. Keeping the
+/// correlation ID available lets the server reject malformed correlated frames
+/// with an actionable terminal acknowledgement.
+/// </summary>
+public sealed record LegacyEnvelopeHeader(
+    byte Version,
+    LegacyMessageType MessageType,
+    long CorrelationId,
+    int PayloadLength);
+
+/// <summary>
 /// An encrypted, terminal acknowledgement for a legacy request.
 /// </summary>
 public sealed record LegacyAcknowledgement(
@@ -77,6 +88,7 @@ public static class LegacyEnvelopeCodec
     // int32-length payload without guessing from a numeric size.
     public const uint Magic = 0x54525053;
     public const int HeaderLength = sizeof(uint) + sizeof(byte) + sizeof(byte) + sizeof(long) + sizeof(int);
+    public const int MaxPayloadBytes = PrintJobPayload.MaxWireBytes;
 
     public static byte[] Write(LegacyEnvelope envelope)
     {
@@ -164,25 +176,62 @@ public static class LegacyEnvelopeCodec
         }
     }
 
-    private static async Task<LegacyEnvelope> ReadFromHeaderAsync(Stream stream, byte[] header, CancellationToken cancellationToken)
+    public static async Task<LegacyEnvelopeHeader> ReadHeaderAfterMagicAsync(Stream stream, ReadOnlyMemory<byte> magicPrefix, CancellationToken cancellationToken)
     {
-        if (BinaryPrimitives.ReadUInt32LittleEndian(header) != Magic)
+        if (magicPrefix.Length != sizeof(uint) || BinaryPrimitives.ReadUInt32LittleEndian(magicPrefix.Span) != Magic)
             throw new InvalidDataException("Legacy envelope magic is invalid.");
 
-        int payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(HeaderLength - sizeof(int)));
-        ValidatePayloadLength(payloadLength);
-
-        byte[] frame = new byte[HeaderLength + payloadLength];
+        byte[] header = new byte[HeaderLength];
         try
         {
-            Buffer.BlockCopy(header, 0, frame, 0, HeaderLength);
-            await ReadExactlyAsync(stream, frame.AsMemory(HeaderLength, payloadLength), cancellationToken).ConfigureAwait(false);
-            return Read(frame);
+            magicPrefix.CopyTo(header);
+            await ReadExactlyAsync(stream, header.AsMemory(sizeof(uint)), cancellationToken).ConfigureAwait(false);
+            return ParseHeader(header);
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(frame);
+            CryptographicOperations.ZeroMemory(header);
         }
+    }
+
+    public static async Task<LegacyEnvelope> ReadPayloadAsync(Stream stream, LegacyEnvelopeHeader header, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(header);
+        ValidateVersion(header.Version);
+        ValidateMessageType(header.MessageType);
+        ValidatePayloadLength(header.PayloadLength);
+
+        byte[] payload = new byte[header.PayloadLength];
+        try
+        {
+            await ReadExactlyAsync(stream, payload, cancellationToken).ConfigureAwait(false);
+            return new LegacyEnvelope(header.Version, header.MessageType, header.CorrelationId, payload);
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(payload);
+            throw;
+        }
+    }
+
+    public static LegacyEnvelopeHeader ParseHeader(ReadOnlySpan<byte> header)
+    {
+        if (header.Length != HeaderLength)
+            throw new InvalidDataException("Legacy envelope header is truncated.");
+        if (BinaryPrimitives.ReadUInt32LittleEndian(header) != Magic)
+            throw new InvalidDataException("Legacy envelope magic is invalid.");
+
+        int correlationOffset = sizeof(uint) + sizeof(byte) + sizeof(byte);
+        return new LegacyEnvelopeHeader(
+            header[sizeof(uint)],
+            (LegacyMessageType)header[sizeof(uint) + sizeof(byte)],
+            BinaryPrimitives.ReadInt64LittleEndian(header.Slice(correlationOffset, sizeof(long))),
+            BinaryPrimitives.ReadInt32LittleEndian(header.Slice(correlationOffset + sizeof(long), sizeof(int))));
+    }
+
+    private static async Task<LegacyEnvelope> ReadFromHeaderAsync(Stream stream, byte[] header, CancellationToken cancellationToken)
+    {
+        return await ReadPayloadAsync(stream, ParseHeader(header), cancellationToken).ConfigureAwait(false);
     }
 
     public static async Task WriteAsync(Stream stream, LegacyEnvelope envelope, CancellationToken cancellationToken)
@@ -225,7 +274,7 @@ public static class LegacyEnvelopeCodec
 
     private static void ValidatePayloadLength(int payloadLength)
     {
-        if (payloadLength < 0 || payloadLength > Constants.MaxPrintJobBytes)
+        if (payloadLength < 0 || payloadLength > MaxPayloadBytes)
         {
             throw new InvalidDataException(
                 $"Legacy envelope payload length {payloadLength} is outside the allowed range.");

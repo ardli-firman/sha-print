@@ -16,6 +16,11 @@ namespace ShaPrint.Core.Network
     /// </summary>
     public class PrintJobPayload
     {
+        // Includes encrypted length, AES-GCM nonce/tag, bounded metadata and
+        // BinaryWriter framing. The raw spool data remains capped separately.
+        public const int MaxWireOverheadBytes = 16 * 1024;
+        public const int MaxEncryptedBlobBytes = Constants.MaxPrintJobBytes + MaxWireOverheadBytes;
+        public const int MaxWireBytes = sizeof(int) + MaxEncryptedBlobBytes;
         public string TargetPrinterName { get; set; } = string.Empty;
         public string DocumentName { get; set; } = string.Empty;
         public byte[] SpoolData { get; set; } = Array.Empty<byte>();
@@ -51,9 +56,9 @@ namespace ShaPrint.Core.Network
         {
             if (encryptedLength < 0)
                 throw new InvalidDataException($"Negative encrypted blob length: {encryptedLength}.");
-            if (encryptedLength > Constants.MaxPrintJobBytes + 1024) // allow overhead for encryption
+            if (encryptedLength > MaxEncryptedBlobBytes)
                 throw new InvalidDataException(
-                    $"Encrypted blob exceeds limit: {encryptedLength} bytes (max ~{Constants.MaxPrintJobBytes + 1024}).");
+                    $"Encrypted blob exceeds limit: {encryptedLength} bytes (max {MaxEncryptedBlobBytes}).");
 
             byte[] encryptedBlob = reader.ReadBytes(encryptedLength);
             if (encryptedBlob.Length != encryptedLength)
@@ -120,7 +125,7 @@ namespace ShaPrint.Core.Network
                 throw new InvalidDataException("Print job payload is truncated before its length.");
 
             int encryptedLength = BitConverter.ToInt32(wire[..sizeof(int)]);
-            if (encryptedLength < 0 || encryptedLength > Constants.MaxPrintJobBytes + 1024)
+            if (encryptedLength < 0 || encryptedLength > MaxEncryptedBlobBytes)
                 throw new InvalidDataException($"Encrypted blob length is invalid: {encryptedLength}.");
             if (wire.Length != sizeof(int) + encryptedLength)
                 throw new InvalidDataException($"Print job payload length mismatch: declared {encryptedLength}, actual {wire.Length - sizeof(int)}.");
