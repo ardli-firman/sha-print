@@ -13,6 +13,7 @@ namespace ShaPrint.Core.Network;
 public static class MonitorFrameCodec
 {
     public const int OverloadedFrameLength = -2;
+    public const int AuthenticationFailedFrameLength = -3;
 
     public static async Task<byte[]> ReadAsync(
         Stream stream,
@@ -31,6 +32,8 @@ public static class MonitorFrameCodec
             int payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header);
             if (payloadLength == OverloadedFrameLength)
                 throw new MonitorOverloadedException();
+            if (payloadLength == AuthenticationFailedFrameLength)
+                throw new MonitorAuthenticationFailedException();
             if (payloadLength < 0 || payloadLength > maxPayloadBytes)
                 throw new InvalidDataException($"Monitor frame length {payloadLength} is outside the allowed range.");
 
@@ -81,12 +84,33 @@ public static class MonitorFrameCodec
         Stream stream,
         CancellationToken cancellationToken,
         TimeSpan? idleTimeout = null)
+        => await WriteMarkerAsync(
+            stream,
+            OverloadedFrameLength,
+            cancellationToken,
+            idleTimeout).ConfigureAwait(false);
+
+    public static async Task WriteAuthenticationFailedAsync(
+        Stream stream,
+        CancellationToken cancellationToken,
+        TimeSpan? idleTimeout = null)
+        => await WriteMarkerAsync(
+            stream,
+            AuthenticationFailedFrameLength,
+            cancellationToken,
+            idleTimeout).ConfigureAwait(false);
+
+    private static async Task WriteMarkerAsync(
+        Stream stream,
+        int markerValue,
+        CancellationToken cancellationToken,
+        TimeSpan? idleTimeout)
     {
         ArgumentNullException.ThrowIfNull(stream);
         byte[] marker = new byte[sizeof(int)];
         try
         {
-            BinaryPrimitives.WriteInt32LittleEndian(marker, OverloadedFrameLength);
+            BinaryPrimitives.WriteInt32LittleEndian(marker, markerValue);
             await WriteWithIdleTimeoutAsync(stream, marker, cancellationToken, idleTimeout).ConfigureAwait(false);
             await FlushWithIdleTimeoutAsync(stream, cancellationToken, idleTimeout).ConfigureAwait(false);
         }
@@ -182,4 +206,9 @@ public static class MonitorFrameCodec
 public sealed class MonitorOverloadedException : IOException
 {
     public MonitorOverloadedException() : base("Monitor server is overloaded.") { }
+}
+
+public sealed class MonitorAuthenticationFailedException : IOException
+{
+    public MonitorAuthenticationFailedException() : base("Monitor authentication failed.") { }
 }

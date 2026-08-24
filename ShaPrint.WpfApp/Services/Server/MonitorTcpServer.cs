@@ -22,10 +22,9 @@ public sealed class MonitorTcpServer : IDisposable
     private static readonly TimeSpan RateLimitWindow = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan RequestDeadline = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan StreamIdleDeadline = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan StatusBuildDeadline = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan OverloadWriteDeadline = TimeSpan.FromSeconds(1);
 
-    private readonly ServerStatusProvider _statusProvider;
+    private readonly Func<CancellationToken, ServerStatusPayload> _statusFactory;
     private readonly object _lifecycleLock = new();
     private readonly SemaphoreSlim _concurrencySlot = new(MaxConcurrentHandlers, MaxConcurrentHandlers);
     private readonly ConcurrentDictionary<int, Task> _handlerTasks = new();
@@ -44,7 +43,18 @@ public sealed class MonitorTcpServer : IDisposable
 
     public MonitorTcpServer(ServerStatusProvider statusProvider)
     {
-        _statusProvider = statusProvider;
+        _statusFactory = token =>
+        {
+            token.ThrowIfCancellationRequested();
+            ServerStatusPayload status = statusProvider.BuildStatus();
+            token.ThrowIfCancellationRequested();
+            return status;
+        };
+    }
+
+    internal MonitorTcpServer(Func<CancellationToken, ServerStatusPayload> statusFactory)
+    {
+        _statusFactory = statusFactory;
     }
 
     public void Start()
@@ -206,6 +216,10 @@ public sealed class MonitorTcpServer : IDisposable
                 catch (CryptographicException)
                 {
                     AppLogger.Log($"[MONITOR SERVER] Authentication failed for {remoteIp}.");
+                    await MonitorFrameCodec.WriteAuthenticationFailedAsync(
+                        stream,
+                        deadline.Token,
+                        StreamIdleDeadline).ConfigureAwait(false);
                     return;
                 }
 
@@ -215,9 +229,12 @@ public sealed class MonitorTcpServer : IDisposable
                     return;
                 }
 
-                ServerStatusPayload status = await Task.Run(_statusProvider.BuildStatus, CancellationToken.None)
-                    .WaitAsync(StatusBuildDeadline, deadline.Token)
-                    .ConfigureAwait(false);
+                // BuildStatus is synchronous platform work. Running it directly inside this
+                // tracked handler ensures StopAsync awaits it instead of abandoning a timed-out
+                // Task.Run worker. The total request token is checked on both sides.
+                deadline.Token.ThrowIfCancellationRequested();
+                ServerStatusPayload status = _statusFactory(deadline.Token);
+                deadline.Token.ThrowIfCancellationRequested();
                 jsonBytes = JsonSerializer.SerializeToUtf8Bytes(status);
                 if (jsonBytes.Length > Constants.MaxMonitorResponseBytes - Constants.AesGcmMinimumPayloadBytes)
                     throw new InvalidDataException("Monitor status response exceeds the protocol limit.");

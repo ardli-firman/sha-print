@@ -25,7 +25,6 @@ public sealed class MonitorService
     private static readonly TimeSpan RefreshDeadline = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RequestDeadline = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan StreamIdleDeadline = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan ShutdownDeadline = TimeSpan.FromSeconds(10);
 
     private readonly MonitorViewModel _monitorViewModel;
     private readonly DiscoveryClient _discoveryClient;
@@ -34,6 +33,9 @@ public sealed class MonitorService
     private readonly ConcurrentDictionary<int, Task> _activeRefreshes = new();
     private CancellationTokenSource? _cts;
     private Task? _pollTask;
+    private Task? _stopTask;
+    private bool _isStarted;
+    private bool _isStopping;
     private int _nextRefreshId;
 
     public MonitorService(MonitorViewModel monitorViewModel)
@@ -52,12 +54,13 @@ public sealed class MonitorService
     {
         lock (_lifecycleLock)
         {
-            if (_cts != null)
+            if (_isStarted || _isStopping)
                 return;
 
-            var cts = new CancellationTokenSource();
-            _cts = cts;
-            _pollTask = Task.Run(() => PollLoopAsync(cts.Token), CancellationToken.None);
+            if (_cts == null || _cts.IsCancellationRequested)
+                _cts = new CancellationTokenSource();
+            _isStarted = true;
+            _pollTask = Task.Run(() => PollLoopAsync(_cts.Token), CancellationToken.None);
         }
         AppLogger.Log("[MONITOR SERVICE] Service started.");
     }
@@ -68,36 +71,40 @@ public sealed class MonitorService
     /// </summary>
     public void Stop() => StopAsync().GetAwaiter().GetResult();
 
-    public async Task StopAsync()
+    public Task StopAsync()
     {
-        CancellationTokenSource? cts;
-        Task? pollTask;
         lock (_lifecycleLock)
         {
-            cts = _cts;
-            pollTask = _pollTask;
-            if (cts == null)
-                return;
-            cts.Cancel();
-        }
+            if (_stopTask != null)
+                return _stopTask;
+            if (_cts == null)
+                return Task.CompletedTask;
 
+            _isStopping = true;
+            _cts.Cancel();
+            _stopTask = StopCoreAsync(_cts, _pollTask);
+            return _stopTask;
+        }
+    }
+
+    private async Task StopCoreAsync(CancellationTokenSource cts, Task? pollTask)
+    {
         try
         {
-            var tasks = new List<Task>();
             if (pollTask != null)
-                tasks.Add(pollTask);
-            tasks.AddRange(_activeRefreshes.Values);
-            if (tasks.Count > 0)
-                await Task.WhenAll(tasks).WaitAsync(ShutdownDeadline).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) { }
-        catch (TimeoutException)
-        {
-            AppLogger.Log("[MONITOR SERVICE] Shutdown deadline reached while awaiting active requests.");
-        }
-        catch (Exception ex)
-        {
-            AppLogger.Error("[MONITOR SERVICE] Error while stopping", ex);
+            {
+                try { await pollTask.ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { AppLogger.Error("[MONITOR SERVICE] Poll shutdown failed", ex); }
+            }
+
+            Task[] activeRefreshes = _activeRefreshes.Values.ToArray();
+            if (activeRefreshes.Length > 0)
+            {
+                try { await Task.WhenAll(activeRefreshes).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { AppLogger.Error("[MONITOR SERVICE] Refresh shutdown failed", ex); }
+            }
         }
         finally
         {
@@ -107,6 +114,9 @@ public sealed class MonitorService
                 {
                     _cts = null;
                     _pollTask = null;
+                    _isStarted = false;
+                    _isStopping = false;
+                    _stopTask = null;
                 }
             }
             cts.Dispose();
@@ -119,7 +129,13 @@ public sealed class MonitorService
     {
         CancellationToken token;
         lock (_lifecycleLock)
-            token = _cts?.Token ?? CancellationToken.None;
+        {
+            if (_isStopping)
+                return Task.CompletedTask;
+            if (_cts == null || _cts.IsCancellationRequested)
+                _cts = new CancellationTokenSource();
+            token = _cts.Token;
+        }
         return TrackRefreshAsync(skipUnicastSweep: false, token);
     }
 
@@ -230,7 +246,7 @@ public sealed class MonitorService
         _monitorViewModel.LastRefreshTime = DateTime.UtcNow;
     }
 
-    private async Task QueryServerStatusAsync(string hostName, string ipAddress, CancellationToken serviceToken)
+    internal async Task QueryServerStatusAsync(string hostName, string ipAddress, CancellationToken serviceToken)
     {
         using var requestDeadline = CancellationTokenSource.CreateLinkedTokenSource(serviceToken);
         requestDeadline.CancelAfter(RequestDeadline);

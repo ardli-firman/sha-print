@@ -95,6 +95,41 @@ public sealed class DiscoveryMonitorLifecycleTests
     }
 
     [Fact]
+    public async Task DiscoveryServer_StopAsync_AwaitsTrackedSynchronousPrinterWorker()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var server = new DiscoveryServer(new NullNotificationService(), _ =>
+        {
+            entered.Set();
+            release.Wait();
+            return new List<PrinterInfo>();
+        });
+
+        try
+        {
+            server.Start();
+            using var client = new UdpClient();
+            byte[] request = Encoding.UTF8.GetBytes(Constants.DiscoveryRequestMessage);
+            await client.SendAsync(
+                request,
+                new IPEndPoint(IPAddress.Loopback, Constants.DiscoveryUdpPort));
+            Assert.True(await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(2))));
+
+            Task stop = server.StopAsync();
+            await Task.Delay(100);
+            Assert.False(stop.IsCompleted);
+            release.Set();
+            await stop.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            release.Set();
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task MonitorFrameCodec_TruncatedBody_IsRejected()
     {
         byte[] frame = new byte[sizeof(int) + 2];
@@ -114,6 +149,19 @@ public sealed class DiscoveryMonitorLifecycleTests
 
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             MonitorFrameCodec.ReadAsync(stream, maxPayloadBytes: 16, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task MonitorFrameCodec_AuthenticationMarker_IsClassifiedAsAuthMismatch()
+    {
+        using var stream = new MemoryStream();
+        await MonitorFrameCodec.WriteAuthenticationFailedAsync(stream, CancellationToken.None);
+        stream.Position = 0;
+
+        var error = await Assert.ThrowsAsync<MonitorAuthenticationFailedException>(() =>
+            MonitorFrameCodec.ReadAsync(stream, maxPayloadBytes: 16, CancellationToken.None));
+
+        Assert.Equal(MonitorFailureCategory.AuthMismatch, MonitorFailureClassifier.Classify(error));
     }
 
     [Theory]
@@ -163,6 +211,120 @@ public sealed class DiscoveryMonitorLifecycleTests
     }
 
     [Fact]
+    public async Task MonitorTcpServer_InvalidCiphertext_ReturnsAuthenticationFailureFrame()
+    {
+        var server = new MonitorTcpServer(new ServerStatusProvider(null!));
+        server.Start();
+        try
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, Constants.MonitorTcpPort);
+            using NetworkStream stream = client.GetStream();
+            byte[] invalidCiphertext = new byte[Constants.AesGcmMinimumPayloadBytes];
+            RandomNumberGenerator.Fill(invalidCiphertext);
+            await MonitorFrameCodec.WriteAsync(
+                stream,
+                invalidCiphertext,
+                Constants.MaxMonitorRequestBytes,
+                CancellationToken.None);
+
+            await Assert.ThrowsAsync<MonitorAuthenticationFailedException>(() =>
+                MonitorFrameCodec.ReadAsync(
+                    stream,
+                    Constants.MaxMonitorResponseBytes,
+                    CancellationToken.None,
+                    TimeSpan.FromSeconds(2)));
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task MonitorTcpServer_StopAsync_AwaitsTrackedSynchronousStatusWorker()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var server = new MonitorTcpServer(_ =>
+        {
+            entered.Set();
+            release.Wait();
+            return new ServerStatusPayload();
+        });
+        server.Start();
+        try
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, Constants.MonitorTcpPort);
+            using NetworkStream stream = client.GetStream();
+            byte[] raw = Encoding.UTF8.GetBytes("GET_STATUS");
+            byte[] encrypted = CryptoHelper.EncryptAesGcm(raw);
+            try
+            {
+                await MonitorFrameCodec.WriteAsync(
+                    stream,
+                    encrypted,
+                    Constants.MaxMonitorRequestBytes,
+                    CancellationToken.None);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(raw);
+                CryptographicOperations.ZeroMemory(encrypted);
+            }
+            Assert.True(await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(2))));
+
+            Task stop = server.StopAsync();
+            await Task.Delay(100);
+            Assert.False(stop.IsCompleted);
+            release.Set();
+            await stop.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            release.Set();
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task MonitorService_AuthenticationFailureFrame_UpdatesNodeAsAuthMismatch()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, Constants.MonitorTcpPort);
+        listener.Start();
+        Task peer = Task.Run(async () =>
+        {
+            using TcpClient connection = await listener.AcceptTcpClientAsync();
+            using NetworkStream stream = connection.GetStream();
+            byte[] request = await MonitorFrameCodec.ReadAsync(
+                stream,
+                Constants.MaxMonitorRequestBytes,
+                CancellationToken.None);
+            CryptographicOperations.ZeroMemory(request);
+            await MonitorFrameCodec.WriteAuthenticationFailedAsync(stream, CancellationToken.None);
+        });
+
+        var viewModel = new MonitorViewModel();
+        viewModel.RegisterDiscoveredServers(new List<DiscoveryResponseMessage>
+        {
+            new() { ServerName = "AUTH-SERVER", IpAddress = "127.0.0.1" }
+        });
+        var service = new MonitorService(viewModel);
+        try
+        {
+            await service.QueryServerStatusAsync("AUTH-SERVER", "127.0.0.1", CancellationToken.None);
+            await peer;
+            Assert.Equal("AuthMismatch", viewModel.Servers[0].Status);
+        }
+        finally
+        {
+            listener.Stop();
+            await service.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task MonitorService_StartAndStop_AreIdempotentAndAwaitable()
     {
         var service = new MonitorService(new MonitorViewModel());
@@ -171,6 +333,18 @@ public sealed class DiscoveryMonitorLifecycleTests
         service.Start();
         await service.StopAsync();
         await service.StopAsync();
+    }
+
+    [Fact]
+    public async Task MonitorService_ManualRefreshBeforeStart_IsCancelledAndAwaitedByStop()
+    {
+        var service = new MonitorService(new MonitorViewModel());
+
+        Task refresh = service.TriggerManualRefreshAsync();
+        await Task.Delay(50);
+        await service.StopAsync();
+
+        Assert.True(refresh.IsCompleted);
     }
 
     private sealed class NullNotificationService : INotificationService

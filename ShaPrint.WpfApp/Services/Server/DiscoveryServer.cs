@@ -24,9 +24,10 @@ public class DiscoveryServer
     private const int MaxExposedDevices = 64;
     private const int MaxRequestBytes = 256;
     private static readonly TimeSpan RateLimitWindow = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan DeviceQueryTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RequestDeadline = TimeSpan.FromSeconds(10);
 
     private readonly INotificationService _notificationService;
+    private readonly Func<CancellationToken, List<PrinterInfo>> _printerDetailsProvider;
     private readonly ScannerService _scannerService = new();
     private readonly object _lifecycleLock = new();
     private readonly SemaphoreSlim _requestSlots = new(MaxConcurrentRequests, MaxConcurrentRequests);
@@ -54,8 +55,16 @@ public class DiscoveryServer
     }
 
     public DiscoveryServer(INotificationService notificationService)
+        : this(notificationService, DefaultPrinterDetailsProvider)
+    {
+    }
+
+    internal DiscoveryServer(
+        INotificationService notificationService,
+        Func<CancellationToken, List<PrinterInfo>> printerDetailsProvider)
     {
         _notificationService = notificationService;
+        _printerDetailsProvider = printerDetailsProvider;
     }
 
     public void SetServerId(string? serverId) => _serverId = serverId;
@@ -167,13 +176,14 @@ public class DiscoveryServer
                     continue;
 
                 int requestId = Interlocked.Increment(ref _nextRequestId);
-                Task requestTask = ProcessRequestWithCleanupAsync(
-                    requestId,
-                    udpClient,
-                    result.RemoteEndPoint,
-                    remoteIp,
-                    isMonitorRequest,
-                    token);
+                Task requestTask = Task.Run(
+                    () => ProcessRequestWithCleanupAsync(
+                        udpClient,
+                        result.RemoteEndPoint,
+                        remoteIp,
+                        isMonitorRequest,
+                        token),
+                    CancellationToken.None);
                 _requestTasks[requestId] = requestTask;
                 _ = requestTask.ContinueWith(
                     (_, state) =>
@@ -197,13 +207,15 @@ public class DiscoveryServer
     }
 
     private async Task ProcessRequestWithCleanupAsync(
-        int requestId,
         UdpClient udpClient,
         IPEndPoint remoteEndPoint,
         string remoteIp,
         bool isMonitorRequest,
         CancellationToken token)
     {
+        using var requestDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        requestDeadline.CancelAfter(RequestDeadline);
+        CancellationToken requestToken = requestDeadline.Token;
         try
         {
             string[] printerSnapshot = Volatile.Read(ref _exposedPrinters);
@@ -212,7 +224,7 @@ public class DiscoveryServer
                 printerSnapshot,
                 scannerSnapshot,
                 isMonitorRequest,
-                token).ConfigureAwait(false);
+                requestToken).ConfigureAwait(false);
             if (responseBytes == null)
                 return;
 
@@ -221,14 +233,17 @@ public class DiscoveryServer
             TrackClient(remoteIp, isMonitorRequest);
             try
             {
-                await udpClient.SendAsync(responseBytes, remoteEndPoint, token).ConfigureAwait(false);
+                await udpClient.SendAsync(responseBytes, remoteEndPoint, requestToken).ConfigureAwait(false);
             }
             finally
             {
                 CryptographicOperations.ZeroMemory(responseBytes);
             }
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (OperationCanceledException)
+        {
+            AppLogger.Log($"[DISCOVERY] Request from {remoteIp} cancelled or exceeded its deadline.");
+        }
         catch (Exception ex)
         {
             AppLogger.Error($"[DISCOVERY] Request from {remoteIp} failed", ex);
@@ -248,11 +263,13 @@ public class DiscoveryServer
         List<PrinterInfo> localPrinters;
         try
         {
-            localPrinters = await Task.Run(SpoolerApi.GetLocalPrintersDetailed, CancellationToken.None)
-                .WaitAsync(DeviceQueryTimeout, token)
-                .ConfigureAwait(false);
+            // This synchronous platform call runs inside the tracked request task. StopAsync
+            // awaits that task, so no timed-out spooler worker can escape lifecycle ownership.
+            token.ThrowIfCancellationRequested();
+            localPrinters = _printerDetailsProvider(token);
+            token.ThrowIfCancellationRequested();
         }
-        catch (Exception ex) when (ex is TimeoutException || ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             AppLogger.Log($"[DISCOVERY] Printer detail query unavailable: {ex.GetType().Name}.");
             localPrinters = new List<PrinterInfo>();
@@ -276,8 +293,8 @@ public class DiscoveryServer
             {
                 try
                 {
-                    var package = await _driverPackageService.GetDriverPackageAsync(driverName, token)
-                        .WaitAsync(DeviceQueryTimeout, token)
+                    var package = await _driverPackageService
+                        .GetDriverPackageAsync(driverName, token)
                         .ConfigureAwait(false);
                     if (package != null)
                     {
@@ -286,7 +303,7 @@ public class DiscoveryServer
                         printerInfo.DriverSizeBytes = package.TotalSizeBytes;
                     }
                 }
-                catch (Exception ex) when (ex is TimeoutException || ex is not OperationCanceledException)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     AppLogger.Log($"[DISCOVERY] Driver metadata unavailable for '{driverName}': {ex.GetType().Name}.");
                 }
@@ -299,7 +316,7 @@ public class DiscoveryServer
         if (exposedScanners.Length > 0)
         {
             List<ScannerInfo> localScanners = await _scannerService
-                .GetLocalScannersAsync(token, DeviceQueryTimeout)
+                .GetLocalScannersAsync(token)
                 .ConfigureAwait(false);
             foreach (string scannerName in exposedScanners)
             {
@@ -432,6 +449,14 @@ public class DiscoveryServer
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(MaxExposedDevices)
             .ToArray();
+
+    private static List<PrinterInfo> DefaultPrinterDetailsProvider(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        List<PrinterInfo> result = SpoolerApi.GetLocalPrintersDetailed();
+        token.ThrowIfCancellationRequested();
+        return result;
+    }
 
     private static string GetLocalIPAddress()
     {

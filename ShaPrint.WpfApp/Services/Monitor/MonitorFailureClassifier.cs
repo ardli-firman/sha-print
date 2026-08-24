@@ -20,6 +20,7 @@ internal static class MonitorFailureClassifier
     internal static MonitorFailureCategory Classify(Exception exception)
         => exception switch
         {
+            MonitorAuthenticationFailedException => MonitorFailureCategory.AuthMismatch,
             MonitorOverloadedException => MonitorFailureCategory.Overloaded,
             CryptographicException => MonitorFailureCategory.AuthMismatch,
             JsonException or InvalidDataException or EndOfStreamException
