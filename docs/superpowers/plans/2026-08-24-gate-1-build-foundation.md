@@ -181,7 +181,7 @@ git commit -m "fix(ipp): normalize unsupported version responses"
 
 **Interfaces:**
 - Consumes: concurrent calls to `JobManager.CreateJob(string printerName, string documentName)`.
-- Produces: unique positive integer IDs via `Interlocked.Increment`, retained jobs via `ConcurrentDictionary<int, IppJob>`, and snapshot reads from `GetAllJobs()`.
+- Produces: unique positive integer IDs via `Interlocked.Increment`, retained jobs via `ConcurrentDictionary<int, IppJob>`, snapshot reads from `GetAllJobs()`, and an independent `SharpIppServer` protocol object per request.
 
 - [ ] **Step 1: Add a deterministic concurrent JobManager test**
 
@@ -259,9 +259,19 @@ dotnet test ShaPrint.Tests/ShaPrint.Tests.csproj -c Release --no-restore --filte
 
 Expected: `JobManager_CreateJobConcurrently_RetainsUniqueJobs` fails through lost/duplicate jobs or concurrent dictionary mutation. The server concurrency test must complete without hidden exceptions; if it independently exposes SharpIpp instance state, retain that failure as evidence for a per-request protocol instance.
 
-- [ ] **Step 5: Replace JobManager shared state with concurrent primitives**
+- [ ] **Step 5: Replace shared protocol and JobManager state with request-local/concurrent primitives**
 
-Update the `JobManager` fields and methods in `IppServer.cs`:
+Remove the `_ippProtocol` field and both constructor assignments. At the start of `ProcessRequestAsync`, create a protocol object local to this request and use it for all parse/serialize/send calls:
+
+```csharp
+var ippProtocol = new SharpIppServer();
+IIppRequest request = await ippProtocol.ReceiveRequestAsync(inputStream);
+// ... dispatch and build response ...
+IIppResponseMessage rawResponse = await ippProtocol.CreateRawResponseAsync(response);
+await ippProtocol.SendRawResponseAsync(rawResponse, outputStream);
+```
+
+Use the same local `ippProtocol` in the `IppRequestException` catch block when sending the error response. Then update the `JobManager` fields and methods in `IppServer.cs`:
 
 ```csharp
 private readonly System.Collections.Concurrent.ConcurrentDictionary<int, IppJob> _jobs = new();
@@ -309,15 +319,7 @@ Run:
 }
 ```
 
-Expected: all 10 runs pass. If the server test still fails after JobManager and test-spooler fixes, add a local `SharpIppServer` inside `ProcessRequestAsync`:
-
-```csharp
-var ippProtocol = new SharpIppServer();
-IIppRequest request = await ippProtocol.ReceiveRequestAsync(inputStream);
-// Use ippProtocol for CreateRawResponseAsync and SendRawResponseAsync in this request.
-```
-
-Remove the `_ippProtocol` field only when this failing test proves shared protocol state is unsafe.
+Expected: all 10 runs pass with no parser state shared between concurrent HTTP requests.
 
 - [ ] **Step 7: Commit the concurrent job fix**
 
