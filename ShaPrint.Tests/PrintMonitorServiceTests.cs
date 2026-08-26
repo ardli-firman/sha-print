@@ -346,7 +346,7 @@ namespace ShaPrint.Tests
             }
         }
 
-        private sealed class CountingNotification : ShaPrint.WpfApp.Services.INotificationService
+        private sealed class CountingNotification : ShaPrint.Platform.Windows.INotificationService
         {
             public int Shown { get; private set; }
             public void ShowPrinterError(string printerName, string errorDescription) => Shown++;
@@ -358,7 +358,7 @@ namespace ShaPrint.Tests
             public void ShowScanFailed(string errorMessage) { }
             public void ShowSecurityAlert(string message, string detail) { }
             public void ShowToast(string title, string body,
-                ShaPrint.WpfApp.Services.ToastAction? action = null) { }
+                ShaPrint.Platform.Windows.ToastAction? action = null) { }
         }
     }
 }

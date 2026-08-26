@@ -6,6 +6,7 @@ using System.IO;
 using System.Reflection;
 using Wpf.Ui;
 using ShaPrint.WpfApp.Views.Pages;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.WpfApp.ViewModels.Pages
 {
@@ -77,10 +78,10 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
 
         public bool RunOnStartup
         {
-            get => Utils.StartupManager.IsStartupEnabled();
+            get => StartupManager.IsStartupEnabled();
             set
             {
-                Utils.StartupManager.SetStartup(value);
+                StartupManager.SetStartup(value);
                 OnPropertyChanged(nameof(RunOnStartup));
             }
         }

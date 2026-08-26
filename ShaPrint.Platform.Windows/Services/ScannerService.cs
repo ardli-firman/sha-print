@@ -8,7 +8,7 @@ using System.Collections.Concurrent;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
 
-namespace ShaPrint.Server
+namespace ShaPrint.Platform.Windows
 {
     public class ScannerService
     {

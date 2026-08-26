@@ -6,6 +6,7 @@ using ShaPrint.Core.Network;
 using ShaPrint.WpfApp.Models;
 using ShaPrint.WpfApp.ViewModels.Pages;
 using ShaPrint.Server;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.WpfApp.Services.Server
 {

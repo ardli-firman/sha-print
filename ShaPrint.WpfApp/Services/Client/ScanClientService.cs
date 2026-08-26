@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
 using ShaPrint.WpfApp.Services;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.Client
 {

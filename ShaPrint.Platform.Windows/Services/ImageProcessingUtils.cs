@@ -1,7 +1,7 @@
 using System;
 using System.Threading.Tasks;
 
-namespace ShaPrint.Server
+namespace ShaPrint.Platform.Windows
 {
     public static class ImageProcessingUtils
     {

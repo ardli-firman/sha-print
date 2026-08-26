@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Threading.Tasks;
 using ShaPrint.Core;
 
-namespace ShaPrint.WpfApp.Services.Client
+namespace ShaPrint.Platform.Windows
 {
     /// <summary>
     /// Client-side driver package integrity verification.

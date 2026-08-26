@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.Server
 {

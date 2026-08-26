@@ -4,9 +4,8 @@ using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Win32;
 using ShaPrint.Core;
-using ShaPrint.Server;
 
-namespace ShaPrint.Client
+namespace ShaPrint.Platform.Windows
 {
     /// <summary>
     /// Manages virtual printer installation/removal using Win32 APIs.

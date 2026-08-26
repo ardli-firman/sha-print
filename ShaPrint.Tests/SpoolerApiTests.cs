@@ -1,4 +1,4 @@
-using ShaPrint.Server;
+using ShaPrint.Platform.Windows;
 using System;
 using System.Threading.Tasks;
 using Xunit;

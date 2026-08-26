@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using ShaPrint.Core;
-using ShaPrint.WpfApp.Services.Client;
+using ShaPrint.Platform.Windows;
 using Xunit;
 
 namespace ShaPrint.Tests

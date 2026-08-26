@@ -3,7 +3,7 @@ using System;
 using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using ShaPrint.Server;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.Tests
 {

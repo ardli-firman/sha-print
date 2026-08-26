@@ -12,6 +12,7 @@ using ShaPrint.Core;
 using ShaPrint.WpfApp.Services;
 using ShaPrint.WpfApp.Models;
 using ShaPrint.Core.Network;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.Server
 {

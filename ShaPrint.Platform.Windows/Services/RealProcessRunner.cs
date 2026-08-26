@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Threading.Tasks;
 using ShaPrint.Core.Abstractions;
 
-namespace ShaPrint.WpfApp.Services.Client
+namespace ShaPrint.Platform.Windows
 {
     /// <summary>
     /// Production implementation of IProcessRunner using System.Diagnostics.Process.

@@ -17,6 +17,7 @@ using System.Windows.Controls;
 using Wpf.Ui;
 using ShaPrint.WpfApp.Services;
 using Wpf.Ui.Controls;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.WpfApp.ViewModels.Pages
 {

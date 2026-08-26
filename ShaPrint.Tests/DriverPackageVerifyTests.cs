@@ -3,7 +3,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
-using ShaPrint.WpfApp.Services.Client;
+using ShaPrint.Platform.Windows;
 using Xunit;
 
 namespace ShaPrint.Tests

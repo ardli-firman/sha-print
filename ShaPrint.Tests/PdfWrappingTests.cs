@@ -2,7 +2,7 @@ using Xunit;
 using System;
 using System.IO;
 using System.Text;
-using ShaPrint.Server;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.Tests
 {

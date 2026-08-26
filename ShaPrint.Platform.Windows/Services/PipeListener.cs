@@ -18,7 +18,7 @@ using ShaPrint.Core.Network;
 
 
 
-namespace ShaPrint.Client
+namespace ShaPrint.Platform.Windows
 
 {
 
@@ -246,7 +246,13 @@ namespace ShaPrint.Client
 
 
 
-        private async Task SendToServerAsync(byte[] spoolData, string documentName)
+        /// <summary>
+        /// Sends the captured spool data to the ShaPrint server over TCP (port 9877)
+        /// using the encrypted <see cref="PrintJobPayload"/> protocol. Returns true when
+        /// the server accepted the job; false on any failure (a failure also fires
+        /// <see cref="OnServerUnreachable"/> for the reachability tracker).
+        /// </summary>
+        internal async Task<bool> SendToServerAsync(byte[] spoolData, string documentName)
 
         {
 
@@ -283,6 +289,7 @@ namespace ShaPrint.Client
                 await PrintJobPayload.WriteAsync(stream, payload);
 
                 ShaPrint.Core.AppLogger.Log($"[CLIENT] Successfully sent {spoolData.Length} bytes to Server for printer: {_targetPrinterName}");
+                return true;
 
             }
 
@@ -301,6 +308,7 @@ namespace ShaPrint.Client
                 }
             }
 
+            return false;
         }
 
     }

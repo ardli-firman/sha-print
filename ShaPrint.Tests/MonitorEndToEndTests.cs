@@ -9,6 +9,7 @@ using ShaPrint.WpfApp.Services.Monitor;
 using ShaPrint.WpfApp.Services;
 using ShaPrint.WpfApp.Services.Server;
 using ShaPrint.Server;
+using ShaPrint.Platform.Windows;
 using Xunit;
 
 namespace ShaPrint.Tests

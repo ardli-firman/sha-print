@@ -27,6 +27,8 @@
   <ItemGroup>
     <ProjectReference Include="..\ShaPrint.Core\ShaPrint.Core.csproj" />
     <ProjectReference Include="..\ShaPrint.WpfApp\ShaPrint.WpfApp.csproj" />
+    <!-- Extracted Windows platform services (DriverInstaller, VirtualPrinterManager, ...) moved here. -->
+    <ProjectReference Include="..\ShaPrint.Platform.Windows\ShaPrint.Platform.Windows.csproj" />
   </ItemGroup>
 
 </Project>

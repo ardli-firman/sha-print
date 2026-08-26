@@ -1,5 +1,5 @@
 using System.Reflection;
-using ShaPrint.Client;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.Tests;
 

@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Compression;
-using ShaPrint.WpfApp.Services.Client;
+using ShaPrint.Platform.Windows;
 using Xunit;
 
 namespace ShaPrint.Tests

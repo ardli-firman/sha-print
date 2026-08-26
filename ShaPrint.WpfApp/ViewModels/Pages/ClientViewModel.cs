@@ -4,7 +4,7 @@ using ShaPrint.Core;
 using ShaPrint.Core.Network;
 using ShaPrint.Core.Abstractions;
 using ShaPrint.Client;
-using ShaPrint.WpfApp.Services.Client;
+using ShaPrint.Platform.Windows;
 using ShaPrint.WpfApp.Views.Pages;
 using System;
 using System.Collections.Generic;
@@ -244,7 +244,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             StatusText = "Scanning...";
             DiscoveredPrinters.Clear();
 
-            var localPrinters = ShaPrint.Server.SpoolerApi.GetLocalPrinters();
+            var localPrinters = SpoolerApi.GetLocalPrinters();
             var discoveredServers = await _discoveryClient.DiscoverServersAsync(targetIp);
 
             foreach (var server in discoveredServers)
@@ -855,7 +855,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
                 {
                     // Fallback: check if the old format OS printer exists without config
                     string oldName = $"ShaPrint - {item.Printer.Name}";
-                    var localPrinters = ShaPrint.Server.SpoolerApi.GetLocalPrinters();
+                    var localPrinters = SpoolerApi.GetLocalPrinters();
                     if (localPrinters.Contains(oldName, StringComparer.OrdinalIgnoreCase))
                     {
                         virtualPrinterName = oldName;

@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ShaPrint.Core\ShaPrint.Core.csproj" />
+    <ProjectReference Include="..\ShaPrint.Platform.Windows\ShaPrint.Platform.Windows.csproj" />
   </ItemGroup>
 
   <ItemGroup>

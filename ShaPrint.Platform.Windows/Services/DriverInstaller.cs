@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using ShaPrint.Core;
 using ShaPrint.Core.Abstractions;
 
-namespace ShaPrint.WpfApp.Services.Client
+namespace ShaPrint.Platform.Windows
 {
     /// <summary>
     /// Result of a driver installation attempt.

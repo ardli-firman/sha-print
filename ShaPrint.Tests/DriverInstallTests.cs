@@ -3,7 +3,7 @@ using System.IO;
 using System.Threading.Tasks;
 using ShaPrint.Core.Abstractions;
 using ShaPrint.Tests; // MockProcessRunner, MockFileSystem
-using ShaPrint.WpfApp.Services.Client;
+using ShaPrint.Platform.Windows;
 using Xunit;
 
 namespace ShaPrint.Tests

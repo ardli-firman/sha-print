@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
-namespace ShaPrint.Server
+namespace ShaPrint.Platform.Windows
 {
     public static class SpoolerApi
     {

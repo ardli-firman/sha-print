@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using ShaPrint.Core;
 using ShaPrint.Server;
 using ShaPrint.WpfApp.Services;
+using ShaPrint.Platform.Windows;
 using Xunit;
 
 namespace ShaPrint.Tests

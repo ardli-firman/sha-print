@@ -3,7 +3,7 @@ using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
-namespace ShaPrint.Server
+namespace ShaPrint.Platform.Windows
 {
     public static class ImageProcessor
     {

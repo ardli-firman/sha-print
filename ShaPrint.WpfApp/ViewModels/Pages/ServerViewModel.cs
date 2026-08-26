@@ -16,6 +16,7 @@ using ShaPrint.WpfApp.Services;
 using System.Collections.Concurrent;
 using ShaPrint.Core.Network;
 using ShaPrint.WpfApp.Services.Server;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.WpfApp.ViewModels.Pages
 {
@@ -116,7 +117,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _snackbarService = snackbarService;
             _printMonitorService = printMonitorService;
             _scannerService = new ScannerService();
-            _driverPackageService = new DriverPackageService(new ShaPrint.WpfApp.Services.Client.RealProcessRunner(), new ShaPrint.Core.Abstractions.RealFileSystem());
+            _driverPackageService = new DriverPackageService(new RealProcessRunner(), new ShaPrint.Core.Abstractions.RealFileSystem());
             _discoveryServer = new DiscoveryServer(notificationService);
             _discoveryServer.SetDriverPackageService(_driverPackageService);
             _discoveryServer.SetDriverSharingEnabled(!IsUnitTest && (ShaPrint.WpfApp.Models.AppSettings.Current.DriverSharing?.Enabled ?? true));

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-namespace ShaPrint.Client
+namespace ShaPrint.Platform.Windows
 {
     /// <summary>
     /// Resolves the best locally-installed printer driver for a virtual printer install.

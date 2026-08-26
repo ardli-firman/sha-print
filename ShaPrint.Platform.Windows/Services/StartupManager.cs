@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using ShaPrint.Core;
 
-namespace ShaPrint.WpfApp.Utils
+namespace ShaPrint.Platform.Windows
 {
     public static class StartupManager
     {

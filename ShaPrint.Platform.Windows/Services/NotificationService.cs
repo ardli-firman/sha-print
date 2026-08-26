@@ -2,7 +2,7 @@ using System;
 using Microsoft.Toolkit.Uwp.Notifications;
 using ShaPrint.Core;
 
-namespace ShaPrint.WpfApp.Services;
+namespace ShaPrint.Platform.Windows;
 
 public class NotificationService : INotificationService
 {

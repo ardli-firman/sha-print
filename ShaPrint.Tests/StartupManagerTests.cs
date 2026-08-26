@@ -1,5 +1,5 @@
 using System.IO;
-using ShaPrint.WpfApp.Utils;
+using ShaPrint.Platform.Windows;
 using Xunit;
 
 namespace ShaPrint.Tests

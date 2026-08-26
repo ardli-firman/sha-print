@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 using ShaPrint.Core;
 using ShaPrint.Core.Network;
 
-namespace ShaPrint.WpfApp.Services.Client
+namespace ShaPrint.Platform.Windows
 {
     /// <summary>
     /// Client-side service that downloads driver packages from the server,

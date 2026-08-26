@@ -3,7 +3,7 @@ using System.IO;
 using System.IO.Compression;
 using ShaPrint.Core;
 
-namespace ShaPrint.WpfApp.Services.Client
+namespace ShaPrint.Platform.Windows
 {
     /// <summary>
     /// Safe zip extraction helper with containment checks and resource caps.

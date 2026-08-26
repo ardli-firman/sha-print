@@ -1,7 +1,7 @@
 using Xunit;
 using System;
 using System.Threading.Tasks;
-using ShaPrint.Client;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.Tests
 {

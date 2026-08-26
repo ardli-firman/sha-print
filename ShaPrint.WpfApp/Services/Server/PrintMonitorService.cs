@@ -8,6 +8,7 @@ using ShaPrint.Core;
 using Wpf.Ui;
 using ShaPrint.WpfApp.Models;
 using ShaPrint.WpfApp.Services;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.WpfApp.Services.Server
 {

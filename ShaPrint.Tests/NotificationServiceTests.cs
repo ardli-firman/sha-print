@@ -1,4 +1,4 @@
-using ShaPrint.WpfApp.Services;
+using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.Tests;
 

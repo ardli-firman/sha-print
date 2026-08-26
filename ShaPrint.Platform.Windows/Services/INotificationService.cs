@@ -1,4 +1,4 @@
-namespace ShaPrint.WpfApp.Services;
+namespace ShaPrint.Platform.Windows;
 
 public interface INotificationService
 {

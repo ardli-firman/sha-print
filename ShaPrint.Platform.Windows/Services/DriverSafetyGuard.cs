@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using ShaPrint.Core;
 using ShaPrint.Core.Abstractions;
 
-namespace ShaPrint.WpfApp.Services.Client
+namespace ShaPrint.Platform.Windows
 {
     /// <summary>
     /// Critical Safety Guard to prevent operating system crashes (BSOD),

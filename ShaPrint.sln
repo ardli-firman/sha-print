@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.WpfApp", "ShaPrint
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Platform.Abstractions", "ShaPrint.Platform.Abstractions\ShaPrint.Platform.Abstractions.csproj", "{EEB59B15-B4E3-4021-B882-34CA5AF98D09}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Platform.Windows", "ShaPrint.Platform.Windows\ShaPrint.Platform.Windows.csproj", "{5B5DC485-229F-43CD-A321-A35FAE186CEA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -42,5 +44,9 @@ Global
 		{EEB59B15-B4E3-4021-B882-34CA5AF98D09}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{EEB59B15-B4E3-4021-B882-34CA5AF98D09}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{EEB59B15-B4E3-4021-B882-34CA5AF98D09}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5B5DC485-229F-43CD-A321-A35FAE186CEA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B5DC485-229F-43CD-A321-A35FAE186CEA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B5DC485-229F-43CD-A321-A35FAE186CEA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B5DC485-229F-43CD-A321-A35FAE186CEA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

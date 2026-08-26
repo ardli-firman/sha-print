@@ -4,7 +4,7 @@ using System.Windows;
 using System.Threading.Tasks;
 using ShaPrint.Core;
 
-namespace ShaPrint.Server
+namespace ShaPrint.Platform.Windows
 {
     public static class FirewallManager
     {
