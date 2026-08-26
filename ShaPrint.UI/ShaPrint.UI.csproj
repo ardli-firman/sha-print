@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Multi-TFM: plain net8.0 for macOS/Linux (no Windows-only reference), and
+         net8.0-windows10.0.17763 so ShaPrint.UI can reference ShaPrint.Platform.Windows
+         (which targets net8.0-windows10.0.17763). NOTE: this is a small deviation from the
+         plan's "net8.0-windows" shorthand — the full TFM is required for a compatible
+         cross-project reference (see task report). -->
+    <TargetFrameworks>net8.0;net8.0-windows10.0.17763</TargetFrameworks>
+
+    <!-- Exe (console) for the plain net8.0 TFM so CLI work (Task 8) has a console when
+         headless; WinExe (no console window) for the Windows TFM. -->
+    <OutputType>Exe</OutputType>
+    <OutputType Condition="'$(TargetFramework)' == 'net8.0-windows10.0.17763'">WinExe</OutputType>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- WINDOWS is consumed by #if WINDOWS regions (PlatformServiceCollectionExtensions).
+         Defined explicitly per-TFM so the switch is deterministic regardless of SDK defaults. -->
+    <DefineConstants Condition="'$(TargetFramework)' == 'net8.0-windows10.0.17763'">$(DefineConstants);WINDOWS</DefineConstants>
+
+    <!-- Allow cross-building the Windows TFM on non-Windows hosts (CI). -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <WindowsSdkPackageVersion>10.0.17763.56</WindowsSdkPackageVersion>
+
+    <!-- Valid asInvoker manifest; referenced only for the Windows TFM (see app.manifest,
+         created in the same task so it never points at a missing file). -->
+    <ApplicationManifest Condition="'$(TargetFramework)' == 'net8.0-windows10.0.17763'">app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ShaPrint.Core\ShaPrint.Core.csproj" />
+    <ProjectReference Include="..\ShaPrint.Platform.Abstractions\ShaPrint.Platform.Abstractions.csproj" />
+  </ItemGroup>
+
+  <!-- ShaPrint.Platform.Windows is net8.0-windows10.0.17763-only; reference it only for the
+       matching TFM so the net8.0 build stays buildable on macOS/Linux. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows10.0.17763'">
+    <ProjectReference Include="..\ShaPrint.Platform.Windows\ShaPrint.Platform.Windows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.3" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,11 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ShaPrint.UI.Views.MainWindow"
+        Title="ShaPrint"
+        Width="900"
+        Height="600">
+    <TextBlock Text="ShaPrint"
+               HorizontalAlignment="Center"
+               VerticalAlignment="Center"
+               FontSize="32" />
+</Window>
