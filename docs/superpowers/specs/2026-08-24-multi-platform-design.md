@@ -76,68 +76,68 @@ Catatan: `ISystemIntegration` yang ada di revisi lama TIDAK dipertahankan sebaga
 
 ```
 ShaPrint.sln
-├── ShaPrint.Core/                        # Existing, no changes
-│   ├── Network/                          # PrinterInfo, ScannerInfo, MonitorModels,
-│   │                                     #   PrintJobPayload, DiscoveryResponseMessage
-│   ├── CryptoHelper.cs
-│   ├── Constants.cs                      # DiscoveryUdpPort=9876, PrintTcpPort=9877,
-│   │                                     #   MonitorTcpPort=9878, SharedSecret, SetNetworkChannel()
-│   └── Validators.cs
-│
-├── ShaPrint.Platform.Abstractions/       # NEW - pure interfaces (net8.0)
-│   ├── IPrinterManager.cs
-│   ├── IVirtualPrinterManager.cs
-│   ├── IScannerService.cs
-│   ├── IStartupManager.cs
-│   ├── INotificationService.cs           # + ToastAction type
-│   ├── IFirewallManager.cs
-│   └── IPrintRelayClient.cs
-│
-├── ShaPrint.Platform.Windows/            # NEW - net8.0-windows10.0.17763
-│   ├── Adapters/                         # interface implementations
-│   │   ├── WindowsPrinterManager.cs      # wraps SpoolerApi
-│   │   ├── WindowsVirtualPrinterManager.cs # wraps VirtualPrinterManager
-│   │   ├── WindowsScannerService.cs      # wraps ScannerService (WIA)
-│   │   ├── WindowsStartupManager.cs      # wraps Utils/StartupManager
-│   │   ├── WindowsNotificationService.cs # wraps NotificationService
-│   │   ├── WindowsFirewallManager.cs     # wraps FirewallManager
-│   │   └── WindowsPrintRelayClient.cs    # implements IPrintRelayClient (PipeListener path)
-│   └── Services/                         # git mv'd from ShaPrint.WpfApp/Services
-│       ├── SpoolerApi.cs, ScannerService.cs, FirewallManager.cs
-│       ├── VirtualPrinterManager.cs, PipeListener.cs
-│       ├── DriverInstaller.cs, DriverPackageManager.cs, DriverNameResolver.cs,
-│       │   DriverPackageVerify.cs, SafeZipExtractor.cs, DriverSafetyGuard.cs,
-│       │   RealProcessRunner.cs
-│       └── NotificationService.cs, INotificationService.cs (root), Utils/StartupManager.cs
-│
-├── ShaPrint.Platform.Unix/               # NEW - net8.0 (macOS + Linux, runtime guard)
-│   ├── UnixPrinterManager.cs             # CLI: lpstat -p / lp -d / lpadmin / lpinfo
-│   ├── UnixVirtualPrinterManager.cs      # CUPS backend + PPD, privilege escalation
-│   ├── UnixScannerService.cs             # SANE via scanimage CLI
-│   ├── UnixStartupManager.cs             # LaunchAgent (macOS) / systemd user (Linux)
-│   ├── UnixNotificationService.cs        # osascript / notify-send
-│   ├── UnixFirewallManager.cs            # pfctl / ufw / firewall-cmd / iptables (best-effort)
-│   └── UnixPrintRelayClient.cs           # CLI sender path (shared logic)
-│
-├── ShaPrint.Android/                     # NEW - separate project (net8.0-android)
-│   ├── MainActivity.cs                   # : AvaloniaMainActivity
-│   ├── AndroidManifest.xml
-│   ├── Services/                         # discovery + multicast lock + print relay
-│   └── Resources/
-│
-├── ShaPrint.UI/                          # NEW - Avalonia 11.2.x
-│   ├── ShaPrint.UI.csproj                # multi-TFM: net8.0;net8.0-windows
-│   ├── Program.cs                        # SINGLE entry point (GUI + CLI `send` branch)
-│   ├── app.manifest                      # created together with csproj if referenced
-│   ├── App.axaml / App.axaml.cs
-│   ├── Services/                         # shared/injectable services (see I below)
-│   ├── ViewModels/                       # migrated real code from WpfApp/ViewModels
-│   │   ├── MainWindowViewModel.cs
-│   │   └── Pages/ (Server, Client, Monitor, Scan, Settings, Updates, Welcome)
-│   └── Views/                            # Avalonia XAML (compiled bindings, x:DataType)
-│
-├── ShaPrint.Updater/                     # Existing, minimal changes
-└── ShaPrint.Tests/                       # Extended with platform contract tests
++-- ShaPrint.Core/                        # Existing, no changes
+|   +-- Network/                          # PrinterInfo, ScannerInfo, MonitorModels,
+|   |                                     #   PrintJobPayload, DiscoveryResponseMessage
+|   +-- CryptoHelper.cs
+|   +-- Constants.cs                      # DiscoveryUdpPort=9876, PrintTcpPort=9877,
+|   |                                     #   MonitorTcpPort=9878, SharedSecret, SetNetworkChannel()
+|   `-- Validators.cs
+|
++-- ShaPrint.Platform.Abstractions/       # NEW - pure interfaces (net8.0)
+|   +-- IPrinterManager.cs
+|   +-- IVirtualPrinterManager.cs
+|   +-- IScannerService.cs
+|   +-- IStartupManager.cs
+|   +-- INotificationService.cs           # + ToastAction type
+|   +-- IFirewallManager.cs
+|   `-- IPrintRelayClient.cs
+|
++-- ShaPrint.Platform.Windows/            # NEW - net8.0-windows10.0.17763
+|   +-- Adapters/                         # interface implementations
+|   |   +-- WindowsPrinterManager.cs      # wraps SpoolerApi
+|   |   +-- WindowsVirtualPrinterManager.cs # wraps VirtualPrinterManager
+|   |   +-- WindowsScannerService.cs      # wraps ScannerService (WIA)
+|   |   +-- WindowsStartupManager.cs      # wraps Utils/StartupManager
+|   |   +-- WindowsNotificationService.cs # wraps NotificationService
+|   |   +-- WindowsFirewallManager.cs     # wraps FirewallManager
+|   |   `-- WindowsPrintRelayClient.cs    # implements IPrintRelayClient (PipeListener path)
+|   `-- Services/                         # git mv'd from ShaPrint.WpfApp/Services
+|       +-- SpoolerApi.cs, ScannerService.cs, FirewallManager.cs
+|       +-- VirtualPrinterManager.cs, PipeListener.cs
+|       +-- DriverInstaller.cs, DriverPackageManager.cs, DriverNameResolver.cs,
+|       |   DriverPackageVerify.cs, SafeZipExtractor.cs, DriverSafetyGuard.cs,
+|       |   RealProcessRunner.cs
+|       `-- NotificationService.cs, INotificationService.cs (root), Utils/StartupManager.cs
+|
++-- ShaPrint.Platform.Unix/               # NEW - net8.0 (macOS + Linux, runtime guard)
+|   +-- UnixPrinterManager.cs             # CLI: lpstat -p / lp -d / lpadmin / lpinfo
+|   +-- UnixVirtualPrinterManager.cs      # CUPS backend + PPD, privilege escalation
+|   +-- UnixScannerService.cs             # SANE via scanimage CLI
+|   +-- UnixStartupManager.cs             # LaunchAgent (macOS) / systemd user (Linux)
+|   +-- UnixNotificationService.cs        # osascript / notify-send
+|   +-- UnixFirewallManager.cs            # pfctl / ufw / firewall-cmd / iptables (best-effort)
+|   `-- UnixPrintRelayClient.cs           # CLI sender path (shared logic)
+|
++-- ShaPrint.Android/                     # NEW - separate project (net8.0-android)
+|   +-- MainActivity.cs                   # : AvaloniaMainActivity
+|   +-- AndroidManifest.xml
+|   +-- Services/                         # discovery + multicast lock + print relay
+|   `-- Resources/
+|
++-- ShaPrint.UI/                          # NEW - Avalonia 11.2.x
+|   +-- ShaPrint.UI.csproj                # multi-TFM: net8.0;net8.0-windows
+|   +-- Program.cs                        # SINGLE entry point (GUI + CLI `send` branch)
+|   +-- app.manifest                      # created together with csproj if referenced
+|   +-- App.axaml / App.axaml.cs
+|   +-- Services/                         # shared/injectable services (see I below)
+|   +-- ViewModels/                       # migrated real code from WpfApp/ViewModels
+|   |   +-- MainWindowViewModel.cs
+|   |   `-- Pages/ (Server, Client, Monitor, Scan, Settings, Updates, Welcome)
+|   `-- Views/                            # Avalonia XAML (compiled bindings, x:DataType)
+|
++-- ShaPrint.Updater/                     # Existing, minimal changes
+`-- ShaPrint.Tests/                       # Extended with platform contract tests
 ```
 
 ---
@@ -610,25 +610,25 @@ Android diverifikasi via `dotnet build -f net8.0-android` pada `ubuntu-latest` (
 ### Current Dependencies (WPF)
 ```
 ShaPrint.WpfApp
-├── CommunityToolkit.Mvvm 8.4.2 (ViewModels)
-├── FontAwesome.Sharp 6.6.0 (Icons)
-├── Hardcodet.NotifyIcon.Wpf 2.0.1 (System tray)
-├── Microsoft.Extensions.Hosting 10.0.8 (DI)
-├── Microsoft.Toolkit.Uwp.Notifications 7.1.3 (Toast)
-├── System.IO.Pipes.AccessControl 5.0.0 (Named pipes)
-└── WPF-UI 4.3.0 (Fluent theme)
++-- CommunityToolkit.Mvvm 8.4.2 (ViewModels)
++-- FontAwesome.Sharp 6.6.0 (Icons)
++-- Hardcodet.NotifyIcon.Wpf 2.0.1 (System tray)
++-- Microsoft.Extensions.Hosting 10.0.8 (DI)
++-- Microsoft.Toolkit.Uwp.Notifications 7.1.3 (Toast)
++-- System.IO.Pipes.AccessControl 5.0.0 (Named pipes)
+`-- WPF-UI 4.3.0 (Fluent theme)
 ```
 
 ### New Dependencies (Avalonia)
 ```
 ShaPrint.UI (multi-TFM: net8.0;net8.0-windows)
-├── Avalonia 11.2.x
-├── Avalonia.Desktop (Windows/macOS/Linux)
-├── Avalonia.Themes.Fluent
-├── Avalonia.Fonts.Inter
-├── CommunityToolkit.Mvvm 8.4.2 (ViewModels - same)
-├── FluentAvalonia (Fluent theme - replaces WPF-UI)
-└── Microsoft.Extensions.Hosting 10.0.8 (DI - same)
++-- Avalonia 11.2.x
++-- Avalonia.Desktop (Windows/macOS/Linux)
++-- Avalonia.Themes.Fluent
++-- Avalonia.Fonts.Inter
++-- CommunityToolkit.Mvvm 8.4.2 (ViewModels - same)
++-- FluentAvalonia (Fluent theme - replaces WPF-UI)
+`-- Microsoft.Extensions.Hosting 10.0.8 (DI - same)
 ```
 
 ### Platform Dependencies
