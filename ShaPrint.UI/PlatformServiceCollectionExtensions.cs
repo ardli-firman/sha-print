@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using ShaPrint.Platform.Abstractions;
 using ShaPrint.UI.Services;
+using ShaPrint.UI.ViewModels;
+using ShaPrint.UI.ViewModels.Pages;
 #if WINDOWS
 using ShaPrint.Platform.Windows.Adapters;
 #endif
@@ -24,6 +26,7 @@ public static class PlatformServiceCollectionExtensions
     public static IServiceCollection AddPlatformWindows(this IServiceCollection services)
     {
         services.AddSharedServices();
+        services.AddViewModels();
 #if WINDOWS
         services.AddSingleton<IPrinterManager, WindowsPrinterManager>();
         services.AddSingleton<IVirtualPrinterManager, WindowsVirtualPrinterManager>();
@@ -46,6 +49,7 @@ public static class PlatformServiceCollectionExtensions
     public static IServiceCollection AddPlatformUnix(this IServiceCollection services)
     {
         services.AddSharedServices();
+        services.AddViewModels();
         // Task 7 akan mengisi implementasi Unix.
         return services;
     }
@@ -76,6 +80,38 @@ public static class PlatformServiceCollectionExtensions
         // GitHub-based auto-update: singleton + hosted background check (same split as WpfApp).
         services.AddSingleton<UpdateService>();
         services.AddHostedService(provider => provider.GetRequiredService<UpdateService>());
+
+        return services;
+    }
+
+    /// <summary>
+    /// ViewModel registrations (Task 5). Lifetimes mirror ShaPrint.WpfApp's App.xaml.cs:
+    /// the shell and long-lived page engines are singletons; Welcome and Updates are transient.
+    ///
+    /// <para>Page ViewModels that touch platform backends (<c>ServerViewModel</c>,
+    /// <c>ClientViewModel</c>, <c>ScanViewModel</c>, <c>SettingsViewModel</c>) take
+    /// <c>IServiceProvider</c> and resolve those interfaces lazily through
+    /// <see cref="ViewModelSupport.Resolve{T}"/>, so constructing them is safe on every platform
+    /// (before Task 7 a macOS/Linux build has no Windows-only backends registered).</para>
+    /// </summary>
+    public static IServiceCollection AddViewModels(this IServiceCollection services)
+    {
+        services.AddSingleton<MainWindowViewModel>();
+        services.AddTransient<WelcomeViewModel>();
+        services.AddSingleton<ServerViewModel>();
+        services.AddSingleton<ClientViewModel>();
+        services.AddSingleton<MonitorViewModel>();
+        services.AddSingleton<ScanViewModel>();
+        services.AddSingleton<SettingsViewModel>();
+        services.AddTransient<UpdatesViewModel>();
+
+        // Feed the persisted UI settings (Models.AppSettings) into UpdateService's background
+        // auto-check (channel, auto-update toggle, last-check gate).
+        services.AddSingleton<Func<UpdateCheckSettings>>(_ => () =>
+            new UpdateCheckSettings(
+                Models.AppSettings.Current.Channel,
+                Models.AppSettings.Current.AutoUpdateEnabled,
+                Models.AppSettings.Current.LastUpdateCheck));
 
         return services;
     }

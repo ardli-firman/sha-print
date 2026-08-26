@@ -3,6 +3,8 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using ShaPrint.UI.ViewModels;
+using ShaPrint.UI.ViewModels.Pages;
 
 namespace ShaPrint.UI;
 
@@ -32,9 +34,27 @@ public partial class App : Application
             Program.ConfigureServices(builder.Services);
             Host = builder.Build();
 
-            // Plain window for now; Task 5 wires MainWindowViewModel:
-            //   desktop.MainWindow = new MainWindow { DataContext = Host.Services.GetRequiredService<MainWindowViewModel>() };
-            desktop.MainWindow = new Views.MainWindow();
+            // Task 5: shell DataContext comes from DI. Views/Pages/*.axaml (Task 6) bind their
+            // DataContext off MainWindowViewModel.CurrentPage via DataTemplates.
+            desktop.MainWindow = new Views.MainWindow
+            {
+                DataContext = Host.Services.GetRequiredService<MainWindowViewModel>()
+            };
+
+            // Start hosted services (UpdateService background auto-check) — WpfApp awaited
+            // _host.StartAsync() in OnStartup. Fire-and-forget: HostedService start is async.
+            _ = Host.StartAsync();
+
+            // Restore the persisted mode (AppMode.json) — WelcomeViewModel drives the shell
+            // navigation (replaces the WPF WelcomePage code-behind call).
+            try
+            {
+                Host.Services.GetRequiredService<WelcomeViewModel>().CheckSavedModeAndNavigate();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Mode restore failed: {ex.Message}");
+            }
         }
 
         base.OnFrameworkInitializationCompleted();
