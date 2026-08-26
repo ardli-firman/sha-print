@@ -12,7 +12,7 @@ using ShaPrint.Core;
 using ShaPrint.Core.Abstractions;
 using ShaPrint.Core.Network;
 
-namespace ShaPrint.Server
+namespace ShaPrint.Platform.Windows
 {
     /// <summary>
     /// Server-side service that locates, exports, and caches driver packages

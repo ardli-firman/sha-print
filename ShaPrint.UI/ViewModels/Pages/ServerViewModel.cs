@@ -62,19 +62,22 @@ public class ServerSavedConfig
 /// <item><c>SpoolerApi.GetLocalPrinters</c> -> <see cref="IPrinterManager.GetLocalPrintersAsync"/>;</item>
 /// <item><c>ScannerService</c> (WIA) -> <see cref="IScannerService.GetLocalScanners"/>;</item>
 /// <item><c>FirewallManager.CheckAndAddFirewallRules</c> -> <see cref="IFirewallManager"/>;</item>
-/// <item><c>DriverPackageService</c> -> optional <see cref="IDriverPackageProvider"/> (no
-/// implementation is registered yet — see Startup).</item>
+/// <item><c>DriverPackageService</c> -> optional <see cref="IDriverPackageProvider"/> (the Windows
+/// implementation <see cref="WindowsDriverPackageProvider"/> is registered by
+/// <c>AddPlatformWindows</c>; macOS/Linux leave it unregistered so driver sharing resolves to
+/// "disabled" gracefully).</item>
+/// <item><c>PrintMonitorService</c> + <c>MonitorTcpServer</c> (Gap-closing task): the spooler
+/// auto-purge monitor and the TCP 9878 status server are started/stopped together with the
+/// server, same as WpfApp.</item>
 /// </list>
 ///
 /// Platform services are resolved through <see cref="ViewModelSupport.Resolve{T}"/> so the VM
 /// constructs on macOS/Linux too (before Task 7 there are no Unix backends): Start then reports
-/// "server engine unavailable" instead of crashing the shell.
-///
-/// deferred (migrated later, not stubbed): <c>PrintMonitorService</c> (spooler queue probe) and
-/// <c>MonitorTcpServer</c> (TCP 9878 status) from ShaPrint.WpfApp have no ShaPrint.UI equivalent
-/// yet; the 9878 <see cref="MonitorService"/> queries will fail until they land.
+/// "server engine unavailable" instead of crashing the shell. The VM also implements
+/// <see cref="IServerStatusSource"/> so <see cref="ServerStatusProvider"/> can compose the 9878
+/// payload from the same state the shell owns (mirrors WpfApp passing <c>this</c>).
 /// </summary>
-public partial class ServerViewModel : ObservableObject, IDisposable
+public partial class ServerViewModel : ObservableObject, IServerStatusSource, IDisposable
 {
     private static bool? _isUnitTest;
     public static bool IsUnitTest
@@ -92,15 +95,19 @@ public partial class ServerViewModel : ObservableObject, IDisposable
 
     private readonly DiscoveryServerService? _discoveryServer;
     private readonly PrintReceiverService? _printReceiver;
+    private readonly PrintMonitorService? _printMonitorService;
+    private readonly IDriverPackageProvider? _driverPackageProvider;
     private readonly IFirewallManager? _firewallManager;
     private readonly IPrinterManager? _printerManager;
     private readonly IScannerService? _scannerService;
     private readonly string _configFile;
+    private MonitorTcpServer? _monitorTcpServer;
 
     public DateTime? ServerStartTime { get; private set; }
 
-    /// <summary>Deferred: not fed yet — the DI-built <see cref="PrintReceiverService"/> has no
-    /// per-instance log callbacks (WpfApp passed LogJob/LogError to its PrintReceiver ctor). Kept for API parity.</summary>
+    /// <summary>Fed by the DI-built <see cref="PrintReceiverService"/> via <see cref="JobLogged"/>/
+    /// <see cref="ErrorLogged"/> events (Gap-closing task) and consumed by
+    /// <see cref="ServerStatusProvider"/> through <see cref="IServerStatusSource"/>.</summary>
     public ConcurrentQueue<JobHistoryEntry> RecentJobs { get; } = new();
     public ConcurrentQueue<ServerErrorEntry> Errors { get; } = new();
 
@@ -135,9 +142,24 @@ public partial class ServerViewModel : ObservableObject, IDisposable
         // need platform backends, so they are resolved defensively here.
         _discoveryServer = ViewModelSupport.Resolve<DiscoveryServerService>(serviceProvider);
         _printReceiver = ViewModelSupport.Resolve<PrintReceiverService>(serviceProvider);
+        _printMonitorService = ViewModelSupport.Resolve<PrintMonitorService>(serviceProvider);
+        _driverPackageProvider = ViewModelSupport.Resolve<IDriverPackageProvider>(serviceProvider);
         _firewallManager = ViewModelSupport.Resolve<IFirewallManager>(serviceProvider);
         _printerManager = ViewModelSupport.Resolve<IPrinterManager>(serviceProvider);
         _scannerService = ViewModelSupport.Resolve<IScannerService>(serviceProvider);
+
+        // Feed RecentJobs/Errors from the DI-built receiver (no ctor callbacks needed — Gap 3).
+        if (_printReceiver != null)
+        {
+            _printReceiver.JobLogged += LogJob;
+            _printReceiver.ErrorLogged += LogError;
+        }
+
+        // Surface auto-purge alerts into the log panel (Gap 1).
+        if (_printMonitorService != null)
+        {
+            _printMonitorService.AlertRaised += PrintMonitorService_AlertRaised;
+        }
 
         string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShaPrint");
         _configFile = Path.Combine(dir, "ServerConfig.json");
@@ -147,6 +169,16 @@ public partial class ServerViewModel : ObservableObject, IDisposable
         LoadPrinters();
         LoadScanners();
         LoadConfiguration();
+    }
+
+    private void PrintMonitorService_AlertRaised(PrintMonitorAlert alert)
+    {
+        var message = $"[MONITOR] {alert.Message}";
+        void append() => AppendLog(message);
+        if (Avalonia.Application.Current is not null)
+            Dispatcher.UIThread.Post(append);
+        else
+            append();
     }
 
     private void AppLogger_OnLog(string msg)
@@ -289,21 +321,31 @@ public partial class ServerViewModel : ObservableObject, IDisposable
         _discoveryServer.SetExposedPrinters(selectedPrinters);
         _discoveryServer.SetExposedScanners(selectedScanners);
 
-        // Driver sharing: no IDriverPackageProvider implementation is registered anywhere yet
-        // (the Windows adapter wrapping ShaPrint.WpfApp's DriverPackageService is planned with
-        // Task 7). Until then requests are rejected gracefully with "Driver sharing is disabled"
-        // semantics — the same code path the protocol already uses for missing providers.
-        _discoveryServer.SetDriverPackageProvider(null);
+        // Driver sharing: on Windows an IDriverPackageProvider is registered (WindowsDriverPackageProvider
+        // wrapping DriverPackageService); on macOS/Linux none is registered, so requests fall back to the
+        // protocol's "Driver sharing is disabled" semantics (same code path as sharing disabled).
+        _discoveryServer.SetDriverPackageProvider(_driverPackageProvider);
+        _printReceiver.SetDriverPackageProvider(_driverPackageProvider);
+        if (_driverPackageProvider == null)
+        {
+            AppLogger.Log("[SERVER] No IDriverPackageProvider registered — driver sharing disabled on this platform.");
+        }
         _discoveryServer.SetDriverSharingEnabled(!IsUnitTest && (AppSettings.Current.DriverSharing?.Enabled ?? true));
 
-        // deferred: PrintMonitorService.SetMonitoredPrinters(selectedPrinters) + Start()
-        // deferred: MonitorTcpServer(new ServerStatusProvider(this)).Start() — TCP 9878 status.
+        // Give the auto-purge monitor the printers it should watch (started below, with the server).
+        _printMonitorService?.SetMonitoredPrinters(selectedPrinters);
 
         // Save configuration before starting so ServerId is persisted and broadcast correctly
         SaveConfiguration(selectedPrinters, selectedScanners);
 
         _discoveryServer.Start();
         _printReceiver.Start();
+
+        // Start the spooler auto-purge monitor and the TCP 9878 status server together with the server
+        // (same ordering as WpfApp's StartServer).
+        _printMonitorService?.Start();
+        _monitorTcpServer = new MonitorTcpServer(CreateStatusProvider());
+        _monitorTcpServer.Start();
 
         // Ensure firewall rules are applied and logged whenever server starts
         try
@@ -333,8 +375,13 @@ public partial class ServerViewModel : ObservableObject, IDisposable
 
         _discoveryServer?.Stop();
         _printReceiver?.Stop();
+        _printMonitorService?.Stop();
 
-        // deferred: _printMonitorService?.Stop(); _monitorTcpServer?.Stop();
+        if (_monitorTcpServer != null)
+        {
+            _monitorTcpServer.Stop();
+            _monitorTcpServer = null;
+        }
 
         ServerStartTime = null;
         ExposedPrinters.Clear();
@@ -451,6 +498,44 @@ public partial class ServerViewModel : ObservableObject, IDisposable
     public void Dispose()
     {
         AppLogger.OnLog -= AppLogger_OnLog;
+        if (_printReceiver != null)
+        {
+            _printReceiver.JobLogged -= LogJob;
+            _printReceiver.ErrorLogged -= LogError;
+        }
+        if (_printMonitorService != null)
+        {
+            _printMonitorService.AlertRaised -= PrintMonitorService_AlertRaised;
+        }
         if (IsRunning) StopServer();
     }
+
+    /// <summary>Builds the status provider for the TCP 9878 server. On Windows this uses the
+    /// LocalPrintServer-backed implementation so the wire payload matches WpfApp exactly; the
+    /// plain net8.0 build answers with the honest base provider.</summary>
+    private ServerStatusProvider CreateStatusProvider()
+    {
+#if WINDOWS
+        return new WindowsServerStatusProvider(this);
+#else
+        return new ServerStatusProvider(this);
+#endif
+    }
+
+    // ── IServerStatusSource: the state ServerStatusProvider composes into the 9878 payload ──
+
+    DateTime? IServerStatusSource.ServerStartTime => ServerStartTime;
+
+    string IServerStatusSource.NetworkChannel => ShaPrint.UI.Models.AppSettings.Current.EffectiveNetworkChannel;
+
+    IReadOnlyCollection<string> IServerStatusSource.ExposedPrinters => ExposedPrinters;
+
+    IReadOnlyCollection<string> IServerStatusSource.ExposedScanners => ExposedScanners;
+
+    IEnumerable<JobHistoryEntry> IServerStatusSource.RecentJobs => RecentJobs;
+
+    IEnumerable<ServerErrorEntry> IServerStatusSource.Errors => Errors;
+
+    Dictionary<string, DateTime> IServerStatusSource.GetActiveClientsWithConnectionTimes()
+        => _discoveryServer?.GetActiveClientsWithConnectionTimes() ?? new Dictionary<string, DateTime>();
 }

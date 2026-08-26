@@ -1,16 +1,13 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Printing;
 using System.Threading;
 using System.Threading.Tasks;
 using ShaPrint.Core;
-using Wpf.Ui;
-using ShaPrint.WpfApp.Models;
-using ShaPrint.WpfApp.Services;
-using ShaPrint.Platform.Windows;
+using ShaPrint.Platform.Abstractions;
+using ShaPrint.UI.Models;
 
-namespace ShaPrint.WpfApp.Services.Server
+namespace ShaPrint.UI.Services
 {
     /// <summary>
     /// Record kept in the dedup dictionary for every jobId the monitor has
@@ -19,15 +16,37 @@ namespace ShaPrint.WpfApp.Services.Server
     /// </summary>
     public record IncidentRecord(string PrinterName, string JobName, DateTime FirstSeenUtc);
 
+    /// <summary>
+    /// Raised on <see cref="PrintMonitorService.AlertRaised"/> when a stuck hard-error job is
+    /// auto-purged. The WpfApp monitor pushed the same information to a snackbar + toast;
+    /// the shared service surfaces it as an event so each shell decides how to present it.
+    /// </summary>
+    public sealed record PrintMonitorAlert(string PrinterName, JobSnapshot Job, string Message);
+
+    /// <summary>
+    /// Background auto-purge monitor for the server's exposed printers. Migrated from
+    /// <c>ShaPrint.WpfApp/Services/Server/PrintMonitorService.cs</c> (Gap-closing task) as an
+    /// injectable, platform-agnostic service:
+    /// <list type="bullet">
+    /// <item>Spooler access goes exclusively through <see cref="IPrintQueueProbe"/> — the real
+    /// Windows implementation (<see cref="LocalPrintQueueProbe"/>) is compiled only under
+    /// #if WINDOWS, so this class stays runnable on net8.0.</item>
+    /// <item>Alerts are event-based (<see cref="AlertRaised"/>) instead of a WPF snackbar; the
+    /// error toast still goes through <see cref="INotificationService"/>.</item>
+    /// <item>AutoPurge setting is read from <see cref="Models.AppSettings"/> by default; the WpfApp
+    /// shell injects a delegate reading its own AppSettings so its runtime toggle keeps working.</item>
+    /// </list>
+    /// Dedup/streak/eviction logic is unchanged from WpfApp.
+    /// </summary>
     public class PrintMonitorService
     {
         private const int StreakCap = 10;
 
         private CancellationTokenSource? _cts;
-        private readonly ISnackbarService _snackbarService;
         private readonly INotificationService _notificationService;
         private readonly IPrintQueueProbe _probe;
         private readonly IDelayProbe _delay;
+        private readonly Func<bool> _isAutoPurgeEnabled;
         private List<string> _monitoredPrinters = new List<string>();
 
         // Per-jobId: how many consecutive polls it has been in a hard error state.
@@ -36,16 +55,20 @@ namespace ShaPrint.WpfApp.Services.Server
         // Per-jobId: the set of incidents we have already cancelled + alerted on.
         private readonly ConcurrentDictionary<int, IncidentRecord> _seenIncidents = new();
 
+        /// <summary>Fired (on the monitor loop thread) after a job is auto-purged.</summary>
+        public event Action<PrintMonitorAlert>? AlertRaised;
+
         public PrintMonitorService(
-            ISnackbarService snackbarService,
             INotificationService notificationService,
             IPrintQueueProbe probe,
-            IDelayProbe delay)
+            IDelayProbe delay,
+            Func<bool>? isAutoPurgeEnabled = null)
         {
-            _snackbarService = snackbarService;
             _notificationService = notificationService;
             _probe = probe;
             _delay = delay;
+            _isAutoPurgeEnabled = isAutoPurgeEnabled
+                ?? (() => AppSettings.Current.AutoPurgeEnabled);
         }
 
         public void SetMonitoredPrinters(List<string> printers)
@@ -67,11 +90,11 @@ namespace ShaPrint.WpfApp.Services.Server
             _cts = null;
         }
 
-        public static bool IsHardError(PrintJobStatus status)
+        public static bool IsHardError(MonitorJobStatus status)
         {
-            return status.HasFlag(PrintJobStatus.Error) ||
-                   status.HasFlag(PrintJobStatus.PaperOut) ||
-                   status.HasFlag(PrintJobStatus.Blocked);
+            return status.HasFlag(MonitorJobStatus.Error) ||
+                   status.HasFlag(MonitorJobStatus.PaperOut) ||
+                   status.HasFlag(MonitorJobStatus.Blocked);
         }
 
         private async Task MonitorLoopAsync(CancellationToken token)
@@ -80,7 +103,7 @@ namespace ShaPrint.WpfApp.Services.Server
             {
                 try
                 {
-                    if (AppSettings.Current.AutoPurgeEnabled)
+                    if (_isAutoPurgeEnabled())
                     {
                         await CheckPrintQueuesAsync(token);
                     }
@@ -96,7 +119,7 @@ namespace ShaPrint.WpfApp.Services.Server
 
         private async Task CheckPrintQueuesAsync(CancellationToken token)
         {
-            if (!AppSettings.Current.AutoPurgeEnabled)
+            if (!_isAutoPurgeEnabled())
             {
                 return;
             }
@@ -196,41 +219,21 @@ namespace ShaPrint.WpfApp.Services.Server
 
             try
             {
-                var dispatcher = System.Windows.Application.Current?.Dispatcher;
-                if (dispatcher != null)
-                {
-                    dispatcher.InvokeAsync(() =>
-                    {
-                        _snackbarService.Show(
-                            "Print Job Failed",
-                            message,
-                            Wpf.Ui.Controls.ControlAppearance.Danger,
-                            new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ErrorCircle24),
-                            TimeSpan.FromSeconds(10));
-                    });
-                }
-                else if (ShaPrint.WpfApp.ViewModels.Pages.ServerViewModel.IsUnitTest)
-                {
-                    _snackbarService.Show(
-                        "Print Job Failed",
-                        message,
-                        Wpf.Ui.Controls.ControlAppearance.Danger,
-                        null,
-                        TimeSpan.FromSeconds(10));
-                }
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Error("[MONITOR] Snackbar dispatch failed", ex);
-            }
-
-            try
-            {
                 _notificationService.ShowPrinterError(printerName, $"Job {job.JobId}: {job.Status}");
             }
             catch (Exception ex)
             {
                 AppLogger.Error("[MONITOR] Toast dispatch failed", ex);
+            }
+
+            // Surface the alert to the shell (replaces the WPF snackbar path).
+            try
+            {
+                AlertRaised?.Invoke(new PrintMonitorAlert(printerName, job, message));
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[MONITOR] Alert event dispatch failed", ex);
             }
         }
     }

@@ -27,7 +27,19 @@
     <!-- Valid asInvoker manifest; referenced only for the Windows TFM (see app.manifest,
          created in the same task so it never points at a missing file). -->
     <ApplicationManifest Condition="'$(TargetFramework)' == 'net8.0-windows10.0.17763'">app.manifest</ApplicationManifest>
+
+    <!-- Windows-only services in this project touch System.Printing (LocalPrintQueueProbe,
+         WindowsServerStatusProvider) which lives in the Windows Desktop framework. NOTE: we add
+         the framework via FrameworkReference rather than <UseWPF>true</UseWPF> — the latter also
+         switches the project to the WindowsDesktop SDK, which drops the implicit System.IO /
+         System.Net.Http usings and would break every file relying on them (gap-closing task;
+         documented deviation). -->
+    <UseWPF Condition="'$(TargetFramework)' == 'net8.0-windows10.0.17763'">false</UseWPF>
   </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows10.0.17763'">
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ShaPrint.Core\ShaPrint.Core.csproj" />

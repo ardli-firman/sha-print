@@ -29,6 +29,9 @@
     <ProjectReference Include="..\ShaPrint.WpfApp\ShaPrint.WpfApp.csproj" />
     <!-- Extracted Windows platform services (DriverInstaller, VirtualPrinterManager, ...) moved here. -->
     <ProjectReference Include="..\ShaPrint.Platform.Windows\ShaPrint.Platform.Windows.csproj" />
+    <!-- Server monitor + status services (PrintMonitorService, ServerStatusProvider, IPrintQueueProbe)
+         were migrated to ShaPrint.UI (gap-closing task); the tests exercise them there. -->
+    <ProjectReference Include="..\ShaPrint.UI\ShaPrint.UI.csproj" />
   </ItemGroup>
 
 </Project>

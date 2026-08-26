@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using ShaPrint.Core.Network;
-using ShaPrint.WpfApp.Models;
-using ShaPrint.WpfApp.Services.Server;
-using ShaPrint.WpfApp.ViewModels.Pages;
+using ShaPrint.UI.Models;
+using ShaPrint.UI.Services;
+using ShaPrint.UI.ViewModels.Pages;
 using Xunit;
 
 namespace ShaPrint.Tests
@@ -13,7 +13,7 @@ namespace ShaPrint.Tests
     {
         private static ServerViewModel CreateSvm(DateTime? startTime = null)
         {
-            var svm = new ServerViewModel(null!, null!, null!, null!);
+            var svm = new ServerViewModel(null!);
             if (startTime.HasValue)
             {
                 var property = typeof(ServerViewModel).GetProperty("ServerStartTime",
@@ -36,7 +36,7 @@ namespace ShaPrint.Tests
             // Assert
             Assert.Equal(Environment.MachineName, payload.ServerName);
             Assert.Equal(Environment.MachineName, payload.HostName);
-            Assert.Equal(AppSettings.Current.NetworkChannel, payload.NetworkChannel);
+            Assert.Equal(AppSettings.Current.EffectiveNetworkChannel, payload.NetworkChannel);
         }
 
         [Fact]
@@ -103,7 +103,8 @@ namespace ShaPrint.Tests
         [Fact]
         public void BuildStatus_ActiveClients_ReturnsEmptyWhenNoDiscoveryServer()
         {
-            // Arrange — DiscoveryServer is null by default
+            // Arrange — DiscoveryServer is null by default (registered services aren't present
+            // when the ViewModel is constructed with a null service provider in tests)
             using var svm = CreateSvm(DateTime.UtcNow);
             var provider = new ServerStatusProvider(svm);
 

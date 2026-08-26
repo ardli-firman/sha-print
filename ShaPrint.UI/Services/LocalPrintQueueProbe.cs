@@ -1,3 +1,4 @@
+#if WINDOWS
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -6,10 +7,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using ShaPrint.Core;
 
-namespace ShaPrint.WpfApp.Services.Server
+namespace ShaPrint.UI.Services
 {
     /// <summary>
-    /// Real IPrintQueueProbe backed by Windows' LocalPrintServer.
+    /// Real <see cref="IPrintQueueProbe"/> backed by Windows' <c>LocalPrintServer</c>.
+    /// Compiled only for the net8.0-windows TFM (#if WINDOWS) because <c>System.Printing</c>
+    /// lives in the Windows Desktop framework — the plain net8.0 build (macOS/Linux) must not
+    /// reference it. Kept in ShaPrint.UI (not ShaPrint.Platform.Windows) so it can implement
+    /// the <see cref="IPrintQueueProbe"/> interface defined here without a circular project
+    /// reference; the mirrored <c>PrintMonitorService</c> stays runnable on net8.0 because it
+    /// only ever sees <see cref="MonitorJobStatus"/> / <see cref="JobSnapshot"/>.
     /// </summary>
     public sealed class LocalPrintQueueProbe : IPrintQueueProbe
     {
@@ -42,7 +49,7 @@ namespace ShaPrint.WpfApp.Services.Server
                                             JobId: job.JobIdentifier,
                                             PrinterName: queue.Name,
                                             JobName: job.Name,
-                                            Status: job.JobStatus));
+                                            Status: FromSystem(job.JobStatus)));
                                     }
                                     catch (Exception ex)
                                     {
@@ -72,7 +79,7 @@ namespace ShaPrint.WpfApp.Services.Server
                 using var server = new LocalPrintServer();
                 using var queue = server.GetPrintQueue(printerName)
                     ?? throw new InvalidOperationException($"Printer '{printerName}' not found.");
-                
+
                 using var jobs = queue.GetPrintJobInfoCollection();
                 foreach (var job in jobs)
                 {
@@ -89,5 +96,28 @@ namespace ShaPrint.WpfApp.Services.Server
                     $"Job {jobId} no longer exists on printer '{printerName}'.");
             }, cancellationToken);
         }
+
+        /// <summary>
+        /// Maps <c>System.Printing.PrintJobStatus</c> onto <see cref="MonitorJobStatus"/>. The
+        /// hard-error bits the monitor acts on (Error/PaperOut/Blocked) are copied 1:1 so
+        /// auto-purge behavior is byte-identical to the pre-migration WpfApp monitor.
+        /// </summary>
+        private static MonitorJobStatus FromSystem(PrintJobStatus status)
+        {
+            var result = MonitorJobStatus.None;
+            if (status.HasFlag(PrintJobStatus.Error)) result |= MonitorJobStatus.Error;
+            if (status.HasFlag(PrintJobStatus.PaperOut)) result |= MonitorJobStatus.PaperOut;
+            if (status.HasFlag(PrintJobStatus.Blocked)) result |= MonitorJobStatus.Blocked;
+            if (status.HasFlag(PrintJobStatus.Paused)) result |= MonitorJobStatus.Paused;
+            if (status.HasFlag(PrintJobStatus.Printing)) result |= MonitorJobStatus.Printing;
+            if (status.HasFlag(PrintJobStatus.Offline)) result |= MonitorJobStatus.Offline;
+            if (status.HasFlag(PrintJobStatus.Printed)) result |= MonitorJobStatus.Printed;
+            if (status.HasFlag(PrintJobStatus.Deleted)) result |= MonitorJobStatus.Deleted;
+            if (status.HasFlag(PrintJobStatus.UserIntervention)) result |= MonitorJobStatus.UserIntervention;
+            if (status.HasFlag(PrintJobStatus.Spooling)) result |= MonitorJobStatus.Spooling;
+            if (status.HasFlag(PrintJobStatus.Retained)) result |= MonitorJobStatus.Retained;
+            return result;
+        }
     }
 }
+#endif

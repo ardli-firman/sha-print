@@ -3,6 +3,10 @@
   <ItemGroup>
     <ProjectReference Include="..\ShaPrint.Core\ShaPrint.Core.csproj" />
     <ProjectReference Include="..\ShaPrint.Platform.Windows\ShaPrint.Platform.Windows.csproj" />
+    <!-- Server monitor services (PrintMonitorService, MonitorTcpServer, LocalPrintQueueProbe,
+         ServerStatusProvider, …) were migrated to ShaPrint.UI (gap-closing task) and are
+         referenced from here so the shipping WPF shell keeps its runtime behavior. -->
+    <ProjectReference Include="..\ShaPrint.UI\ShaPrint.UI.csproj" />
   </ItemGroup>
 
   <ItemGroup>

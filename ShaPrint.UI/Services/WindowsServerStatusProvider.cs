@@ -1,71 +1,40 @@
+#if WINDOWS
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Printing;
 using ShaPrint.Core.Network;
-using ShaPrint.WpfApp.Models;
-using ShaPrint.WpfApp.ViewModels.Pages;
-using ShaPrint.Server;
 using ShaPrint.Platform.Windows;
 
-namespace ShaPrint.WpfApp.Services.Server
+namespace ShaPrint.UI.Services
 {
-    public class ServerStatusProvider
+    /// <summary>
+    /// Windows-only <see cref="ServerStatusProvider"/> that reproduces the exact per-printer /
+    /// per-scanner status the WpfApp emitted on the 9878 channel:
+    /// <list type="bullet">
+    /// <item>printers: <c>LocalPrintServer</c> queue status → "idle"/"online"/"error" with the
+    /// same error descriptions ("Out of paper", "Paper jam", …) and per-printer try/catch
+    /// fallbacks ("Printer unreachable", "Print server query failed");</item>
+    /// <item>scanners: <c>ScannerService.ActiveScans</c> / <c>ScannerService.LastScanTimes</c>
+    /// statics → "inUse"/"available" + elapsed-time string.</item>
+    /// </list>
+    /// Compiled only for the net8.0-windows TFM (#if WINDOWS) because <c>System.Printing</c>
+    /// lives in the Windows Desktop framework.
+    /// </summary>
+    public sealed class WindowsServerStatusProvider : ServerStatusProvider
     {
-        private readonly ServerViewModel _serverViewModel;
-
-        public ServerStatusProvider(ServerViewModel serverViewModel)
+        public WindowsServerStatusProvider(IServerStatusSource source)
+            : base(source)
         {
-            _serverViewModel = serverViewModel;
         }
 
-        public ServerStatusPayload BuildStatus()
-        {
-            var payload = new ServerStatusPayload
-            {
-                ServerName = Environment.MachineName,
-                HostName = Environment.MachineName,
-                NetworkChannel = AppSettings.Current.NetworkChannel,
-                Version = typeof(ServerStatusProvider).Assembly.GetName().Version?.ToString() ?? "1.0.0.0",
-                UptimeSeconds = GetUptimeSeconds()
-            };
-
-            // 1. Gather Printer status
-            payload.Printers = GetPrinterStatuses();
-
-            // 2. Gather Scanner status
-            payload.Scanners = GetScannerStatuses();
-
-            // 3. Gather Active Clients
-            payload.ActiveClients = GetActiveClients();
-
-            // 4. Gather Recent Jobs
-            payload.RecentJobs = _serverViewModel.RecentJobs.ToList();
-
-            // 5. Gather Errors
-            payload.Errors = _serverViewModel.Errors.ToList();
-
-            return payload;
-        }
-
-        private long GetUptimeSeconds()
-        {
-            if (_serverViewModel.ServerStartTime.HasValue)
-            {
-                var diff = DateTime.UtcNow - _serverViewModel.ServerStartTime.Value;
-                return (long)diff.TotalSeconds;
-            }
-            return 0;
-        }
-
-        private List<PrinterStatus> GetPrinterStatuses()
+        protected override List<PrinterStatus> BuildPrinterStatuses()
         {
             var printerStatuses = new List<PrinterStatus>();
             try
             {
                 using (var printServer = new LocalPrintServer())
                 {
-                    foreach (var printerName in _serverViewModel.ExposedPrinters)
+                    foreach (var printerName in Source.ExposedPrinters)
                     {
                         try
                         {
@@ -120,7 +89,7 @@ namespace ShaPrint.WpfApp.Services.Server
             catch (Exception)
             {
                 // Failed to query print server
-                foreach (var printerName in _serverViewModel.ExposedPrinters)
+                foreach (var printerName in Source.ExposedPrinters)
                 {
                     printerStatuses.Add(new PrinterStatus
                     {
@@ -134,10 +103,10 @@ namespace ShaPrint.WpfApp.Services.Server
             return printerStatuses;
         }
 
-        private List<ScannerStatus> GetScannerStatuses()
+        protected override List<ScannerStatus> BuildScannerStatuses()
         {
             var scannerStatuses = new List<ScannerStatus>();
-            foreach (var scannerName in _serverViewModel.ExposedScanners)
+            foreach (var scannerName in Source.ExposedScanners)
             {
                 string status = "available";
                 if (ScannerService.ActiveScans.ContainsKey(scannerName))
@@ -161,25 +130,7 @@ namespace ShaPrint.WpfApp.Services.Server
             return scannerStatuses;
         }
 
-        private List<ActiveClientInfo> GetActiveClients()
-        {
-            var activeClients = new List<ActiveClientInfo>();
-            if (_serverViewModel.DiscoveryServer != null)
-            {
-                var clients = _serverViewModel.DiscoveryServer.GetActiveClientsWithConnectionTimes();
-                foreach (var kvp in clients)
-                {
-                    activeClients.Add(new ActiveClientInfo
-                    {
-                        Ip = kvp.Key,
-                        ConnectedSince = kvp.Value
-                    });
-                }
-            }
-            return activeClients;
-        }
-
-        private string FormatElapsedTime(DateTime utcTime)
+        private static string FormatElapsedTime(DateTime utcTime)
         {
             var span = DateTime.UtcNow - utcTime;
             if (span.TotalSeconds < 60) return $"{(int)span.TotalSeconds}s";
@@ -189,3 +140,4 @@ namespace ShaPrint.WpfApp.Services.Server
         }
     }
 }
+#endif

@@ -2,7 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ShaPrint.WpfApp.Services.Server
+namespace ShaPrint.UI.Services
 {
     /// <summary>
     /// Indirection over Task.Delay so the monitor's poll interval can be

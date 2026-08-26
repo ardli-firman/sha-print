@@ -61,9 +61,16 @@ namespace ShaPrint.WpfApp
                 services.AddSingleton<ShaPrint.Platform.Windows.Adapters.WindowsNotificationService>();
                 services.AddSingleton<ShaPrint.Platform.Windows.INotificationService>(sp => sp.GetRequiredService<ShaPrint.Platform.Windows.Adapters.WindowsNotificationService>());
                 services.AddSingleton<ShaPrint.Platform.Abstractions.INotificationService>(sp => sp.GetRequiredService<ShaPrint.Platform.Windows.Adapters.WindowsNotificationService>());
-                services.AddSingleton<ShaPrint.WpfApp.Services.Server.IPrintQueueProbe, ShaPrint.WpfApp.Services.Server.LocalPrintQueueProbe>();
-                services.AddSingleton<ShaPrint.WpfApp.Services.Server.IDelayProbe, ShaPrint.WpfApp.Services.Server.SystemDelayProbe>();
-                services.AddSingleton<ShaPrint.WpfApp.Services.Server.PrintMonitorService>();
+                services.AddSingleton<ShaPrint.UI.Services.IPrintQueueProbe, ShaPrint.UI.Services.LocalPrintQueueProbe>();
+                services.AddSingleton<ShaPrint.UI.Services.IDelayProbe, ShaPrint.UI.Services.SystemDelayProbe>();
+                // PrintMonitorService migrated to ShaPrint.UI. AutoPurge is read from the WPF shell's
+                // own AppSettings (injected delegate) so the Settings page toggle keeps taking effect
+                // immediately — reading the UI model's static would silently ignore it.
+                services.AddSingleton<ShaPrint.UI.Services.PrintMonitorService>(sp => new ShaPrint.UI.Services.PrintMonitorService(
+                    sp.GetRequiredService<ShaPrint.Platform.Abstractions.INotificationService>(),
+                    sp.GetRequiredService<ShaPrint.UI.Services.IPrintQueueProbe>(),
+                    sp.GetRequiredService<ShaPrint.UI.Services.IDelayProbe>(),
+                    () => ShaPrint.WpfApp.Models.AppSettings.Current.AutoPurgeEnabled));
                 services.AddSingleton<MonitorService>();
             }).Build();
 

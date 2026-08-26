@@ -15,7 +15,7 @@ using ShaPrint.WpfApp.Views.Pages;
 using ShaPrint.WpfApp.Services;
 using System.Collections.Concurrent;
 using ShaPrint.Core.Network;
-using ShaPrint.WpfApp.Services.Server;
+using ShaPrint.UI.Services;
 using ShaPrint.Platform.Windows;
 
 namespace ShaPrint.WpfApp.ViewModels.Pages
@@ -60,7 +60,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public string? ServerId { get; set; }
     }
 
-    public partial class ServerViewModel : ObservableObject, IDisposable
+    public partial class ServerViewModel : ObservableObject, IServerStatusSource, IDisposable
     {
         private static bool? _isUnitTest;
         public static bool IsUnitTest
@@ -79,7 +79,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         private readonly DiscoveryServer _discoveryServer;
         private readonly PrintReceiver _printReceiver;
         private readonly DriverPackageService _driverPackageService;
-        private readonly ShaPrint.WpfApp.Services.Server.PrintMonitorService _printMonitorService;
+        private readonly ShaPrint.UI.Services.PrintMonitorService _printMonitorService;
         private readonly ScannerService _scannerService;
         private readonly INavigationService _navigationService;
         private readonly ISnackbarService _snackbarService;
@@ -111,7 +111,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
         public ObservableCollection<string> Logs { get; } = new();
         public string LogsText => string.Join(Environment.NewLine, Logs);
 
-        public ServerViewModel(INavigationService navigationService, ISnackbarService snackbarService, ShaPrint.WpfApp.Services.Server.PrintMonitorService printMonitorService, INotificationService notificationService)
+        public ServerViewModel(INavigationService navigationService, ISnackbarService snackbarService, ShaPrint.UI.Services.PrintMonitorService printMonitorService, INotificationService notificationService)
         {
             _navigationService = navigationService;
             _snackbarService = snackbarService;
@@ -276,7 +276,7 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             _printMonitorService?.Start();
 
             // Start Monitor TCP Server
-            _monitorTcpServer = new MonitorTcpServer(new ServerStatusProvider(this));
+            _monitorTcpServer = new MonitorTcpServer(new WindowsServerStatusProvider(this));
             _monitorTcpServer.Start();
 
             // Ensure firewall rules are applied and logged whenever server starts
@@ -426,5 +426,22 @@ namespace ShaPrint.WpfApp.ViewModels.Pages
             AppLogger.OnLog -= AppLogger_OnLog;
             if (IsRunning) StopServer();
         }
+
+        // ── IServerStatusSource: state for the migrated ServerStatusProvider (9878 payload) ──
+
+        DateTime? IServerStatusSource.ServerStartTime => ServerStartTime;
+
+        string IServerStatusSource.NetworkChannel => ShaPrint.WpfApp.Models.AppSettings.Current.NetworkChannel;
+
+        IReadOnlyCollection<string> IServerStatusSource.ExposedPrinters => ExposedPrinters;
+
+        IReadOnlyCollection<string> IServerStatusSource.ExposedScanners => ExposedScanners;
+
+        IEnumerable<JobHistoryEntry> IServerStatusSource.RecentJobs => RecentJobs;
+
+        IEnumerable<ServerErrorEntry> IServerStatusSource.Errors => Errors;
+
+        Dictionary<string, DateTime> IServerStatusSource.GetActiveClientsWithConnectionTimes()
+            => _discoveryServer.GetActiveClientsWithConnectionTimes();
     }
 }

@@ -31,6 +31,16 @@ public class PrintReceiverService
     private readonly Action<JobHistoryEntry>? _onJobLog;
     private readonly Action<ServerErrorEntry>? _onErrorLog;
 
+    /// <summary>
+    /// Raised whenever a print/scan job is logged, mirroring the ctor's <c>onJobLog</c> callback.
+    /// Added so DI consumers (which cannot pass ctor callbacks) can subscribe — the WpfApp's
+    /// behavior is untouched because it never constructs this class.
+    /// </summary>
+    public event Action<JobHistoryEntry>? JobLogged;
+
+    /// <summary>Raised whenever a server error is logged, mirroring the ctor's <c>onErrorLog</c> callback.</summary>
+    public event Action<ServerErrorEntry>? ErrorLogged;
+
     // Driver provisioning (injected from server startup)
     private IDriverPackageProvider? _driverPackageProvider;
     private volatile bool _driverSharingEnabled = true;
@@ -192,6 +202,15 @@ public class PrintReceiverService
                                     Status = "completed",
                                     Timestamp = DateTime.UtcNow
                                 });
+                                JobLogged?.Invoke(new JobHistoryEntry
+                                {
+                                    Type = "print",
+                                    Document = docName,
+                                    PrinterName = payload.TargetPrinterName,
+                                    ClientIp = remoteIp,
+                                    Status = "completed",
+                                    Timestamp = DateTime.UtcNow
+                                });
                             }
                             else
                             {
@@ -206,7 +225,22 @@ public class PrintReceiverService
                                     Status = "failed",
                                     Timestamp = DateTime.UtcNow
                                 });
+                                JobLogged?.Invoke(new JobHistoryEntry
+                                {
+                                    Type = "print",
+                                    Document = docName,
+                                    PrinterName = payload.TargetPrinterName,
+                                    ClientIp = remoteIp,
+                                    Status = "failed",
+                                    Timestamp = DateTime.UtcNow
+                                });
                                 _onErrorLog?.Invoke(new ServerErrorEntry
+                                {
+                                    Source = "PrintReceiver",
+                                    Message = $"Spooler rejected job '{docName}' for printer '{payload.TargetPrinterName}'",
+                                    Timestamp = DateTime.UtcNow
+                                });
+                                ErrorLogged?.Invoke(new ServerErrorEntry
                                 {
                                     Source = "PrintReceiver",
                                     Message = $"Spooler rejected job '{docName}' for printer '{payload.TargetPrinterName}'",
@@ -262,6 +296,15 @@ public class PrintReceiverService
                     Status = "completed",
                     Timestamp = DateTime.UtcNow
                 });
+                JobLogged?.Invoke(new JobHistoryEntry
+                {
+                    Type = "scan",
+                    Document = $"Scan - {request.TargetScannerName}",
+                    PrinterName = request.TargetScannerName,
+                    ClientIp = remoteIp,
+                    Status = "completed",
+                    Timestamp = DateTime.UtcNow
+                });
             }
             catch (Exception ex)
             {
@@ -279,7 +322,22 @@ public class PrintReceiverService
                     Status = "failed",
                     Timestamp = DateTime.UtcNow
                 });
+                JobLogged?.Invoke(new JobHistoryEntry
+                {
+                    Type = "scan",
+                    Document = $"Scan - {request.TargetScannerName}",
+                    PrinterName = request.TargetScannerName,
+                    ClientIp = remoteIp,
+                    Status = "failed",
+                    Timestamp = DateTime.UtcNow
+                });
                 _onErrorLog?.Invoke(new ServerErrorEntry
+                {
+                    Source = "PrintReceiver-Scan",
+                    Message = $"Scan failed for scanner '{request.TargetScannerName}': {ex.Message}",
+                    Timestamp = DateTime.UtcNow
+                });
+                ErrorLogged?.Invoke(new ServerErrorEntry
                 {
                     Source = "PrintReceiver-Scan",
                     Message = $"Scan failed for scanner '{request.TargetScannerName}': {ex.Message}",

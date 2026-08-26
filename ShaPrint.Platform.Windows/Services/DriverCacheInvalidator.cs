@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using ShaPrint.Core;
 using ShaPrint.Core.Abstractions;
 
-namespace ShaPrint.Server
+namespace ShaPrint.Platform.Windows
 {
     /// <summary>
     /// Monitors PrintService event log for driver change events (event ID 312)

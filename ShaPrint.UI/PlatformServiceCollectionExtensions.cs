@@ -35,6 +35,17 @@ public static class PlatformServiceCollectionExtensions
         services.AddSingleton<INotificationService, WindowsNotificationService>();
         services.AddSingleton<IFirewallManager, WindowsFirewallManager>();
         services.AddSingleton<IPrintRelayClient, WindowsPrintRelayClient>();
+
+        // Server-side monitor + driver sharing (Gap-closing task): the spooler queue probe and
+        // auto-purge monitor are Windows-only (System.Printing); SystemDelayProbe is
+        // platform-agnostic but only consumed by the monitor, so it is registered alongside it.
+        services.AddSingleton<IDriverPackageProvider, WindowsDriverPackageProvider>();
+        services.AddSingleton<IPrintQueueProbe, LocalPrintQueueProbe>();
+        services.AddSingleton<IDelayProbe, SystemDelayProbe>();
+        services.AddSingleton<PrintMonitorService>(sp => new PrintMonitorService(
+            sp.GetRequiredService<INotificationService>(),
+            sp.GetRequiredService<IPrintQueueProbe>(),
+            sp.GetRequiredService<IDelayProbe>()));
 #endif
         return services;
     }

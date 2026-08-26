@@ -1,8 +1,9 @@
 using System;
-using System.Printing;
 using System.Threading;
 using System.Threading.Tasks;
-using ShaPrint.WpfApp.Services.Server;
+using ShaPrint.Platform.Abstractions;
+using ShaPrint.UI.Models;
+using ShaPrint.UI.Services;
 using Xunit;
 
 namespace ShaPrint.Tests
@@ -13,34 +14,33 @@ namespace ShaPrint.Tests
         private static PrintMonitorService NewService()
         {
             return new PrintMonitorService(
-                snackbarService: null!,
                 notificationService: null!,
                 probe: new NoopProbe(),
                 delay: new ImmediateDelayProbe());
         }
 
         [Theory]
-        [InlineData(PrintJobStatus.Error, true)]
-        [InlineData(PrintJobStatus.PaperOut, true)]
-        [InlineData(PrintJobStatus.Blocked, true)]
-        [InlineData(PrintJobStatus.Error | PrintJobStatus.Printing, true)]
-        [InlineData(PrintJobStatus.PaperOut | PrintJobStatus.Retained, true)]
-        public void IsHardError_ShouldReturnTrue_ForErrorStatuses(PrintJobStatus status, bool expected)
+        [InlineData(MonitorJobStatus.Error, true)]
+        [InlineData(MonitorJobStatus.PaperOut, true)]
+        [InlineData(MonitorJobStatus.Blocked, true)]
+        [InlineData(MonitorJobStatus.Error | MonitorJobStatus.Printing, true)]
+        [InlineData(MonitorJobStatus.PaperOut | MonitorJobStatus.Retained, true)]
+        public void IsHardError_ShouldReturnTrue_ForErrorStatuses(MonitorJobStatus status, bool expected)
         {
             Assert.Equal(expected, PrintMonitorService.IsHardError(status));
         }
 
         [Theory]
-        [InlineData(PrintJobStatus.None, false)]
-        [InlineData(PrintJobStatus.Printing, false)]
-        [InlineData(PrintJobStatus.Spooling, false)]
-        [InlineData(PrintJobStatus.Retained, false)]
-        [InlineData(PrintJobStatus.Printed, false)]
-        [InlineData(PrintJobStatus.Deleted, false)]
-        [InlineData(PrintJobStatus.Offline, false)]
-        [InlineData(PrintJobStatus.Paused, false)]
-        [InlineData(PrintJobStatus.UserIntervention, false)]
-        public void IsHardError_ShouldReturnFalse_ForNormalOrSoftStatuses(PrintJobStatus status, bool expected)
+        [InlineData(MonitorJobStatus.None, false)]
+        [InlineData(MonitorJobStatus.Printing, false)]
+        [InlineData(MonitorJobStatus.Spooling, false)]
+        [InlineData(MonitorJobStatus.Retained, false)]
+        [InlineData(MonitorJobStatus.Printed, false)]
+        [InlineData(MonitorJobStatus.Deleted, false)]
+        [InlineData(MonitorJobStatus.Offline, false)]
+        [InlineData(MonitorJobStatus.Paused, false)]
+        [InlineData(MonitorJobStatus.UserIntervention, false)]
+        public void IsHardError_ShouldReturnFalse_ForNormalOrSoftStatuses(MonitorJobStatus status, bool expected)
         {
             Assert.Equal(expected, PrintMonitorService.IsHardError(status));
         }
@@ -96,7 +96,9 @@ namespace ShaPrint.Tests
     /// <summary>
     /// End-to-end behavior of PrintMonitorService's monitor loop: dedup,
     /// stable-error detection, eviction, streak cap, AutoPurge toggle,
-    /// and poll interval.
+    /// and poll interval. The WpfApp snackbar counter is replaced by an
+    /// <see cref="PrintMonitorService.AlertRaised"/> event counter; the toast counter is kept
+    /// (the migrated service still raises ShowPrinterError through INotificationService).
     /// </summary>
     [Collection("Sequential")]
     public class PrintMonitorServiceBehaviorTests
@@ -110,12 +112,12 @@ namespace ShaPrint.Tests
             probe.Queue(Job(1, Error));   // poll 1
             probe.Queue(Job(1, Error));   // poll 2 -> triggers
             probe.Queue(Job(1, Error));   // poll 3 -> suppressed
-            var (svc, snack, toast, delay) = BuildService(probe);
+            var (svc, alerts, toast, delay) = BuildService(probe);
 
-            await RunPollsAsync(svc, snack, toast, 3);
+            await RunPollsAsync(svc, alerts, toast, 3);
 
             Assert.Equal(1, probe.CancelCallCount);
-            Assert.Equal(1, snack.Shown);
+            Assert.Equal(1, alerts.Count);
             Assert.Equal(1, toast.Shown);
         }
 
@@ -127,12 +129,12 @@ namespace ShaPrint.Tests
             probe.Queue(Job(1, Paused));
             probe.Queue(Job(1, UserIntervention));
             probe.Queue(Job(1, Offline));
-            var (svc, snack, toast, delay) = BuildService(probe);
+            var (svc, alerts, toast, delay) = BuildService(probe);
 
-            await RunPollsAsync(svc, snack, toast, 4);
+            await RunPollsAsync(svc, alerts, toast, 4);
 
             Assert.Equal(0, probe.CancelCallCount);
-            Assert.Equal(0, snack.Shown);
+            Assert.Equal(0, alerts.Count);
             Assert.Equal(0, toast.Shown);
         }
 
@@ -144,12 +146,12 @@ namespace ShaPrint.Tests
             probe.Queue(Job(1, Printing));    // poll 2: streak reset
             probe.Queue(Job(1, Error));       // poll 3: streak=1 again
             probe.Queue(Job(1, Printing));    // poll 4: streak reset
-            var (svc, snack, toast, delay) = BuildService(probe);
+            var (svc, alerts, toast, delay) = BuildService(probe);
 
-            await RunPollsAsync(svc, snack, toast, 4);
+            await RunPollsAsync(svc, alerts, toast, 4);
 
             Assert.Equal(0, probe.CancelCallCount);
-            Assert.Equal(0, snack.Shown);
+            Assert.Equal(0, alerts.Count);
             Assert.Equal(0, toast.Shown);
         }
 
@@ -162,12 +164,12 @@ namespace ShaPrint.Tests
             probe.Queue(/* empty */);             // poll 3 -> job 1 evicted
             probe.Queue(Job(2, Error));           // poll 4: new job, streak=1
             probe.Queue(Job(2, Error));           // poll 5: streak=2, alert
-            var (svc, snack, toast, delay) = BuildService(probe);
+            var (svc, alerts, toast, delay) = BuildService(probe);
 
-            await RunPollsAsync(svc, snack, toast, 5);
+            await RunPollsAsync(svc, alerts, toast, 5);
 
             Assert.Equal(2, probe.CancelCallCount);
-            Assert.Equal(2, snack.Shown);
+            Assert.Equal(2, alerts.Count);
             Assert.Equal(2, toast.Shown);
         }
 
@@ -179,12 +181,12 @@ namespace ShaPrint.Tests
             probe.Queue(Job(1, Error), throwOnCancel: true); // poll 2: cancel throws, evict
             probe.Queue(Job(1, Error));                    // poll 3: streak=1
             probe.Queue(Job(1, Error));                    // poll 4: streak=2, re-alert
-            var (svc, snack, toast, delay) = BuildService(probe);
+            var (svc, alerts, toast, delay) = BuildService(probe);
 
-            await RunPollsAsync(svc, snack, toast, 4);
+            await RunPollsAsync(svc, alerts, toast, 4);
 
             Assert.Equal(2, probe.CancelCallCount);
-            Assert.Equal(1, snack.Shown);
+            Assert.Equal(1, alerts.Count);
             Assert.Equal(1, toast.Shown);
         }
 
@@ -193,14 +195,14 @@ namespace ShaPrint.Tests
         {
             var probe = new ScriptedProbe();
             for (int i = 0; i < 13; i++) probe.Queue(Job(1, Error));
-            var (svc, snack, toast, delay) = BuildService(probe);
+            var (svc, alerts, toast, delay) = BuildService(probe);
 
-            await RunPollsAsync(svc, snack, toast, 13);
+            await RunPollsAsync(svc, alerts, toast, 13);
 
             // First alert at poll 2 (streak=2), cap drops at poll 11 (streak>10),
             // re-alert at poll 13 (streak=2 again).
             Assert.Equal(2, probe.CancelCallCount);
-            Assert.Equal(2, snack.Shown);
+            Assert.Equal(2, alerts.Count);
             Assert.Equal(2, toast.Shown);
         }
 
@@ -209,7 +211,7 @@ namespace ShaPrint.Tests
         {
             var cts = new CancellationTokenSource();
             var delay = new CountingDelayProbe(cts);
-            var (svc, snack, toast, _) = BuildService(new ScriptedProbe(), delay);
+            var (svc, alerts, toast, _) = BuildService(new ScriptedProbe(), delay);
             var monitor = (Task)typeof(PrintMonitorService)
                 .GetMethod("MonitorLoopAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                 .Invoke(svc, new object[] { cts.Token })!;
@@ -228,43 +230,44 @@ namespace ShaPrint.Tests
             var probe = new ScriptedProbe();
             probe.Queue(Job(1, Error));
             probe.Queue(Job(1, Error));
-            var (svc, snack, toast, delay) = BuildService(probe);
+            var (svc, alerts, toast, delay) = BuildService(probe);
 
-            var prior = ShaPrint.WpfApp.Models.AppSettings.Current.AutoPurgeEnabled;
+            var prior = AppSettings.Current.AutoPurgeEnabled;
             try
             {
-                ShaPrint.WpfApp.Models.AppSettings.Current.AutoPurgeEnabled = false;
-                await RunPollsAsync(svc, snack, toast, 2);
+                AppSettings.Current.AutoPurgeEnabled = false;
+                await RunPollsAsync(svc, alerts, toast, 2);
             }
             finally
             {
-                ShaPrint.WpfApp.Models.AppSettings.Current.AutoPurgeEnabled = prior;
+                AppSettings.Current.AutoPurgeEnabled = prior;
             }
 
             Assert.Equal(0, probe.CancelCallCount);
-            Assert.Equal(0, snack.Shown);
+            Assert.Equal(0, alerts.Count);
         }
 
         // ─── helpers ───────────────────────────────────────────────────
 
-        private static JobSnapshot Job(int id, PrintJobStatus status)
+        private static JobSnapshot Job(int id, MonitorJobStatus status)
             => new(id, Printer, $"doc-{id}", status);
 
-        private static (PrintMonitorService, CountingSnackbar, CountingNotification, CountingDelayProbe)
+        private static (PrintMonitorService, AlertCounter, CountingNotification, CountingDelayProbe)
             BuildService(ScriptedProbe probe, CountingDelayProbe? delay = null)
         {
-            ShaPrint.WpfApp.Models.AppSettings.Current.AutoPurgeEnabled = true;
+            AppSettings.Current.AutoPurgeEnabled = true;
             delay ??= new CountingDelayProbe();
-            var snack = new CountingSnackbar();
+            var alerts = new AlertCounter();
             var toast = new CountingNotification();
-            var svc = new PrintMonitorService(snack, toast, probe, delay);
+            var svc = new PrintMonitorService(toast, probe, delay);
+            svc.AlertRaised += alerts.OnAlert;
             svc.SetMonitoredPrinters(new System.Collections.Generic.List<string> { Printer });
-            return (svc, snack, toast, delay);
+            return (svc, alerts, toast, delay);
         }
 
-        private static async Task RunPollsAsync(PrintMonitorService svc, CountingSnackbar _, CountingNotification __, int polls)
+        private static async Task RunPollsAsync(PrintMonitorService svc, AlertCounter _, CountingNotification __, int polls)
         {
-            var method = typeof(PrintMonitorService).GetMethod("CheckPrintQueuesAsync", 
+            var method = typeof(PrintMonitorService).GetMethod("CheckPrintQueuesAsync",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
             for (int i = 0; i < polls; i++)
             {
@@ -272,11 +275,11 @@ namespace ShaPrint.Tests
             }
         }
 
-        private const PrintJobStatus Error = PrintJobStatus.Error;
-        private const PrintJobStatus Printing = PrintJobStatus.Printing;
-        private const PrintJobStatus Offline = PrintJobStatus.Offline;
-        private const PrintJobStatus Paused = PrintJobStatus.Paused;
-        private const PrintJobStatus UserIntervention = PrintJobStatus.UserIntervention;
+        private const MonitorJobStatus Error = MonitorJobStatus.Error;
+        private const MonitorJobStatus Printing = MonitorJobStatus.Printing;
+        private const MonitorJobStatus Offline = MonitorJobStatus.Offline;
+        private const MonitorJobStatus Paused = MonitorJobStatus.Paused;
+        private const MonitorJobStatus UserIntervention = MonitorJobStatus.UserIntervention;
 
         private sealed class ScriptedProbe : IPrintQueueProbe
         {
@@ -331,22 +334,15 @@ namespace ShaPrint.Tests
             }
         }
 
-        private sealed class CountingSnackbar : Wpf.Ui.ISnackbarService
+        /// <summary>Counts <see cref="PrintMonitorService.AlertRaised"/> invocations (replaces the
+        /// WpfApp snackbar counter — the migrated service is event-based).</summary>
+        private sealed class AlertCounter
         {
-            public int Shown { get; private set; }
-            public System.TimeSpan DefaultTimeOut { get; set; } = System.TimeSpan.FromSeconds(5);
-
-            public void SetSnackbarPresenter(Wpf.Ui.Controls.SnackbarPresenter presenter) { }
-            public Wpf.Ui.Controls.SnackbarPresenter GetSnackbarPresenter() => null!;
-
-            public void Show(string title, string message, Wpf.Ui.Controls.ControlAppearance appearance,
-                Wpf.Ui.Controls.IconElement? icon, System.TimeSpan duration)
-            {
-                Shown++;
-            }
+            public int Count { get; private set; }
+            public void OnAlert(PrintMonitorAlert alert) => Count++;
         }
 
-        private sealed class CountingNotification : ShaPrint.Platform.Windows.INotificationService
+        private sealed class CountingNotification : ShaPrint.Platform.Abstractions.INotificationService
         {
             public int Shown { get; private set; }
             public void ShowPrinterError(string printerName, string errorDescription) => Shown++;
@@ -358,7 +354,7 @@ namespace ShaPrint.Tests
             public void ShowScanFailed(string errorMessage) { }
             public void ShowSecurityAlert(string message, string detail) { }
             public void ShowToast(string title, string body,
-                ShaPrint.Platform.Windows.ToastAction? action = null) { }
+                ShaPrint.Platform.Abstractions.ToastAction? action = null) { }
         }
     }
 }

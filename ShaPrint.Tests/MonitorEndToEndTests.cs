@@ -7,7 +7,6 @@ using ShaPrint.Core.Network;
 using ShaPrint.WpfApp.ViewModels.Pages;
 using ShaPrint.WpfApp.Services.Monitor;
 using ShaPrint.WpfApp.Services;
-using ShaPrint.WpfApp.Services.Server;
 using ShaPrint.Server;
 using ShaPrint.Platform.Windows;
 using Xunit;

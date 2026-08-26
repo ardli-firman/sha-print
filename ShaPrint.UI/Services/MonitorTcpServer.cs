@@ -10,8 +10,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using ShaPrint.Core;
 
-namespace ShaPrint.WpfApp.Services.Server
+namespace ShaPrint.UI.Services
 {
+    /// <summary>
+    /// TCP 9878 status server for monitor clients. Migrated verbatim from
+    /// <c>ShaPrint.WpfApp/Services/Server/MonitorTcpServer.cs</c> (Gap-closing task) — the wire
+    /// protocol is unchanged: length-prefixed AES-GCM blob carrying the plaintext command
+    /// ("GET_STATUS"), response is <c>JsonSerializer.Serialize(ServerStatusPayload)</c>,
+    /// AES-GCM encrypted, length-prefixed. Concurrency slot + per-IP rate limiting are preserved.
+    /// Platform-agnostic (no WPF/System.Printing), so it also serves net8.0 (macOS/Linux) builds.
+    /// </summary>
     public class MonitorTcpServer
     {
         private readonly ServerStatusProvider _statusProvider;
