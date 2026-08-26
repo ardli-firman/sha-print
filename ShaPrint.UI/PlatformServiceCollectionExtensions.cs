@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using ShaPrint.Platform.Abstractions;
+using ShaPrint.UI.Services;
 #if WINDOWS
 using ShaPrint.Platform.Windows.Adapters;
 #endif
@@ -22,6 +23,7 @@ public static class PlatformServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddPlatformWindows(this IServiceCollection services)
     {
+        services.AddSharedServices();
 #if WINDOWS
         services.AddSingleton<IPrinterManager, WindowsPrinterManager>();
         services.AddSingleton<IVirtualPrinterManager, WindowsVirtualPrinterManager>();
@@ -38,11 +40,43 @@ public static class PlatformServiceCollectionExtensions
     /// Unix (macOS/Linux) backend registrations. Stub for now — Task 7 akan mengisi
     /// implementasi Unix (CUPS lpstat/lp, SANE scanimage, LaunchAgent/systemd, osascript/
     /// notify-send, pfctl/ufw). Must compile under net8.0, so it must NOT reference the
-    /// (not yet created) ShaPrint.Platform.Unix project.
+    /// (not yet created) ShaPrint.Platform.Unix project. Shared services still register so
+    /// the app shell is consistent on every platform.
     /// </summary>
     public static IServiceCollection AddPlatformUnix(this IServiceCollection services)
     {
+        services.AddSharedServices();
         // Task 7 akan mengisi implementasi Unix.
+        return services;
+    }
+
+    /// <summary>
+    /// Shared (platform-agnostic) services migrated from ShaPrint.WpfApp in Task 4. They only
+    /// depend on <c>ShaPrint.Core</c> and <c>ShaPrint.Platform.Abstractions</c> types.
+    ///
+    /// <para><see cref="ServerReachabilityTracker"/> is deliberately NOT registered here: its
+    /// collaborators are per-client-instance delegates (config provider, discovery scanner,
+    /// identity-change callbacks) supplied by the ClientViewModel — a DI factory can't provide
+    /// them. The client ViewModel constructs it directly, mirroring ShaPrint.WpfApp.</para>
+    /// </summary>
+    public static IServiceCollection AddSharedServices(this IServiceCollection services)
+    {
+        // Networking / server engines (stateful singletons).
+        services.AddSingleton<DiscoveryClientService>();
+        services.AddSingleton<DiscoveryServerService>();
+        services.AddSingleton<PrintReceiverService>();
+
+        // Monitor + client-side helpers.
+        services.AddSingleton<MonitorService>();
+        services.AddSingleton<ScanClientService>();
+
+        // Print relay orchestration (used by CLI `send` + backend script path, Task 8).
+        services.AddSingleton<PrintRelayClientService>();
+
+        // GitHub-based auto-update: singleton + hosted background check (same split as WpfApp).
+        services.AddSingleton<UpdateService>();
+        services.AddHostedService(provider => provider.GetRequiredService<UpdateService>());
+
         return services;
     }
 }
