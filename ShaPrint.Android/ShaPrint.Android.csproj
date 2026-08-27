@@ -60,16 +60,16 @@
        found" in Release (trim/AOT) builds. Avalonia fixed this for .NET 9
        (dotnet/runtime#99732), not for .NET 8 Android.
        This target runs after EVERY PrepareToCompileAvaloniaXaml execution and
-       re-normalizes the metadata (strip one "Avalonia\" suffix from RelativeDir
+       re-normalizes the metadata (strip one "Avalonia" path segment from RelativeDir (both separators)
        before appending), so the value is idempotent under double application.
        Self-disabling once upstream is fixed: if the metadata is already single,
        the value is unchanged.
        ===================================================================== -->
   <Target Name="FixAvaloniaCompileOutputPath" AfterTargets="PrepareToCompileAvaloniaXaml">
     <ItemGroup>
-      <IntermediateAssembly Update="*" AvaloniaCompileOutput="$([System.String]::Copy('%(RelativeDir)').Replace('\Avalonia\', '\'))Avalonia\%(Filename)%(Extension)" />
-      <IntermediateRefAssembly Update="*" AvaloniaCompileOutput="$([System.String]::Copy('%(RelativeDir)').Replace('\Avalonia\', '\'))Avalonia\%(Filename)%(Extension)" />
-      <_DebugSymbolsIntermediatePath Update="*" AvaloniaCompileOutput="$([System.String]::Copy('%(RelativeDir)').Replace('\Avalonia\', '\'))Avalonia\%(Filename)%(Extension)" />
+      <IntermediateAssembly Update="*" AvaloniaCompileOutput="$([System.String]::Copy('%(RelativeDir)').Replace('\Avalonia\','/').Replace('/Avalonia/','/'))Avalonia/%(Filename)%(Extension)" />
+      <IntermediateRefAssembly Update="*" AvaloniaCompileOutput="$([System.String]::Copy('%(RelativeDir)').Replace('\Avalonia\','/').Replace('/Avalonia/','/'))Avalonia/%(Filename)%(Extension)" />
+      <_DebugSymbolsIntermediatePath Update="*" AvaloniaCompileOutput="$([System.String]::Copy('%(RelativeDir)').Replace('\Avalonia\','/').Replace('/Avalonia/','/'))Avalonia/%(Filename)%(Extension)" />
     </ItemGroup>
   </Target>
 
