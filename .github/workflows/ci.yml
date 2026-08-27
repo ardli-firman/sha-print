@@ -87,6 +87,12 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Verify .NET SDK version
+        # global.json pins 8.0.x: ubuntu-latest images ship newer SDKs (10.x) whose android
+        # workload band treats net8.0-android as EOL (NETSDK1202) and lacks the API 34
+        # platform TargetSdkVersion requires (TFM degrades to android21 -> NU1202).
+        run: dotnet --version
+
       - name: Install Android workload
         run: dotnet workload install android
 
