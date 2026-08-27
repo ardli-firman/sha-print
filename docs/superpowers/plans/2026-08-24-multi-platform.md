@@ -232,13 +232,13 @@ public static class Program
 }
 ```
 
-- [ ] **Step 1: Create ShaPrint.UI.csproj** (multi-TFM + packages + project refs)
-- [ ] **Step 2: Create app.manifest** (valid, same task; if referenced)
-- [ ] **Step 3: Create App.axaml** (`Application` + `FluentTheme`)
-- [ ] **Step 4: Create App.axaml.cs** (build `App.Host` exactly once in `OnFrameworkInitializationCompleted`)
-- [ ] **Step 5: Create Program.cs** (single entry point; runtime DI switch; CLI branch placeholder)
-- [ ] **Step 6: Add project to ShaPrint.sln**
-- [ ] **Step 7: Build both TFMs**
+- [x] **Step 1: Create ShaPrint.UI.csproj** (multi-TFM + packages + project refs)
+- [x] **Step 2: Create app.manifest** (valid, same task; if referenced)
+- [x] **Step 3: Create App.axaml** (`Application` + `FluentTheme`)
+- [x] **Step 4: Create App.axaml.cs** (build `App.Host` exactly once in `OnFrameworkInitializationCompleted`)
+- [x] **Step 5: Create Program.cs** (single entry point; runtime DI switch; CLI branch placeholder)
+- [x] **Step 6: Add project to ShaPrint.sln**
+- [x] **Step 7: Build both TFMs**
 
 Run:
 ```bash
@@ -247,7 +247,7 @@ dotnet build ShaPrint.UI/ShaPrint.UI.csproj -f net8.0-windows
 ```
 Expected: Both TFMs build succeeded
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add ShaPrint.UI/ ShaPrint.sln
@@ -639,14 +639,14 @@ git commit -m "ci: add multi-OS build matrix and platform contract tests"
 **README update:**
 - Tambah section Multi-Platform Support (Windows/macOS/Linux/Android) dengan link ke guide.
 
-- [ ] **Step 1: Create docs/multi-platform-guide.md** (SANE brew, root requirements, CLI sender, troubleshooting)
-- [ ] **Step 2: Update README.md** (multi-platform section + link)
-- [ ] **Step 3: Review doc consistency** against spec (Decisions + Risks + Future Work)
+- [x] **Step 1: Create docs/multi-platform-guide.md** (SANE brew, root requirements, CLI sender, troubleshooting)
+- [x] **Step 2: Update README.md** (multi-platform section + link)
+- [x] **Step 3: Review doc consistency** against spec (Decisions + Risks + Future Work)
 
 Run: `git diff --stat docs/ README.md`
 Expected: Only docs changed
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/multi-platform-guide.md README.md

@@ -1,7 +1,10 @@
 ﻿<div align="center">
   <img src="ShaPrint.WpfApp/Assets/Icons/Logo_rounded.png" width="96" alt="ShaPrint Logo">
   <h1>ShaPrint</h1>
-  <p><b>The Simplest & Most Reliable LAN / Cross-VLAN Virtual Printer Sharing Solution for Windows</b></p>
+  <p><b>The Simplest & Most Reliable LAN / Cross-VLAN Virtual Printer Sharing Solution for Windows, macOS, Linux & Android</b></p>
+  <p>
+    <img src="https://github.com/ardli-firman/sha-print/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </p>
 </div>
 
 ---
@@ -9,6 +12,42 @@
 **ShaPrint** is an advanced, .NET 8-based application designed to reliably share physical printers across local networks (LAN) and cross-subnet/VLAN environments. It serves as a robust alternative when native Windows SMB Printer Sharing fails, struggles with network credential conflicts, or is obstructed by strict Windows security policies.
 
 By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TCP/UDP transmission, ShaPrint guarantees that documents are printed with **100% fidelity** and native quality.
+
+> **Multi-platform:** v2 shares one protocol and one security model across every platform.
+> Windows runs the full-featured WPF app; macOS & Linux run the Avalonia UI with a
+> CLI-first CUPS/SANE backend; Android is a print-only client. See the
+> **[Multi-Platform Guide](docs/multi-platform-guide.md)** for per-platform setup,
+> limitations and troubleshooting.
+
+---
+
+## 🌐 Multi-Platform Support
+
+| Platform | Status | What you get |
+|---|---|---|
+| **Windows 10/11** | ✅ Production (shipped app) | Full **WPF app** (Server + Client + Monitor + Scan + Update) with `DriverSafetyGuard` and multi-vendor driver provisioning. Avalonia UI also runs via `ShaPrint.UI`. |
+| **macOS** | 🧪 v1 (implemented, unverified on real HW) | Avalonia UI; **CUPS** virtual printer via backend script + CLI sender; **SANE** scanner (`brew install sane-backends`); LaunchAgent startup; `osascript` notifications. |
+| **Linux** | 🧪 v1 (implemented, unverified on real HW) | Same as macOS: CUPS backend, SANE `scanimage` (`sane-utils`), systemd user startup, `notify-send`. |
+| **Android** | 🧪 Print-only client | Discover servers (multicast), pick a file via SAF picker, relay to the server. Release APK builds green in CI. |
+
+Quick start (full detail in the [Multi-Platform Guide](docs/multi-platform-guide.md)):
+
+```bash
+# Windows — the shipped WPF app
+dotnet run --project ShaPrint.WpfApp/ShaPrint.WpfApp.csproj
+
+# macOS / Linux — Avalonia UI (plain net8.0 TFM)
+dotnet run --project ShaPrint.UI/ShaPrint.UI.csproj -f net8.0
+
+# CLI sender (all desktop platforms; exit 0 ok / 1 usage / 2 send failed)
+dotnet run --project ShaPrint.UI/ShaPrint.UI.csproj -f net8.0 -- send --printer "PrinterName" --file /path/to/file.pdf [--host <ip>]
+
+# Android — Release APK (then `adb install -r ...`)
+dotnet build ShaPrint.Android/ShaPrint.Android.csproj -f net8.0-android -c Release
+```
+
+Design spec: [`docs/superpowers/specs/2026-08-24-multi-platform-design.md`](docs/superpowers/specs/2026-08-24-multi-platform-design.md) ·
+Implementation plan: [`docs/superpowers/plans/2026-08-24-multi-platform.md`](docs/superpowers/plans/2026-08-24-multi-platform.md)
 
 ---
 
@@ -55,13 +94,36 @@ By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TC
 
 ---
 
+## 📦 Project Structure
+
+| Project | TFM | Role |
+|---|---|---|
+| `ShaPrint.Core` | `net8.0` | Platform-agnostic core: networking protocol, crypto, models. **Unchanged.** |
+| `ShaPrint.Platform.Abstractions` | `net8.0` | Pure platform interfaces (`IPrinterManager`, `IVirtualPrinterManager`, `IScannerService`, `IStartupManager`, `INotificationService`, `IFirewallManager`, `IPrintRelayClient`). |
+| `ShaPrint.Platform.Windows` | `net8.0-windows10.0.17763` | Windows services (Spooler, WIA, Virtual Printer, `DriverSafetyGuard`, multi-vendor provisioning) + adapters. |
+| `ShaPrint.Platform.Unix` | `net8.0` | macOS/Linux backends — CLI-first CUPS/SANE (`lpstat`/`lp`/`lpadmin`/`lpinfo`/`scanimage`), privilege escalation, startup, notifications, firewall. |
+| `ShaPrint.UI` | `net8.0;net8.0-windows10.0.17763` | Shared **Avalonia 11.2** UI + ViewModels + shared services + CLI `send` verb (single `Program.cs`). |
+| `ShaPrint.WpfApp` | `net8.0-windows10.0.17763` | **Shipped Windows app** (WPF, system tray, Task Scheduler startup). |
+| `ShaPrint.Android` | `net8.0-android` | Print-only Android client (multicast discovery, SAF file picker). |
+| `ShaPrint.Updater` | Windows | GitHub-based self-updater. |
+| `ShaPrint.Tests` | `net8.0-windows10.0.17763` | Full test suite (**348 tests**, runs on Windows). |
+| `ShaPrint.Tests.Contract` | `net8.0` | Os-agnostic platform contract tests (**11 tests**, runs on all CI runners). |
+
+---
+
 ## 💻 System Requirements
 
 Before installing ShaPrint, please ensure your system meets the following requirements:
 
-* **Operating System:** Windows 10 or Windows 11 (64-bit / `x64` architecture)
-* **Minimum Version/Build:** Windows 10 Version 1809 (Build `10.0.17763`) or newer (released November 2018)
-* **Pre-requisites:** None. The installation is fully self-contained, meaning you do **not** need to install the .NET Runtime manually.
+| Platform | Requirements |
+|---|---|
+| **Windows 10/11** | 64-bit, Build 1809 (`10.0.17763`) or newer. Self-contained install — no .NET Runtime needed. |
+| **macOS** | .NET 8 runtime; CUPS (built-in); `brew install sane-backends` for Scan mode. **v1 — unverified on real hardware.** |
+| **Linux** | .NET 8 runtime; CUPS (`sudo apt install cups` or distro equivalent); `sane-utils` for Scan mode. **v1 — unverified on real hardware.** |
+| **Android** | Android 5.0+ (API 21+). Print-only client. Release APK ~44 MB (4 ABIs). |
+
+See the [Multi-Platform Guide](docs/multi-platform-guide.md) for setup, privilege
+(sudo/pkexec) requirements, CLI usage and troubleshooting.
 
 ---
 
