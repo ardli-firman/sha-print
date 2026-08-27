@@ -3,7 +3,7 @@
     <!-- Splash theme referenced by MainActivity (Theme = "@style/MyTheme.Splash"). Light
          Material theme + the app icon as window background so the launch shows the ShaPrint
          icon instead of a blank white screen. -->
-    <style name="MyTheme.Splash" parent="@android:style/Theme.Material.Light.NoActionBar">
+    <style name="MyTheme.Splash" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:windowBackground">@drawable/ic_launcher</item>
     </style>
 </resources>
