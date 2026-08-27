@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon placeholder (Task 9): a simple blue tile with a white paper/printer glyph.
+     Referenced by AndroidManifest.xml (android:icon) and styles.xml (splash windowBackground),
+     so the resource is guaranteed to exist. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+        android:width="108dp"
+        android:height="108dp"
+        android:viewportWidth="108"
+        android:viewportHeight="108">
+    <!-- Tile background -->
+    <path android:fillColor="#1976D2"
+          android:pathData="M0,0h108v108h-108z" />
+    <!-- Paper -->
+    <path android:fillColor="#FFFFFF"
+          android:pathData="M34,30h40a6,6 0 0 1 6,6v22h-52v-22a6,6 0 0 1 6,-6z" />
+    <!-- Printer body -->
+    <path android:fillColor="#F5F5F5"
+          android:pathData="M34,58h40v20a6,6 0 0 1 -6,6h-28a6,6 0 0 1 -6,-6z" />
+    <!-- Output tray -->
+    <path android:fillColor="#BBDEFB"
+          android:pathData="M40,66h28v8h-28z" />
+    <!-- Text line on the paper -->
+    <path android:fillColor="#0D47A1"
+          android:pathData="M44,38h20v6h-20z" />
+</vector>

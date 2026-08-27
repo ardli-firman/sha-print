@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Task 9: exactly the five allowed permissions. Deliberately NO READ/WRITE_EXTERNAL_STORAGE:
+         documents are picked via the Storage Access Framework (ACTION_OPEN_DOCUMENT), which
+         grants per-file access and needs no storage permission. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- minSdk/targetSdk/versionName/versionCode come from the csproj (SupportedOSPlatformVersion,
+         TargetSdkVersion, Version) and are merged by the build. POST_NOTIFICATIONS is not
+         requested at runtime in v1 (no notifications are posted by this client yet). -->
+    <application android:label="ShaPrint"
+                 android:icon="@drawable/ic_launcher"
+                 android:theme="@style/MyTheme.Splash" />
+</manifest>

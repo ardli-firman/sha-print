@@ -1,0 +1,23 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ShaPrint.Android.ViewModels"
+             xmlns:views="using:ShaPrint.Android.Views"
+             x:Class="ShaPrint.Android.App"
+             RequestedThemeVariant="Light">
+
+    <!-- Task 9, choice (b): ShaPrint.Android has its own minimal Application class instead of
+         reusing ShaPrint.UI.App — referencing ShaPrint.UI from Android is forbidden (circular /
+         anti-pattern), and the desktop App carries desktop-lifetime + ViewModel wiring that
+         does not apply to a single-view Android shell. The DataTemplate mirrors the desktop
+         App.axaml pattern: MainView is assigned directly in OnFrameworkInitializationCompleted;
+         the template keeps the VM->View convention available for content-negotiated views. -->
+    <Application.DataTemplates>
+        <DataTemplate DataType="vm:MainViewModel">
+            <views:MainView />
+        </DataTemplate>
+    </Application.DataTemplates>
+
+    <Application.Styles>
+        <FluentTheme />
+    </Application.Styles>
+</Application>

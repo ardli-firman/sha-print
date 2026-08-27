@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Task 9: standalone Android client project. Deliberately NOT part of ShaPrint.UI and
+         NOT referencing it — ShaPrint.UI references Platform.* + ViewModels + desktop
+         lifetime, so pulling it into Android would create a circular/anti-pattern dependency.
+         Android has its own MainActivity, Application (App.axaml) and services. -->
+    <TargetFramework>net8.0-android</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- App identity + versions. minSdk via SupportedOSPlatformVersion, targetSdk via
+         TargetSdkVersion — both are written into the merged manifest, so AndroidManifest.xml
+         itself carries no <uses-sdk> (the build owns those attributes). versionName 2.0.0 per
+         plan; versionCode is derived from <Version>. -->
+    <ApplicationId>com.shaprint.android</ApplicationId>
+    <SupportedOSPlatformVersion>21.0</SupportedOSPlatformVersion>
+    <TargetSdkVersion>34</TargetSdkVersion>
+    <Version>2.0.0</Version>
+
+    <!-- Explicit application (not a library); the manifest is tracked in-repo. AndroidResgenFile
+         is intentionally NOT set — the SDK-style build generates Resource.designer.cs under obj/
+         automatically (the legacy AndroidResgenFile knob is only needed for non-SDK layouts). -->
+    <AndroidApplication>true</AndroidApplication>
+    <AndroidManifest>AndroidManifest.xml</AndroidManifest>
+
+    <!-- Same binding strictness as ShaPrint.UI (Task 6): a binding to a wrong property name
+         must fail the BUILD, not surface at runtime on a phone. -->
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ShaPrint.Core\ShaPrint.Core.csproj" />
+    <ProjectReference Include="..\ShaPrint.Platform.Abstractions\ShaPrint.Platform.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Avalonia 11.2.3 — same version as ShaPrint.UI (Task 3), so Android renders the same
+         Fluent theme as the desktop shell. Avalonia.Android replaces Avalonia.Desktop here:
+         there is no classic desktop lifetime on Android, the host is AvaloniaMainActivity. -->
+    <PackageReference Include="Avalonia" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Android" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.3" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
+  </ItemGroup>
+
+</Project>

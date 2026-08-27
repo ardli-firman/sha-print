@@ -1,0 +1,31 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ShaPrint.Android.ViewModels"
+             x:Class="ShaPrint.Android.Views.MainView"
+             x:DataType="vm:MainViewModel">
+
+    <!-- Minimal Android shell (Task 9): LAN scan → pick printer → SAF file pick → relay.
+         Compiled bindings (x:DataType + AvaloniaUseCompiledBindingsByDefault) so a wrong
+         property name fails the build, same as ShaPrint.UI views (Task 6). -->
+    <StackPanel Margin="16" Spacing="12">
+        <TextBlock Text="ShaPrint — Android client"
+                   FontSize="20"
+                   FontWeight="Bold" />
+        <TextBlock Text="{Binding StatusText}"
+                   TextWrapping="Wrap"
+                   Foreground="Gray" />
+
+        <Button Content="Scan LAN for printers"
+                Command="{Binding ScanLanCommand}"
+                IsEnabled="{Binding !IsBusy}" />
+
+        <TextBlock Text="Printers" FontWeight="SemiBold" />
+        <ListBox ItemsSource="{Binding AvailablePrinters}"
+                 SelectedItem="{Binding SelectedPrinter}"
+                 Height="200" />
+
+        <Button Content="Choose file &amp; send"
+                Command="{Binding PickAndSendCommand}"
+                IsEnabled="{Binding !IsBusy}" />
+    </StackPanel>
+</UserControl>

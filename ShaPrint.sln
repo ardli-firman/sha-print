@@ -19,6 +19,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.UI", "ShaPrint.UI\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Platform.Unix", "ShaPrint.Platform.Unix\ShaPrint.Platform.Unix.csproj", "{A6B4A081-5BDF-4CA9-88FB-1E3EB2F383B7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Android", "ShaPrint.Android\ShaPrint.Android.csproj", "{5652B330-3717-4C47-BE4F-D8888CAC55C8}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -60,5 +62,9 @@ Global
 		{A6B4A081-5BDF-4CA9-88FB-1E3EB2F383B7}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A6B4A081-5BDF-4CA9-88FB-1E3EB2F383B7}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A6B4A081-5BDF-4CA9-88FB-1E3EB2F383B7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5652B330-3717-4C47-BE4F-D8888CAC55C8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5652B330-3717-4C47-BE4F-D8888CAC55C8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5652B330-3717-4C47-BE4F-D8888CAC55C8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5652B330-3717-4C47-BE4F-D8888CAC55C8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
