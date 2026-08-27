@@ -49,6 +49,9 @@
   <ItemGroup>
     <ProjectReference Include="..\ShaPrint.Core\ShaPrint.Core.csproj" />
     <ProjectReference Include="..\ShaPrint.Platform.Abstractions\ShaPrint.Platform.Abstractions.csproj" />
+    <!-- ShaPrint.Platform.Unix is plain net8.0 (CLI-first macOS/Linux backends), so both
+         TFMs may reference it — AddPlatformUnix registers it unconditionally. -->
+    <ProjectReference Include="..\ShaPrint.Platform.Unix\ShaPrint.Platform.Unix.csproj" />
   </ItemGroup>
 
   <!-- ShaPrint.Platform.Windows is net8.0-windows10.0.17763-only; reference it only for the

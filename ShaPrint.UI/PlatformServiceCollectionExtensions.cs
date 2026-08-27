@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using ShaPrint.Platform.Abstractions;
+using ShaPrint.Platform.Unix;
 using ShaPrint.UI.Services;
 using ShaPrint.UI.ViewModels;
 using ShaPrint.UI.ViewModels.Pages;
@@ -51,17 +52,24 @@ public static class PlatformServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Unix (macOS/Linux) backend registrations. Stub for now — Task 7 akan mengisi
-    /// implementasi Unix (CUPS lpstat/lp, SANE scanimage, LaunchAgent/systemd, osascript/
-    /// notify-send, pfctl/ufw). Must compile under net8.0, so it must NOT reference the
-    /// (not yet created) ShaPrint.Platform.Unix project. Shared services still register so
-    /// the app shell is consistent on every platform.
+    /// Unix (macOS/Linux) backend registrations (ShaPrint.Platform.Unix, Task 7). The
+    /// library is plain net8.0 (CLI-first CUPS/SANE/LaunchAgent/systemd/osascript/
+    /// notify-send/ufw), so the body compiles for BOTH TFMs — no #if WINDOWS needed.
+    /// At runtime AddPlatformUnix is only invoked when OperatingSystem.IsMacOS()/IsLinux()
+    /// is true (Program.ConfigureServices), and each backend additionally guards its public
+    /// methods with OperatingSystem.IsMacOS()/IsLinux().
     /// </summary>
     public static IServiceCollection AddPlatformUnix(this IServiceCollection services)
     {
         services.AddSharedServices();
         services.AddViewModels();
-        // Task 7 akan mengisi implementasi Unix.
+        services.AddSingleton<IPrinterManager, UnixPrinterManager>();
+        services.AddSingleton<IVirtualPrinterManager, UnixVirtualPrinterManager>();
+        services.AddSingleton<IScannerService, UnixScannerService>();
+        services.AddSingleton<IStartupManager, UnixStartupManager>();
+        services.AddSingleton<INotificationService, UnixNotificationService>();
+        services.AddSingleton<IFirewallManager, UnixFirewallManager>();
+        services.AddSingleton<IPrintRelayClient, UnixPrintRelayClient>();
         return services;
     }
 

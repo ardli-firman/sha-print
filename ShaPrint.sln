@@ -17,6 +17,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Platform.Windows",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.UI", "ShaPrint.UI\ShaPrint.UI.csproj", "{F492D6E4-C2E9-42DC-A34E-F2BD6B860D7A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShaPrint.Platform.Unix", "ShaPrint.Platform.Unix\ShaPrint.Platform.Unix.csproj", "{A6B4A081-5BDF-4CA9-88FB-1E3EB2F383B7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -54,5 +56,9 @@ Global
 		{F492D6E4-C2E9-42DC-A34E-F2BD6B860D7A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F492D6E4-C2E9-42DC-A34E-F2BD6B860D7A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F492D6E4-C2E9-42DC-A34E-F2BD6B860D7A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A6B4A081-5BDF-4CA9-88FB-1E3EB2F383B7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A6B4A081-5BDF-4CA9-88FB-1E3EB2F383B7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A6B4A081-5BDF-4CA9-88FB-1E3EB2F383B7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A6B4A081-5BDF-4CA9-88FB-1E3EB2F383B7}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

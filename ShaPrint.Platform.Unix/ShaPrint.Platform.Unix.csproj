@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Plain net8.0: this project is the macOS + Linux backend library. It deliberately
+         targets no TFM-specific framework (no System.Printing, no WPF) so every
+         implementation compiles everywhere and only runs its OS-specific CLI calls under
+         OperatingSystem.IsMacOS()/IsLinux() runtime guards. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ShaPrint.Core\ShaPrint.Core.csproj" />
+    <ProjectReference Include="..\ShaPrint.Platform.Abstractions\ShaPrint.Platform.Abstractions.csproj" />
+  </ItemGroup>
+
+  <!-- CLI-first (v1): no NuGet packages, no P/Invoke into libcups/libsane. All OS access is
+       via well-known CLI tools (lpstat/lp/lpadmin/lpinfo, scanimage, osascript/notify-send,
+       launchctl/systemctl, ufw/firewall-cmd/iptables). -->
+</Project>
