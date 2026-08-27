@@ -13,8 +13,10 @@ public static class Program
     public static void Main(string[] args)
     {
         // CLI branch (`shaprint send --printer <name> --file <path> [--host <ip>]`) is handled
-        // before any Avalonia/GUI startup. Task 8 fills CliDispatcher in; for now it always
-        // returns false so the app always launches the desktop shell.
+        // before any Avalonia/GUI startup: when a verb is recognized, TryHandle runs the
+        // command (with its own minimal ServiceProvider — App.Host is never touched), sets the
+        // process exit code and returns true so the GUI never starts. Only unrecognized
+        // arguments fall through to the desktop shell below.
         if (CliDispatcher.TryHandle(args))
             return;
 
