@@ -1,0 +1,240 @@
+# Multi-Platform Artifacts — manual-only pipeline for Windows / macOS / Linux / Android.
+#
+# Unlike the automated beta/stable release workflows (which ship the Windows WPF +
+# Updater Inno Setup installer), this workflow produces distributable artifacts for the
+# multi-platform app (ShaPrint.UI Avalonia) and the Android client on demand:
+#
+#   * windows  -> scripts/publish-windows.ps1  -> shaprint-win-x64-v<version>.zip
+#   * macos    -> scripts/publish-macos.sh     -> shaprint-macos-{x64,arm64}-v<version>.zip
+#   * linux    -> scripts/publish-linux.sh     -> shaprint-linux-x64-v<version>.tar.gz
+#   * android  -> scripts/publish-android.ps1  -> shaprint-android-v<version>.apk
+#
+# Trigger: workflow_dispatch ONLY (Actions UI → "Run workflow"). Never on push/PR.
+# Version formula is identical in every job (date+short-sha) so the release tag stays
+# consistent across jobs when no explicit version is given. NOTE: the date uses DOTS
+# (2026.08.27) — NuGet/MSBuild reject a dot-less version for -p:Version (a plain
+# '20260827-abc1234' fails restore with "not a valid version string").
+
+name: Multi-Platform Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versi artifact; kosongkan = otomatis (tanggal+short-sha)'
+        required: false
+        type: string
+        default: ''
+      release_mode:
+        description: 'draft = buat Draft GitHub Release dengan semua artifact; tag = Release + push tag v<version>-artifacts; none = hanya upload workflow artifacts'
+        required: false
+        type: choice
+        default: draft
+        options:
+          - draft
+          - tag
+          - none
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows (win-x64 exe zip)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            # Dotted date: NuGet requires Major.Minor... for -p:Version (see header).
+            VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish Windows x64 zip
+        shell: pwsh
+        env:
+          ARTIFACT_VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/publish-windows.ps1 -Version "$env:ARTIFACT_VERSION"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: shaprint-windows
+          path: artifacts/${{ steps.version.outputs.version }}/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS (x64 + arm64 zips)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            # Dotted date: NuGet requires Major.Minor... for -p:Version (see header).
+            VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish macOS zips
+        shell: bash
+        env:
+          ARTIFACT_VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/publish-macos.sh "$ARTIFACT_VERSION"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: shaprint-macos
+          path: artifacts/${{ steps.version.outputs.version }}/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux (x64 tar.gz)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            # Dotted date: NuGet requires Major.Minor... for -p:Version (see header).
+            VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish Linux x64 tar.gz
+        shell: bash
+        env:
+          ARTIFACT_VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/publish-linux.sh "$ARTIFACT_VERSION"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: shaprint-linux
+          path: artifacts/${{ steps.version.outputs.version }}/*
+          if-no-files-found: error
+
+  android:
+    name: Android (APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install Android workload
+        # net8.0-android needs the android workload; hosted runners only ship it for
+        # their default SDK band, not necessarily for the pinned 8.0.x SDK (mirror of
+        # ci.yml, whose android job relies on the same step).
+        run: dotnet workload install android
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            # Dotted date: NuGet requires Major.Minor... for -p:Version (see header).
+            VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish Android APK
+        shell: pwsh
+        env:
+          # The ubuntu-latest runner's preinstalled SDK (same location ci.yml relies on);
+          # passed explicitly so the script's InstallAndroidDependencies step targets it.
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ARTIFACT_VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/publish-android.ps1 -Version "$env:ARTIFACT_VERSION"
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: shaprint-android
+          path: artifacts/${{ steps.version.outputs.version }}/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    if: inputs.release_mode != 'none'
+    needs: [windows, macos, linux, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            # Dotted date: NuGet requires Major.Minor... for -p:Version (see header).
+            VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: merged-artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # draft mode: draft release at v<version>-artifacts (tag appears on publish);
+          # tag mode: published release + tag v<version>-artifacts is created.
+          tag_name: v${{ steps.version.outputs.version }}-artifacts
+          name: ShaPrint multi-platform artifacts v${{ steps.version.outputs.version }}
+          prerelease: true
+          draft: ${{ inputs.release_mode == 'draft' }}
+          files: merged-artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
