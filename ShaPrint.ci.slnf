@@ -1,0 +1,16 @@
+{
+  "solution": {
+    "path": "ShaPrint.sln",
+    "projects": [
+      "ShaPrint.Core\\ShaPrint.Core.csproj",
+      "ShaPrint.Platform.Abstractions\\ShaPrint.Platform.Abstractions.csproj",
+      "ShaPrint.Platform.Windows\\ShaPrint.Platform.Windows.csproj",
+      "ShaPrint.Platform.Unix\\ShaPrint.Platform.Unix.csproj",
+      "ShaPrint.UI\\ShaPrint.UI.csproj",
+      "ShaPrint.WpfApp\\ShaPrint.WpfApp.csproj",
+      "ShaPrint.Updater\\ShaPrint.Updater.csproj",
+      "ShaPrint.Tests\\ShaPrint.Tests.csproj",
+      "ShaPrint.Tests.Contract\\ShaPrint.Tests.Contract.csproj"
+    ]
+  }
+}

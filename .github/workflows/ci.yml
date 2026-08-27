@@ -1,0 +1,116 @@
+# CI — multi-OS build matrix + platform contract tests (Task 10).
+#
+# Design notes (see docs/superpowers/plans/2026-08-24-multi-platform.md, Task 10):
+#
+#  1. `ShaPrint.ci.slnf` instead of `ShaPrint.sln` for the build jobs: the solution now
+#     contains ShaPrint.Android (net8.0-android), which needs the Android workload. GitHub
+#     hosted runners only ship the android workload for their default SDK band, not
+#     necessarily for the 8.0.x SDK pinned here, so a bare `dotnet build ShaPrint.sln`
+#     would fail with NETSDK1147 on a fresh runner. The Android app is compiled in its own
+#     dedicated job (below) after `dotnet workload install android` — so every project is
+#     built on CI, just not through the sln.
+#  2. Contract tests live in `ShaPrint.Tests.Contract` (plain net8.0, xunit, references only
+#     ShaPrint.Core + ShaPrint.Platform.Abstractions). ShaPrint.Tests itself targets
+#     net8.0-windows10.0.17763 and references WPF projects, so it can only be EXECUTED on
+#     Windows. A separate os-agnostic project is what lets the contract tests run on
+#     ubuntu/macos too (deviation from the plan's "put them in ShaPrint.Tests", documented
+#     in the Task 10 report).
+#  3. ShaPrint.UI's net8.0 AND net8.0-windows TFMs are both built by the solution-filter
+#     builds (a plain `dotnet build` builds every TFM of a multi-targeted project), so the
+#     plan's per-TFM `-f` steps are subsumed here.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows (build + full test suite)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build solution (all projects except Android)
+        # All projects incl. WpfApp + the net8.0-windows TFM of ShaPrint.UI, Updater,
+        # Platform.Windows, ShaPrint.Tests and the contract tests. Android is built in the
+        # dedicated android job (workload required, see header note 1).
+        run: dotnet build ShaPrint.ci.slnf -c Release
+
+      - name: Run full test suite (Windows)
+        run: dotnet test ShaPrint.Tests/ShaPrint.Tests.csproj -c Release --no-build
+
+      - name: Run contract tests (os-agnostic)
+        run: dotnet test ShaPrint.Tests.Contract/ShaPrint.Tests.Contract.csproj -c Release --no-build
+
+  unix:
+    name: ${{ matrix.os }} (cross-OS build + contract tests)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build solution cross-OS
+        # Windows-TFM projects (WpfApp, Platform.Windows, UI's net8.0-windows TFM, Updater,
+        # ShaPrint.Tests) compile on Linux/macOS via reference assemblies thanks to
+        # EnableWindowsTargeting (already set in each csproj; passed explicitly here as a
+        # belt-and-braces for any project that forgets it).
+        run: dotnet build ShaPrint.ci.slnf -c Release -p:EnableWindowsTargeting=true
+
+      - name: Run contract tests (os-agnostic)
+        # Only the plain-net8.0 contract project is executed on non-Windows runners — the
+        # Windows-TFM test suite can't run there (see header note 2).
+        run: dotnet test ShaPrint.Tests.Contract/ShaPrint.Tests.Contract.csproj -c Release --no-build
+
+  android:
+    name: Android (net8.0-android APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install Android workload
+        run: dotnet workload install android
+
+      - name: Install missing Android SDK components
+        # The ubuntu runner's Android SDK may lack the API 34 platform / build-tools the
+        # net8.0-android build needs; this target installs exactly what's missing and
+        # accepts the licenses non-interactively. ANDROID_HOME is preset on the runner and
+        # detected by the Android SDK automatically.
+        run: dotnet build ShaPrint.Android/ShaPrint.Android.csproj -f net8.0-android -c Release -t:InstallAndroidDependencies -p:AcceptAndroidSdkLicenses=true
+
+      - name: Build Android APK
+        # KNOWN WORKAROUND (verified on a Windows host with the same SDK + Avalonia 11.2.3):
+        # the default Release pipeline enables trimming + AOT, and .NET 8's trimmer fails
+        # with IL1032 "Root assembly '...\Avalonia\Avalonia\ShaPrint.Android.dll' could not
+        # be found" — Avalonia's InjectIlcAvaloniaXamlOutput swaps the trimmer root into
+        # $(IntermediateOutputPath)/Avalonia/ and the .NET 8 Android pipeline double-prefixes
+        # that folder (fixed upstream for .NET 9 per Avalonia's own targets). Until the repo
+        # moves to .NET 9 or a patched Avalonia, build with trimming+AOT off: the APK is
+        # larger but the Release build is green and the artifact is fully runnable.
+        run: dotnet build ShaPrint.Android/ShaPrint.Android.csproj -f net8.0-android -c Release -p:PublishTrimmed=false -p:RunAOTCompilation=false
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shaprint-android-apk
+          path: ShaPrint.Android/bin/Release/net8.0-android/*.apk
+          if-no-files-found: warn

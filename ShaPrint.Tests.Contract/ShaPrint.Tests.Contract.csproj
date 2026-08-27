@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Plain net8.0 (no -windows TFM): this project exists so the os-agnostic platform
+         contract tests can build AND run on all three CI runners (windows/ubuntu/macos).
+         The main ShaPrint.Tests project targets net8.0-windows10.0.17763 and references WPF
+         projects (ShaPrint.WpfApp, ShaPrint.UI), so it cannot be executed on Linux/macOS. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Contract surface only: Core (wire payloads + Constants) and Abstractions (interfaces).
+         Deliberately NO Platform.* references — these tests must stay os-agnostic by
+         construction (this is what lets CI run them on ubuntu/macos). -->
+    <ProjectReference Include="..\ShaPrint.Core\ShaPrint.Core.csproj" />
+    <ProjectReference Include="..\ShaPrint.Platform.Abstractions\ShaPrint.Platform.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>
