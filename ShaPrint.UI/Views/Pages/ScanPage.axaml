@@ -1,0 +1,137 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ShaPrint.UI.ViewModels.Pages"
+             x:Class="ShaPrint.UI.Views.Pages.ScanPage"
+             x:DataType="vm:ScanViewModel">
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" Margin="20,16">
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,12">
+            <TextBlock Text="Scan Document" FontSize="24" FontWeight="SemiBold" />
+            <TextBlock Text="Scan from any remote scanner shared by a server in the channel:" Foreground="Gray" />
+        </StackPanel>
+
+        <!-- Scanner discovery bar -->
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,Auto">
+            <TextBlock Grid.Column="0" Text="Target IP:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Column="1"
+                     Text="{Binding TargetIp}"
+                     Watermark="Optional — specific server IP, or blank for LAN broadcast"
+                     VerticalContentAlignment="Center"
+                     Margin="0,0,8,0" />
+            <Button Grid.Column="2" Content="Scan LAN" Command="{Binding ScanLanCommand}" MinWidth="100" Margin="0,0,8,0" />
+            <ProgressBar Grid.Column="3" IsIndeterminate="True" IsVisible="{Binding IsScanning}" Width="18" Height="18" VerticalAlignment="Center" />
+        </Grid>
+
+        <!-- Status -->
+        <TextBlock Grid.Row="2" Text="{Binding StatusText}" Foreground="Gray" Margin="0,6,0,8" />
+
+        <!-- Scanner picker + options -->
+        <Grid Grid.Row="3" ColumnDefinitions="2*,16,3*" Margin="0,0,0,12">
+            <DockPanel Grid.Column="0">
+                <TextBlock DockPanel.Dock="Top" Text="Remote Scanners" FontSize="12" FontWeight="SemiBold" Foreground="Gray" Margin="0,0,0,4" />
+                <ListBox ItemsSource="{Binding DiscoveredScanners}"
+                         SelectedItem="{Binding SelectedScanner}"
+                         BorderBrush="#D1D5DB"
+                         BorderThickness="1">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ScannerDisplayItem">
+                            <TextBlock Text="{Binding DisplayName}" Padding="2,2" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+
+            <StackPanel Grid.Column="2" Spacing="10">
+                <TextBlock Text="Scan Options" FontSize="12" FontWeight="SemiBold" Foreground="Gray" />
+                <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Grid.Column="0" Text="DPI:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox Grid.Column="1" ItemsSource="{Binding DpiOptions}" SelectedItem="{Binding SelectedDpi}" />
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Grid.Column="0" Text="Format:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox Grid.Column="1" ItemsSource="{Binding FormatOptions}" SelectedItem="{Binding SelectedFormat}" />
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Grid.Column="0" Text="Color:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <!-- SelectedColorMode is the index convention from WpfApp: 0=B&W, 1=Grayscale, 2=Color. -->
+                    <ComboBox Grid.Column="1" SelectedIndex="{Binding SelectedColorMode}">
+                        <ComboBoxItem Content="Black &amp; White" />
+                        <ComboBoxItem Content="Grayscale" />
+                        <ComboBoxItem Content="Color" />
+                    </ComboBox>
+                </Grid>
+                <Button Content="Perform Scan" Command="{Binding PerformScanCommand}" MinWidth="120" HorizontalAlignment="Left" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Preview / queue -->
+        <Grid Grid.Row="4" ColumnDefinitions="*,16,3*">
+            <!-- Queue -->
+            <DockPanel Grid.Column="0">
+                <TextBlock DockPanel.Dock="Top" Text="Scan Queue" FontSize="12" FontWeight="SemiBold" Foreground="Gray" Margin="0,0,0,4" />
+                <ListBox ItemsSource="{Binding ScannedPages}"
+                         SelectedItem="{Binding SelectedPage}"
+                         BorderBrush="#D1D5DB"
+                         BorderThickness="1">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ScannedPageItem">
+                            <StackPanel Margin="2,2" Spacing="2">
+                                <Image Source="{Binding Preview}" Width="64" Height="64" Stretch="Uniform" />
+                                <TextBlock Text="{Binding Format}" FontSize="10" Foreground="Gray" HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+                    <Button Content="Up" Command="{Binding MovePageUpCommand}" />
+                    <Button Content="Down" Command="{Binding MovePageDownCommand}" />
+                    <Button Content="Delete" Command="{Binding DeletePageCommand}" />
+                    <Button Content="Clear All" Command="{Binding ClearQueueCommand}" />
+                    <Button Content="Save As" Command="{Binding SaveAsCommand}" />
+                </StackPanel>
+            </DockPanel>
+
+            <!-- Preview -->
+            <DockPanel Grid.Column="2">
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+                    <TextBlock Text="Preview" FontSize="12" FontWeight="SemiBold" Foreground="Gray" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding ZoomPercentText}" Foreground="Gray" VerticalAlignment="Center" />
+                </StackPanel>
+                <Border DockPanel.Dock="Top" BorderBrush="#D1D5DB" BorderThickness="1" Margin="0,0,0,6" Padding="8">
+                    <Grid>
+                        <Image Source="{Binding Preview}" Stretch="Uniform" IsVisible="{Binding IsPreviewVisible}" />
+                        <ProgressBar IsIndeterminate="True" Width="28" Height="28" IsVisible="{Binding IsLoadingVisible}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock Text="No scan yet — discover a scanner and run a scan."
+                                   IsVisible="{Binding IsEmptyStateVisible}"
+                                   Foreground="Gray"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap" />
+                    </Grid>
+                </Border>
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6">
+                    <Button Content="Zoom In" Command="{Binding ZoomInCommand}" />
+                    <Button Content="Zoom Out" Command="{Binding ZoomOutCommand}" />
+                    <Button Content="Fit" Command="{Binding ZoomFitCommand}" />
+                    <Button Content="Rotate" Command="{Binding RotateCommand}" />
+                </StackPanel>
+            </DockPanel>
+        </Grid>
+
+        <!-- Logs -->
+        <TextBox Grid.Row="5"
+                 Text="{Binding LogsText, Mode=OneWay}"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="NoWrap"
+                 FontFamily="Consolas, Courier New"
+                 FontSize="11"
+                 BorderBrush="#D1D5DB"
+                 BorderThickness="1"
+                 Margin="0,10,0,0"
+                 MaxHeight="110"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+    </Grid>
+</UserControl>

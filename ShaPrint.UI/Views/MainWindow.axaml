@@ -1,11 +1,52 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ShaPrint.UI.ViewModels"
+        xmlns:views="using:ShaPrint.UI.Views.Pages"
         x:Class="ShaPrint.UI.Views.MainWindow"
-        Title="ShaPrint"
-        Width="900"
-        Height="600">
-    <TextBlock Text="ShaPrint"
-               HorizontalAlignment="Center"
-               VerticalAlignment="Center"
-               FontSize="32" />
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding ApplicationTitle}"
+        Width="1024"
+        Height="680"
+        MinWidth="760"
+        MinHeight="480">
+    <Grid ColumnDefinitions="200,*">
+
+        <!-- ── Sidebar (hidden on the Welcome page) ─────────────────────────── -->
+        <Border Grid.Column="0"
+                IsVisible="{Binding SidebarVisible}"
+                Background="#F3F4F6"
+                BorderBrush="#E5E7EB"
+                BorderThickness="0,0,1,0">
+            <DockPanel>
+                <!-- App brand -->
+                <StackPanel DockPanel.Dock="Top" Margin="16,20,16,16" Spacing="2">
+                    <TextBlock Text="ShaPrint" FontSize="20" FontWeight="Bold" />
+                    <TextBlock Text="{Binding ApplicationTitle}" FontSize="11" Foreground="Gray" />
+                </StackPanel>
+
+                <!-- Nav buttons: navigation is wired in code-behind (the shell VM exposes the
+                     NavigateTo* surface but cannot resolve page VMs from DI itself). -->
+                <StackPanel Margin="8,0" Spacing="4">
+                    <Button Content="Server" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnNavigateServer" />
+                    <Button Content="Client" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnNavigateClient" />
+                    <Button Content="Monitor" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnNavigateMonitor" />
+                    <Separator Margin="4,8" />
+                    <Button Content="Settings" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnNavigateSettings" />
+                    <Button Content="Updates" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnNavigateUpdates" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- ── Content area ──────────────────────────────────────────────────── -->
+        <Grid Grid.Column="1">
+            <!-- Page host: DataTemplate per concrete page VM (App.axaml resources). -->
+            <ContentControl Content="{Binding CurrentPage}" IsVisible="{Binding SidebarVisible}" />
+
+            <!-- Welcome landing (CurrentPage is null on Welcome; the VM is resolved once from DI
+                 in code-behind — no design-time DataContext, no parameterless ctor needed). -->
+            <Grid IsVisible="{Binding WelcomeVisible}">
+                <views:WelcomePage x:Name="WelcomeHost" />
+            </Grid>
+        </Grid>
+    </Grid>
 </Window>

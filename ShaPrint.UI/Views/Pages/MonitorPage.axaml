@@ -1,0 +1,106 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ShaPrint.UI.ViewModels.Pages"
+             xmlns:conv="using:ShaPrint.UI.Converters"
+             x:Class="ShaPrint.UI.Views.Pages.MonitorPage"
+             x:DataType="vm:MonitorViewModel">
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="20,16">
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,12">
+            <TextBlock Text="Server Monitoring" FontSize="24" FontWeight="SemiBold" />
+            <TextBlock Text="Live status of every server in the channel:" Foreground="Gray" />
+        </StackPanel>
+
+        <!-- Filter bar -->
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+            <TextBox Grid.Column="0" Text="{Binding FilterText}" Watermark="Filter by host name or IP..." Margin="0,0,8,0" />
+            <Button Grid.Column="1" Content="Refresh" Command="{Binding RefreshCommand}" MinWidth="90" />
+        </Grid>
+
+        <!-- Summary strip -->
+        <WrapPanel Grid.Row="2" Margin="0,0,0,10">
+            <TextBlock Text="Total: " Foreground="Gray" Margin="0,0,4,0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding TotalServers}" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Text="  Online: " Foreground="Gray" Margin="8,0,4,0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding OnlineCount}" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Text="  Warning: " Foreground="Gray" Margin="8,0,4,0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding WarningCount}" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Text="  Unreachable: " Foreground="Gray" Margin="8,0,4,0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding UnreachableCount}" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Text="  AuthMismatch: " Foreground="Gray" Margin="8,0,4,0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding AuthMismatchCount}" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Text="  Offline: " Foreground="Gray" Margin="8,0,4,0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding OfflineCount}" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Text="  Last refresh: " Foreground="Gray" Margin="8,0,4,0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding LastRefreshText}" VerticalAlignment="Center" />
+        </WrapPanel>
+
+        <!-- Server list -->
+        <Grid Grid.Row="3">
+            <Border BorderBrush="#D1D5DB" BorderThickness="1" Background="White">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding FilteredServers}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ServerNode">
+                                <!-- Node: bindings only touch ServerStatusPayload members that
+                                     ServerNode wraps (HostName, Version, NetworkChannel,
+                                     UptimeSeconds via converter, Printers.Count,
+                                     ActiveClients.Count) — plan Task 6 rule. The per-item command
+                                     is reached from inside the DataTemplate through the official
+                                     Avalonia $parent[ItemsControl] + DataContext-cast syntax. -->
+                                <Border BorderBrush="#F3F4F6" BorderThickness="0,0,0,1" Padding="10,6">
+                                    <StackPanel Spacing="4">
+                                        <StackPanel Orientation="Horizontal" Spacing="10">
+                                            <TextBlock Text="{Binding HostName}" FontWeight="Bold" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding IpAddress}" Foreground="Gray" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding Status}" Foreground="Gray" VerticalAlignment="Center" />
+                                            <Button Content="Toggle details"
+                                                    VerticalAlignment="Center"
+                                                    Padding="8,2"
+                                                    FontSize="11"
+                                                    Command="{Binding $parent[ItemsControl].((vm:MonitorViewModel)DataContext).ToggleExpandCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </StackPanel>
+
+                                        <StackPanel IsVisible="{Binding IsExpanded}" Spacing="2" Margin="14,0,0,0">
+                                            <TextBlock Text="{Binding Version, StringFormat='Version: {0}'}" Foreground="Gray" />
+                                            <TextBlock Text="{Binding NetworkChannel, StringFormat='Channel: {0}'}" Foreground="Gray" />
+                                            <TextBlock Text="{Binding UptimeSeconds, Converter={x:Static conv:UptimeConverter.Instance}, StringFormat='Uptime: {0}'}" Foreground="Gray" />
+                                            <TextBlock Text="{Binding Printers.Count, StringFormat='Printers: {0}'}" Foreground="Gray" />
+                                            <TextBlock Text="{Binding ActiveClients.Count, StringFormat='Clients: {0}'}" Foreground="Gray" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+
+            <!-- Empty / loading / no-results states -->
+            <StackPanel IsVisible="{Binding IsLoading}" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+                <ProgressBar IsIndeterminate="True" Width="28" Height="28" />
+                <TextBlock Text="Discovering servers..." Foreground="Gray" />
+            </StackPanel>
+            <TextBlock IsVisible="{Binding IsEmpty}"
+                       Text="No servers found in this channel yet."
+                       Foreground="Gray"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+            <TextBlock IsVisible="{Binding IsFilterNoResults}"
+                       Text="No servers match the current filter."
+                       Foreground="Gray"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+        </Grid>
+
+        <!-- Weak-channel hint (same rule as SettingsViewModel/MonitorViewModel summary) -->
+        <TextBlock Grid.Row="4"
+                   IsVisible="{Binding IsWeakChannel}"
+                   Text="Weak network channel detected — set a stronger channel in Settings for secure discovery."
+                   Foreground="#B45309"
+                   Margin="0,8,0,0"
+                   TextWrapping="Wrap" />
+    </Grid>
+</UserControl>

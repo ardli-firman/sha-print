@@ -1,7 +1,39 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ShaPrint.UI.ViewModels.Pages"
+             xmlns:views="using:ShaPrint.UI.Views.Pages"
              x:Class="ShaPrint.UI.App"
              RequestedThemeVariant="Light">
+
+    <!-- Task 6: VM -> View DataTemplates so the shell's
+         <ContentControl Content="{Binding CurrentPage}"/> renders the matching page view for
+         each page ViewModel (Welcome included for completeness; the shell hosts WelcomePage
+         directly since CurrentPage is null on the Welcome landing). Body views have no bindings
+         of their own, so only DataType is needed — no x:DataType here. -->
+    <Application.DataTemplates>
+        <DataTemplate DataType="vm:WelcomeViewModel">
+            <views:WelcomePage />
+        </DataTemplate>
+        <DataTemplate DataType="vm:ServerViewModel">
+            <views:ServerPage />
+        </DataTemplate>
+        <DataTemplate DataType="vm:ClientViewModel">
+            <views:ClientPage />
+        </DataTemplate>
+        <DataTemplate DataType="vm:MonitorViewModel">
+            <views:MonitorPage />
+        </DataTemplate>
+        <DataTemplate DataType="vm:ScanViewModel">
+            <views:ScanPage />
+        </DataTemplate>
+        <DataTemplate DataType="vm:SettingsViewModel">
+            <views:SettingsPage />
+        </DataTemplate>
+        <DataTemplate DataType="vm:UpdatesViewModel">
+            <views:UpdatesPage />
+        </DataTemplate>
+    </Application.DataTemplates>
+
     <Application.Styles>
         <FluentTheme />
     </Application.Styles>

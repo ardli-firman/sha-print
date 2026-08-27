@@ -102,6 +102,15 @@ public partial class MainWindowViewModel : ObservableObject
 
     public void NavigateToMonitor(MonitorViewModel page) => NavigateToMode(page, isMonitorMode: true);
 
+    // Task 6 deviation (documented in the task report): the WPF shell could navigate to any
+    // page from the NavigationView, but the Avalonia shell's navigation surface only had the
+    // three mode pages. The Task 6 sidebar (Server/Client/Monitor/Settings/Updates) needs these
+    // two reachable pages, so the same NavigateToMode pattern is exposed for them. No mode flag
+    // is set (mirrors the WPF footer items, which were visible in every mode).
+    public void NavigateToSettings(SettingsViewModel page) => NavigateToMode(page);
+
+    public void NavigateToUpdates(UpdatesViewModel page) => NavigateToMode(page);
+
     private void NavigateToMode(ObservableObject page, bool isServerMode = false, bool isClientMode = false, bool isMonitorMode = false)
     {
         IsServerMode = isServerMode;

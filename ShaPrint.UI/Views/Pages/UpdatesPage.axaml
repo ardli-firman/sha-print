@@ -1,0 +1,55 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ShaPrint.UI.ViewModels.Pages"
+             xmlns:svc="using:ShaPrint.UI.Services"
+             x:Class="ShaPrint.UI.Views.Pages.UpdatesPage"
+             x:DataType="vm:UpdatesViewModel">
+    <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20,16">
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,12">
+            <TextBlock Text="Updates" FontSize="24" FontWeight="SemiBold" />
+            <TextBlock Text="Available ShaPrint releases on GitHub:" Foreground="Gray" />
+        </StackPanel>
+
+        <!-- Channel + refresh -->
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,10">
+            <TextBlock Grid.Column="0" Text="Channel:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <ComboBox Grid.Column="1"
+                      ItemsSource="{Binding AvailableChannels}"
+                      SelectedItem="{Binding SelectedChannel}"
+                      HorizontalAlignment="Left"
+                      MinWidth="110"
+                      Margin="0,0,8,0" />
+            <Button Grid.Column="2" Content="Check for Updates" Command="{Binding LoadReleasesCommand}" MinWidth="140" />
+        </Grid>
+
+        <!-- Release list -->
+        <Border Grid.Row="2" BorderBrush="#D1D5DB" BorderThickness="1" Background="White">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ListBox ItemsSource="{Binding Releases}"
+                         SelectedItem="{Binding SelectedRelease}"
+                         Background="Transparent">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="svc:GitHubRelease">
+                            <StackPanel Spacing="2" Margin="2,4">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding Version, StringFormat='v{0}'}" Foreground="Gray" />
+                                    <TextBlock Text="{Binding Channel}" Foreground="Gray" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding PublishedAt}" FontSize="11" Foreground="Gray" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Status + install -->
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto" Margin="0,10,0,0">
+            <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" Foreground="Gray" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,8,0" />
+            <Button Grid.Column="1" Content="Install Selected" Command="{Binding InstallSelectedCommand}" MinWidth="130" />
+        </Grid>
+    </Grid>
+</UserControl>

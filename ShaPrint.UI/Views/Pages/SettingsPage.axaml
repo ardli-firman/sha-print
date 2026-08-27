@@ -1,0 +1,85 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ShaPrint.UI.ViewModels.Pages"
+             x:Class="ShaPrint.UI.Views.Pages.SettingsPage"
+             x:DataType="vm:SettingsViewModel">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="20,16" Spacing="14" MaxWidth="640" HorizontalAlignment="Left">
+
+            <!-- Header -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="Settings" FontSize="24" FontWeight="SemiBold" />
+                <TextBlock Text="Network, startup and scan preferences." Foreground="Gray" />
+                <TextBlock Text="{Binding AppVersionText}" FontSize="11" Foreground="Gray" />
+                <TextBlock Text="{Binding LastCheckedText}" FontSize="11" Foreground="Gray" />
+            </StackPanel>
+
+            <!-- Network channel -->
+            <Border BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Network Channel" FontSize="13" FontWeight="SemiBold" />
+                    <TextBox Text="{Binding ChannelName}" Watermark="e.g. DefaultChannel or a custom 8+ char channel" />
+                    <TextBlock IsVisible="{Binding IsWeakChannel}"
+                               Text="Weak channel — use at least 8 characters for secure discovery."
+                               Foreground="#B45309"
+                               TextWrapping="Wrap" />
+                    <Grid ColumnDefinitions="Auto,*">
+                        <TextBlock Grid.Column="0" Text="Update channel:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <ComboBox Grid.Column="1" SelectedIndex="{Binding ChannelIndex}" HorizontalAlignment="Left" MinWidth="120">
+                            <ComboBoxItem Content="Stable" />
+                            <ComboBoxItem Content="Beta" />
+                        </ComboBox>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Startup -->
+            <Border BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Startup" FontSize="13" FontWeight="SemiBold" />
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="Run on startup" VerticalAlignment="Center" />
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding RunOnStartup}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="Auto-update enabled" VerticalAlignment="Center" />
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoUpdateEnabled}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="Auto-purge spooler queues" VerticalAlignment="Center" />
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoPurgeEnabled}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Scans -->
+            <Border BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Scans" FontSize="13" FontWeight="SemiBold" />
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="Auto-save scans" VerticalAlignment="Center" />
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoSaveScans}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBox Grid.Column="0" Text="{Binding DefaultScansFolder}" Watermark="Default scans folder" Margin="0,0,8,0" />
+                        <Button Grid.Column="1" Content="Browse..." Command="{Binding BrowseFolderCommand}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Danger zone -->
+            <Border BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Reset" FontSize="13" FontWeight="SemiBold" />
+                    <TextBlock Text="Clear the saved app mode and return to the Welcome page."
+                               Foreground="Gray"
+                               TextWrapping="Wrap" />
+                    <Button Content="Reset Mode" Command="{Binding ResetModeCommand}" HorizontalAlignment="Left" MinWidth="120" />
+                </StackPanel>
+            </Border>
+
+            <!-- Feedback -->
+            <TextBlock Text="{Binding StatusMessage}" Foreground="Gray" TextWrapping="Wrap" />
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

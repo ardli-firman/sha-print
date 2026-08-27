@@ -1,0 +1,68 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ShaPrint.UI.ViewModels.Pages"
+             x:Class="ShaPrint.UI.Views.Pages.ClientPage"
+             x:DataType="vm:ClientViewModel">
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto,*" Margin="20,16">
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,12">
+            <TextBlock Text="Printer Setup" FontSize="24" FontWeight="SemiBold" />
+            <TextBlock Text="Discover ShaPrint servers and install their printers on this PC:" Foreground="Gray" />
+        </StackPanel>
+
+        <!-- Discovery bar -->
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,Auto">
+            <TextBlock Grid.Column="0" Text="Target IP:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Column="1"
+                     Text="{Binding TargetIp}"
+                     Watermark="Optional — specific server IP, or blank for LAN broadcast"
+                     VerticalContentAlignment="Center"
+                     Margin="0,0,8,0" />
+            <Button Grid.Column="2" Content="Scan LAN" Command="{Binding ScanCommand}" MinWidth="100" Margin="0,0,8,0" />
+            <ProgressBar Grid.Column="3" IsIndeterminate="True" IsVisible="{Binding IsScanning}" Width="18" Height="18" VerticalAlignment="Center" />
+        </Grid>
+
+        <!-- Status -->
+        <TextBlock Grid.Row="2" Text="{Binding StatusText}" Foreground="Gray" Margin="0,6,0,12" />
+
+        <!-- Discovered printers: SelectedItem -> SelectedPrinter (Install/Delete act on it). -->
+        <Grid Grid.Row="3" RowDefinitions="Auto,*" Margin="0,0,0,12">
+            <TextBlock Grid.Row="0" Text="Discovered Printers" FontSize="12" FontWeight="SemiBold" Foreground="Gray" Margin="0,0,0,4" />
+            <ListBox Grid.Row="1"
+                     ItemsSource="{Binding DiscoveredPrinters}"
+                     SelectedItem="{Binding SelectedPrinter}"
+                     BorderBrush="#D1D5DB"
+                     BorderThickness="1">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:PrinterDisplayItem">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="{Binding DisplayName}" Padding="2,2" TextTrimming="CharacterEllipsis" />
+                            <Border Grid.Column="1"
+                                    Background="#DCFCE7"
+                                    CornerRadius="4"
+                                    Padding="6,1"
+                                    Margin="8,2,2,2"
+                                    IsVisible="{Binding IsInstalled}">
+                                <TextBlock Text="Installed" FontSize="10" Foreground="#166534" />
+                            </Border>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Grid>
+
+        <!-- Install / Delete actions (page-level commands; no per-item RemovePrinterCommand exists
+             on the VM, so the list below is read-only — task report deviation). -->
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12">
+            <Button Content="Install Selected" Command="{Binding InstallSelectedCommand}" MinWidth="130" />
+            <Button Content="Delete Selected" Command="{Binding DeleteSelectedCommand}" MinWidth="130" />
+        </StackPanel>
+
+        <!-- Installed virtual printers (strings; the VM exposes no remove-by-name command). -->
+        <Grid Grid.Row="5" RowDefinitions="Auto,*">
+            <TextBlock Grid.Row="0" Text="Installed Virtual Printers" FontSize="12" FontWeight="SemiBold" Foreground="Gray" Margin="0,0,0,4" />
+            <ListBox Grid.Row="1" ItemsSource="{Binding InstalledVirtualPrinters}" IsHitTestVisible="False" Focusable="False" BorderBrush="#D1D5DB" BorderThickness="1" />
+        </Grid>
+    </Grid>
+</UserControl>

@@ -16,6 +16,11 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
 
+    <!-- Task 6: compile bindings by default so a binding to a wrong property name fails the
+         BUILD instead of failing silently at runtime. Every view sets x:DataType on its root
+         and on each DataTemplate. -->
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+
     <!-- WINDOWS is consumed by #if WINDOWS regions (PlatformServiceCollectionExtensions).
          Defined explicitly per-TFM so the switch is deterministic regardless of SDK defaults. -->
     <DefineConstants Condition="'$(TargetFramework)' == 'net8.0-windows10.0.17763'">$(DefineConstants);WINDOWS</DefineConstants>

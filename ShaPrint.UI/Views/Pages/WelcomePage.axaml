@@ -1,0 +1,139 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ShaPrint.UI.ViewModels.Pages"
+             x:Class="ShaPrint.UI.Views.Pages.WelcomePage"
+             x:DataType="vm:WelcomeViewModel">
+    <Grid>
+        <StackPanel MaxWidth="520" Margin="32" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="14">
+
+            <!-- Brand -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="ShaPrint" FontSize="32" FontWeight="Bold" HorizontalAlignment="Center" />
+                <TextBlock Text="Wireless printing &amp; scanning across your network"
+                           Foreground="Gray"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Channel name -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="Network Channel" FontSize="12" FontWeight="SemiBold" />
+                <TextBox Text="{Binding ChannelName}" Watermark="Enter your network channel name" />
+                <TextBlock IsVisible="{Binding HasValidationError}"
+                           Text="{Binding ValidationError}"
+                           Foreground="#B91C1C"
+                           FontSize="12" />
+                <TextBlock IsVisible="{Binding HasValidationInfo}"
+                           Text="{Binding ValidationInfo}"
+                           Foreground="#047857"
+                           FontSize="12" />
+            </StackPanel>
+
+            <!-- Mode selection -->
+            <Grid ColumnDefinitions="*,8,*">
+                <!-- Server -->
+                <StackPanel Grid.Column="0" Spacing="6">
+                    <Button Content="Server Mode"
+                            Command="{Binding SelectServerModeCommand}"
+                            HorizontalAlignment="Stretch"
+                            Height="44" />
+                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsServerProcessing}" Width="18" Height="18" HorizontalAlignment="Center" />
+                    <TextBlock IsVisible="{Binding IsServerSuggested}"
+                               Text="{Binding ServerHintText}"
+                               Foreground="#047857"
+                               FontSize="11"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap" />
+                    <TextBlock IsVisible="{Binding IsServerError}"
+                               Text="{Binding ErrorMessage}"
+                               Foreground="#B91C1C"
+                               FontSize="11"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap" />
+                    <Button Content="?"
+                            Command="{Binding ShowHelpModalCommand}"
+                            CommandParameter="Server"
+                            Width="28"
+                            Height="28"
+                            HorizontalAlignment="Center"
+                            Padding="0" />
+                </StackPanel>
+
+                <!-- Client -->
+                <StackPanel Grid.Column="2" Spacing="6">
+                    <Button Content="Client Mode"
+                            Command="{Binding SelectClientModeCommand}"
+                            HorizontalAlignment="Stretch"
+                            Height="44" />
+                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsClientProcessing}" Width="18" Height="18" HorizontalAlignment="Center" />
+                    <TextBlock IsVisible="{Binding IsClientSuggested}"
+                               Text="{Binding ClientHintText}"
+                               Foreground="#047857"
+                               FontSize="11"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap" />
+                    <TextBlock IsVisible="{Binding IsClientError}"
+                               Text="{Binding ErrorMessage}"
+                               Foreground="#B91C1C"
+                               FontSize="11"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap" />
+                    <Button Content="?"
+                            Command="{Binding ShowHelpModalCommand}"
+                            CommandParameter="Client"
+                            Width="28"
+                            Height="28"
+                            HorizontalAlignment="Center"
+                            Padding="0" />
+                </StackPanel>
+            </Grid>
+
+            <!-- Monitor -->
+            <StackPanel Spacing="6" HorizontalAlignment="Center" Width="252">
+                <Button Content="Monitor Mode"
+                        Command="{Binding SelectMonitorModeCommand}"
+                        HorizontalAlignment="Stretch"
+                        Height="44" />
+                <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsMonitorProcessing}" Width="18" Height="18" HorizontalAlignment="Center" />
+                <TextBlock IsVisible="{Binding IsMonitorError}"
+                           Text="{Binding ErrorMessage}"
+                           Foreground="#B91C1C"
+                           FontSize="11"
+                           TextAlignment="Center"
+                           TextWrapping="Wrap" />
+                <Button Content="?"
+                        Command="{Binding ShowHelpModalCommand}"
+                        CommandParameter="Monitor"
+                        Width="28"
+                        Height="28"
+                        HorizontalAlignment="Center"
+                        Padding="0" />
+            </StackPanel>
+
+            <!-- Processing feedback -->
+            <TextBlock Text="{Binding ProcessingMessage}"
+                       Foreground="Gray"
+                       HorizontalAlignment="Center"
+                       FontSize="12" />
+        </StackPanel>
+
+        <!-- Help modal (view-layer toggle driven by the VM) -->
+        <Border IsVisible="{Binding IsHelpModalOpen}"
+                Background="#66000000">
+            <Border Background="White"
+                    CornerRadius="8"
+                    Padding="24"
+                    MaxWidth="480"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="{Binding HelpModalTitle}" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding HelpModalBody}" TextWrapping="Wrap" Foreground="Gray" />
+                    <Button Content="Close"
+                            Command="{Binding CloseHelpModalCommand}"
+                            HorizontalAlignment="Right"
+                            MinWidth="90" />
+                </StackPanel>
+            </Border>
+        </Border>
+    </Grid>
+</UserControl>
