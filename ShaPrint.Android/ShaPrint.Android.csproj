@@ -47,4 +47,30 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
   </ItemGroup>
 
+
+
+  <!-- =====================================================================
+       WORKAROUND (Avalonia 11.2.3 + .NET 8 Android trim/AOT): the Android
+       pipeline re-executes PrepareToCompileAvaloniaXaml after
+       InjectAvaloniaXamlOutput has already re-pointed IntermediateAssembly at
+       "...\Avalonia\<file>". The second run recomputes AvaloniaCompileOutput
+       from RelativeDir that already ends in "Avalonia\", producing the doubled
+       path "...\Avalonia\Avalonia\<file>" which ends up in
+       ResolvedFileToPublish -> ILLink IL1032 "Root assembly ... could not be
+       found" in Release (trim/AOT) builds. Avalonia fixed this for .NET 9
+       (dotnet/runtime#99732), not for .NET 8 Android.
+       This target runs after EVERY PrepareToCompileAvaloniaXaml execution and
+       re-normalizes the metadata (strip one "Avalonia\" suffix from RelativeDir
+       before appending), so the value is idempotent under double application.
+       Self-disabling once upstream is fixed: if the metadata is already single,
+       the value is unchanged.
+       ===================================================================== -->
+  <Target Name="FixAvaloniaCompileOutputPath" AfterTargets="PrepareToCompileAvaloniaXaml">
+    <ItemGroup>
+      <IntermediateAssembly Update="*" AvaloniaCompileOutput="$([System.String]::Copy('%(RelativeDir)').Replace('\Avalonia\', '\'))Avalonia\%(Filename)%(Extension)" />
+      <IntermediateRefAssembly Update="*" AvaloniaCompileOutput="$([System.String]::Copy('%(RelativeDir)').Replace('\Avalonia\', '\'))Avalonia\%(Filename)%(Extension)" />
+      <_DebugSymbolsIntermediatePath Update="*" AvaloniaCompileOutput="$([System.String]::Copy('%(RelativeDir)').Replace('\Avalonia\', '\'))Avalonia\%(Filename)%(Extension)" />
+    </ItemGroup>
+  </Target>
+
 </Project>

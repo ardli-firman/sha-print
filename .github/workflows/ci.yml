@@ -98,15 +98,12 @@ jobs:
         run: dotnet build ShaPrint.Android/ShaPrint.Android.csproj -f net8.0-android -c Release -t:InstallAndroidDependencies -p:AcceptAndroidSdkLicenses=true
 
       - name: Build Android APK
-        # KNOWN WORKAROUND (verified on a Windows host with the same SDK + Avalonia 11.2.3):
-        # the default Release pipeline enables trimming + AOT, and .NET 8's trimmer fails
-        # with IL1032 "Root assembly '...\Avalonia\Avalonia\ShaPrint.Android.dll' could not
-        # be found" — Avalonia's InjectIlcAvaloniaXamlOutput swaps the trimmer root into
-        # $(IntermediateOutputPath)/Avalonia/ and the .NET 8 Android pipeline double-prefixes
-        # that folder (fixed upstream for .NET 9 per Avalonia's own targets). Until the repo
-        # moves to .NET 9 or a patched Avalonia, build with trimming+AOT off: the APK is
-        # larger but the Release build is green and the artifact is fully runnable.
-        run: dotnet build ShaPrint.Android/ShaPrint.Android.csproj -f net8.0-android -c Release -p:PublishTrimmed=false -p:RunAOTCompilation=false
+        # ShaPrint.Android.csproj carries FixAvaloniaCompileOutputPath, a target that
+        # normalizes Avalonia 11.2.3's AvaloniaCompileOutput metadata so the .NET 8
+        # Android trimmer/AOT pipeline no longer double-prefixes
+        # '...\Avalonia\Avalonia\...' (IL1032 root-assembly failure, fixed upstream
+        # only for .NET 9). Default Release (trimming + profiled AOT) builds green.
+        run: dotnet build ShaPrint.Android/ShaPrint.Android.csproj -f net8.0-android -c Release
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
