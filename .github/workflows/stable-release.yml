@@ -11,7 +11,13 @@ on:
       - 'ShaPrint.Tests/**'
       - 'ShaPrint.sln'
       - 'installer.iss'
-      
+      - 'ShaPrint.UI/**'
+      - 'ShaPrint.Android/**'
+      - 'ShaPrint.Platform.Abstractions/**'
+      - 'ShaPrint.Platform.Windows/**'
+      - 'ShaPrint.Platform.Unix/**'
+      - 'ShaPrint.Tests.Contract/**'
+      - 'ShaPrint.ci.slnf'
       # Exclude: docs, config, workflow
       - '!**/*.md'
       - '!docs/**'
