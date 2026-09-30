@@ -25,7 +25,6 @@ mod tag {
     pub(super) const END_OF_ATTRIBUTES: u8 = 0x03;
     pub(super) const PRINTER_ATTRIBUTES: u8 = 0x04;
 
-    pub(super) const INTEGER: u8 = 0x21;
     pub(super) const BOOLEAN: u8 = 0x22;
     pub(super) const ENUM: u8 = 0x23;
     pub(super) const NAME: u8 = 0x42;
@@ -227,20 +226,20 @@ pub struct PrinterEntry {
 
 /// Builds the response to `Get-Printers` or `Get-Printer-Attributes`.
 ///
-/// RFC 8010: the header echoes the request's version, operation id, and request id; the operation
-/// attributes carry the charset, language, and status; every advertised printer becomes one
-/// printer attributes group; a single end-of-attributes tag closes the section.
+/// RFC 8010: a response header carries the version, the status code (in place of the request's
+/// operation id, §3.4.3), and the request id; the operation attributes carry the charset and
+/// language; every advertised printer becomes one printer attributes group; a single
+/// end-of-attributes tag closes the section.
 pub fn response(
     request_id: u32,
     version: (u8, u8),
-    operation: u16,
     status: Status,
     printers: &[PrinterEntry],
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(256 + printers.len() * 128);
     out.push(version.0);
     out.push(version.1);
-    out.extend(operation.to_be_bytes());
+    out.extend(status.code().to_be_bytes());
     out.extend(request_id.to_be_bytes());
 
     out.push(tag::OPERATION_ATTRIBUTES);
@@ -251,18 +250,20 @@ pub fn response(
         "attributes-natural-language",
         "en",
     );
-    write_integers(
-        &mut out,
-        tag::INTEGER,
-        "status-code",
-        &[i32::from(status.code())],
-    );
 
     for printer in printers {
         out.push(tag::PRINTER_ATTRIBUTES);
-        write_text(&mut out, tag::URI, "printer-uri", &printer.uri);
+        // `printer-uri` is an operation attribute in a request; a printer attributes group is
+        // identified by `printer-uri-supported` (RFC 8011 §5.4.1).
         write_text(&mut out, tag::URI, "printer-uri-supported", &printer.uri);
         write_text(&mut out, tag::NAME, "printer-name", &printer.name);
+        write_text(&mut out, tag::KEYWORD, "uri-security-supported", "tls");
+        write_texts(
+            &mut out,
+            tag::KEYWORD,
+            "ipp-versions-supported",
+            &["2.0", "1.1"],
+        );
         write_integers(&mut out, tag::ENUM, "printer-state", &[PRINTER_STATE_IDLE]);
         write_text(&mut out, tag::KEYWORD, "printer-state-reasons", "none");
         write_boolean(&mut out, "printer-is-accepting-jobs", true);
@@ -292,6 +293,14 @@ pub fn response(
 fn write_text(out: &mut Vec<u8>, value_tag: u8, name: &str, value: &str) {
     out.push(value_tag);
     write_name_and_value(out, name, value.as_bytes());
+}
+
+fn write_texts(out: &mut Vec<u8>, value_tag: u8, name: &str, values: &[&str]) {
+    for (index, value) in values.iter().enumerate() {
+        out.push(value_tag);
+        // A 1setOf repeats the value tag and a zero-length name after the first value.
+        write_name_and_value(out, if index == 0 { name } else { "" }, value.as_bytes());
+    }
 }
 
 fn write_integers(out: &mut Vec<u8>, value_tag: u8, name: &str, values: &[i32]) {
@@ -538,16 +547,10 @@ mod tests {
             },
         ];
 
-        let bytes = response(
-            7,
-            IPP_VERSION_2_0,
-            OPERATION_GET_PRINTERS,
-            Status::Ok,
-            &printers,
-        );
+        let bytes = response(7, IPP_VERSION_2_0, Status::Ok, &printers);
 
         assert_eq!(&bytes[0..2], &[2, 0]);
-        assert_eq!(&bytes[2..4], &OPERATION_GET_PRINTERS.to_be_bytes());
+        assert_eq!(&bytes[2..4], &[0, 0]);
         assert_eq!(&bytes[4..8], &7u32.to_be_bytes());
         assert_eq!(bytes[bytes.len() - 1], tag::END_OF_ATTRIBUTES);
 
@@ -565,19 +568,38 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["HP LaserJet", "Zebra"]);
         assert_eq!(
-            text(&attributes, "printer-uri"),
+            text(&attributes, "printer-uri-supported"),
             Some("ipps://server:8631/ipp/print/HP%20LaserJet".to_owned())
+        );
+        // A printer attributes group is identified by `printer-uri-supported`; `printer-uri`
+        // belongs to requests.
+        assert!(!attributes
+            .iter()
+            .any(|attribute| attribute.name == "printer-uri"));
+        assert_eq!(
+            text(&attributes, "uri-security-supported"),
+            Some("tls".to_owned())
+        );
+        assert_eq!(
+            attributes
+                .iter()
+                .find(|attribute| attribute.name == "printer-name")
+                .map(|attribute| attribute.value_tag),
+            Some(tag::NAME)
+        );
+        assert_eq!(
+            text(&attributes, "ipp-versions-supported"),
+            Some("2.0".to_owned())
         );
         // Every attribute of a response must sit in a named group.
         assert!(attributes.iter().all(|attribute| attribute.group != 0));
     }
 
     #[test]
-    fn a_response_reports_the_status_code_and_the_endpoint_capabilities() {
+    fn a_response_reports_its_status_in_the_header_and_its_capabilities() {
         let bytes = response(
             7,
             IPP_VERSION_2_0,
-            OPERATION_GET_PRINTERS,
             Status::Ok,
             &[PrinterEntry {
                 name: "Zebra".to_owned(),
@@ -585,15 +607,11 @@ mod tests {
             }],
         );
 
-        let attributes = decode(&bytes);
-        let status = attributes
-            .iter()
-            .find(|attribute| attribute.name == "status-code")
-            .expect("status-code is reported");
-        assert_eq!(status.values, vec![vec![0, 0, 0, 0]]);
-        assert_eq!(status.value_tag, tag::INTEGER);
-        assert_eq!(status.group, tag::OPERATION_ATTRIBUTES);
+        // RFC 8010 §3.4.3: the status code sits in the third and fourth bytes, where a request
+        // carries its operation id.
+        assert_eq!(&bytes[2..4], &Status::Ok.code().to_be_bytes());
 
+        let attributes = decode(&bytes);
         let operations: Vec<Vec<u8>> = attributes
             .iter()
             .filter(|attribute| attribute.name == "operations-supported")
@@ -616,15 +634,10 @@ mod tests {
 
     #[test]
     fn a_response_without_printers_is_still_well_formed() {
-        let bytes = response(
-            9,
-            IPP_VERSION_1_1,
-            OPERATION_GET_PRINTERS,
-            Status::NotFound,
-            &[],
-        );
+        let bytes = response(9, IPP_VERSION_1_1, Status::NotFound, &[]);
 
-        assert_eq!(&bytes[0..8], &[1, 1, 0x04, 0x02, 0, 0, 0, 9]);
+        // 0x0406 client-error-not-found in the header's status field.
+        assert_eq!(&bytes[0..8], &[1, 1, 0x04, 0x06, 0, 0, 0, 9]);
         assert_eq!(bytes[bytes.len() - 1], tag::END_OF_ATTRIBUTES);
 
         let attributes = decode(&bytes);
@@ -632,13 +645,9 @@ mod tests {
             text(&attributes, "attributes-charset"),
             Some("utf-8".to_owned())
         );
-        assert_eq!(
-            attributes
-                .iter()
-                .find(|attribute| attribute.name == "status-code")
-                .map(|attribute| attribute.values.clone()),
-            Some(vec![vec![0, 0, 4, 6]])
-        );
+        assert!(!attributes
+            .iter()
+            .any(|attribute| attribute.name == "status-code"));
         assert!(!attributes
             .iter()
             .any(|attribute| attribute.group == tag::PRINTER_ATTRIBUTES));

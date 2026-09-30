@@ -64,30 +64,63 @@ impl HttpError {
 }
 
 /// Reads a request head from `reader`.
+///
+/// The head is read in bounded pieces and refused as soon as it exceeds [`MAX_HEAD_BYTES`], so a
+/// client cannot make the endpoint allocate more than the limit just by withholding a newline.
 pub async fn read_head<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Head, HttpError> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut consumed = 0usize;
+    let mut head: Vec<u8> = Vec::with_capacity(512);
+    let mut line_start = 0usize;
+
     loop {
-        let mut line = Vec::new();
-        let read = reader
-            .read_until(b'\n', &mut line)
-            .await
-            .map_err(|_| HttpError::Malformed)?;
-        if read == 0 {
-            // The client closed the connection before finishing its head.
-            return Err(HttpError::Malformed);
+        let previous = head.len();
+        {
+            let available = reader.fill_buf().await.map_err(|_| HttpError::Malformed)?;
+            if available.is_empty() {
+                // The client closed the connection before finishing its head.
+                return Err(HttpError::Malformed);
+            }
+            let budget = MAX_HEAD_BYTES.saturating_sub(head.len());
+            if budget == 0 {
+                return Err(HttpError::TooLarge);
+            }
+            head.extend_from_slice(&available[..available.len().min(budget)]);
         }
-        consumed += read;
-        if consumed > MAX_HEAD_BYTES {
+
+        // A head ends at the first empty line; anything after it is the body and stays unread.
+        let mut scan = line_start;
+        while let Some(offset) = head[scan..].iter().position(|byte| *byte == b'\n') {
+            let line_end = scan + offset;
+            if without_line_ending(&head[scan..line_end]).is_empty() {
+                let head_bytes = line_end + 1;
+                reader.consume(head_bytes - previous);
+                return parse_head(&head[..head_bytes]);
+            }
+            scan = line_end + 1;
+        }
+
+        line_start = scan;
+        reader.consume(head.len() - previous);
+        if head.len() >= MAX_HEAD_BYTES {
             return Err(HttpError::TooLarge);
         }
-        let text = String::from_utf8_lossy(&line);
-        let text = text.trim_end_matches(['\r', '\n']);
-        if text.is_empty() {
-            break;
-        }
-        lines.push(text.to_owned());
     }
+}
+
+/// Removes the line ending from a line of the head.
+fn without_line_ending(line: &[u8]) -> &[u8] {
+    match line.split_last() {
+        Some((b'\r', rest)) => rest,
+        _ => line,
+    }
+}
+
+/// Turns the raw head into a request line and its headers.
+fn parse_head(head: &[u8]) -> Result<Head, HttpError> {
+    let text = String::from_utf8_lossy(head);
+    let lines: Vec<&str> = text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
 
     let request_line = lines.first().ok_or(HttpError::Malformed)?;
     let mut parts = request_line.split_whitespace();
@@ -100,6 +133,9 @@ pub async fn read_head<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Head, 
 
     let mut headers = Vec::with_capacity(lines.len() - 1);
     for line in &lines[1..] {
+        if line.is_empty() {
+            break;
+        }
         let (name, value) = line.split_once(':').ok_or(HttpError::Malformed)?;
         headers.push((name.trim().to_owned(), value.trim().to_owned()));
     }
@@ -212,6 +248,58 @@ mod tests {
                 .expect_err("no colon"),
             HttpError::Malformed
         );
+    }
+
+    #[tokio::test]
+    async fn a_client_streaming_without_a_newline_is_refused_without_buffering_it() {
+        // The client keeps sending and never ends its head; the endpoint must give up at its limit
+        // instead of growing a buffer to whatever the client sends.
+        let (mut client, server) = tokio::io::duplex(64);
+        let reading = tokio::spawn(async move {
+            let mut reader = BufReader::with_capacity(256, server);
+            read_head(&mut reader).await
+        });
+
+        let chunk = vec![b'a'; 64];
+        let mut sent = 0usize;
+        while sent < MAX_HEAD_BYTES * 2 {
+            // Once the endpoint refuses the head it closes its side, and writing fails.
+            if client.write_all(&chunk).await.is_err() {
+                break;
+            }
+            sent += chunk.len();
+        }
+
+        assert_eq!(
+            reading.await.expect("task finishes").expect_err("refused"),
+            HttpError::TooLarge
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_that_arrived_with_the_head_stays_readable() {
+        // A client may send the head and the body in one packet; the head reader must stop exactly
+        // at the blank line so the body is not swallowed.
+        let mut reader = BufReader::new(
+            &b"POST /ipp/print HTTP/1.1\r\nContent-Length: 4\r\nContent-Type: application/ipp\r\n\r\nBODY"[..],
+        );
+
+        let parsed = read_head(&mut reader).await.expect("parses");
+        let length = body_length(&parsed).expect("accepted");
+        let body = read_body(&mut reader, length)
+            .await
+            .expect("reads the body");
+
+        assert_eq!(body, b"BODY");
+    }
+
+    #[tokio::test]
+    async fn a_head_with_bare_line_feeds_is_parsed() {
+        let parsed = head("POST /ipp/print HTTP/1.1\nHost: server\nContent-Length: 0\nContent-Type: application/ipp\n\n")
+            .await
+            .expect("parses");
+
+        assert_eq!(parsed.header("host"), Some("server"));
     }
 
     #[tokio::test]

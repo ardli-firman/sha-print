@@ -15,6 +15,11 @@ sharing runs and closes the listener when sharing stops, so a stopped server ref
 connections. Every query answers from the current selection, so changing the shared queues takes
 effect without restarting sharing.
 
+Responses follow RFC 8010: the status code occupies the header field a request uses for its
+operation id, and each printer is reported as its own attributes group identified by
+`printer-uri-supported`. The endpoint returns the subset of printer attributes a client needs to
+list and address printers; the document-format and job attributes arrive with job submission (#32).
+
 The server's identity is a self-signed certificate generated once and kept in the app data
 directory (`server-identity.cert.der` and `server-identity.key.der`, the key restricted to the
 current user where the platform supports it). Clients approve its SHA-256 fingerprint on first use,

@@ -20,20 +20,15 @@ pub fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> V
     let request = match Request::parse(request) {
         Ok(request) => request,
         // The header was unreadable, so there is no request id to echo.
-        Err(_) => return response(0, IPP_VERSION_1_1, 0, Status::BadRequest, &[]),
+        // The header was unreadable, so there is no request id to echo.
+        Err(_) => return response(0, IPP_VERSION_1_1, Status::BadRequest, &[]),
     };
 
     let operation = request.operation();
     let request_id = request.request_id();
     let version = request.response_version();
     if !request.version_is_supported() {
-        return response(
-            request_id,
-            version,
-            operation,
-            Status::VersionNotSupported,
-            &[],
-        );
+        return response(request_id, version, Status::VersionNotSupported, &[]);
     }
 
     match operation {
@@ -43,7 +38,7 @@ pub fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> V
                 .iter()
                 .map(|name| entry(host, name))
                 .collect();
-            response(request_id, version, operation, Status::Ok, &printers)
+            response(request_id, version, Status::Ok, &printers)
         }
         OPERATION_GET_PRINTER_ATTRIBUTES => {
             let wanted = request
@@ -51,23 +46,11 @@ pub fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> V
                 .or_else(|| request.value("printer-name"));
             let shared = shared.shared_printers();
             match wanted.and_then(|wanted| find(&shared, wanted)) {
-                Some(name) => response(
-                    request_id,
-                    version,
-                    operation,
-                    Status::Ok,
-                    &[entry(host, name)],
-                ),
-                None => response(request_id, version, operation, Status::NotFound, &[]),
+                Some(name) => response(request_id, version, Status::Ok, &[entry(host, name)]),
+                None => response(request_id, version, Status::NotFound, &[]),
             }
         }
-        _ => response(
-            request_id,
-            version,
-            operation,
-            Status::UnsupportedOperation,
-            &[],
-        ),
+        _ => response(request_id, version, Status::UnsupportedOperation, &[]),
     }
 }
 
@@ -179,24 +162,9 @@ mod tests {
         value
     }
 
+    /// The status code of a response header (RFC 8010 §3.4.3).
     fn status(answer: &[u8]) -> u16 {
-        let mut position = 8;
-        while position + 1 < answer.len() {
-            let value_tag = answer[position];
-            position += 1;
-            if value_tag == 0x03 {
-                break;
-            }
-            if (0x01..=0x05).contains(&value_tag) {
-                continue;
-            }
-            let name = read(answer, &mut position);
-            let value = read(answer, &mut position);
-            if name == b"status-code" {
-                return u16::from_be_bytes([value[2], value[3]]);
-            }
-        }
-        panic!("no status-code in the answer");
+        u16::from_be_bytes([answer[2], answer[3]])
     }
 
     #[test]
@@ -298,7 +266,6 @@ mod tests {
         let answer = answer(&request(0x0002, &[]), "server", &shared);
 
         assert_eq!(status(&answer), 0x0501);
-        assert_eq!(&answer[2..4], &0x0002u16.to_be_bytes());
     }
 
     #[test]
@@ -328,7 +295,7 @@ mod tests {
         let shared = FakeShared::new(&["Queue#1/2"]);
 
         let listing = answer(&request(OPERATION_GET_PRINTERS, &[]), "server", &shared);
-        let uri = values_of(&listing, b"printer-uri")
+        let uri = values_of(&listing, b"printer-uri-supported")
             .into_iter()
             .next()
             .expect("a printer uri");

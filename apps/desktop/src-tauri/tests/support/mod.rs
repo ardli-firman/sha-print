@@ -238,12 +238,10 @@ fn attribute(body: &mut Vec<u8>, value_tag: u8, name: &str, value: &str) {
     body.extend(value.as_bytes());
 }
 
-/// The status code of an IPP response.
+/// The status code of an IPP response; RFC 8010 §3.4.3 puts it in the header, where a request
+/// carries its operation id.
 pub fn status_code(response: &[u8]) -> u16 {
-    attribute_values(response, "status-code")
-        .first()
-        .map(|value| u16::from_be_bytes([value[2], value[3]]))
-        .expect("a status code")
+    u16::from_be_bytes([response[2], response[3]])
 }
 
 /// The `printer-name` values an IPP response advertises.
