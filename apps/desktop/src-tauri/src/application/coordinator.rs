@@ -212,6 +212,10 @@ impl RuntimeCoordinator {
     pub async fn start(&self, id: ServiceId) -> Result<(), AppError> {
         let service = self.service(id)?;
 
+        // A precondition the user can still fix (no shared printers selected, for example) is
+        // reported with its own code and leaves the lifecycle untouched.
+        service.preflight()?;
+
         // A failed service is reset first, so a retry from the UI is a single action.
         if self.state(id)? == ServiceState::Failed {
             self.stop(id).await?;
@@ -479,6 +483,9 @@ mod tests {
         Fails,
         /// Waits forever without reporting ready.
         NeverReady,
+        /// Rejects startup before the lifecycle starts, for example because the user has not
+        /// configured it yet.
+        Blocked,
         /// Reports ready, then ignores cancellation.
         Stuck,
     }
@@ -509,10 +516,24 @@ mod tests {
             self.autostart
         }
 
+        fn preflight(&self) -> Result<(), AppError> {
+            match self.behaviour {
+                Behaviour::Blocked => Err(AppError::invalid_state(
+                    "select at least one printer to share before starting",
+                )),
+                _ => Ok(()),
+            }
+        }
+
         async fn run(&self, context: ServiceContext) -> Result<(), AppError> {
             match self.behaviour {
                 Behaviour::Fails => Err(AppError::internal("printer adapter unavailable")),
                 Behaviour::NeverReady => {
+                    context.cancelled().await;
+                    Ok(())
+                }
+                Behaviour::Blocked => {
+                    context.reporter().ready()?;
                     context.cancelled().await;
                     Ok(())
                 }
@@ -736,6 +757,32 @@ mod tests {
         assert_eq!(
             state(&runtime, ServiceId::ClientProxy),
             ServiceState::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn a_service_with_an_unmet_precondition_reports_it_without_starting() {
+        let runtime = coordinator(vec![FakeService::new(
+            ServiceId::ServerSharing,
+            false,
+            Behaviour::Blocked,
+        )]);
+
+        let error = runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect_err("rejected");
+
+        assert_eq!(error.code(), ErrorCode::InvalidState);
+        assert_eq!(
+            error.message(),
+            "select at least one printer to share before starting"
+        );
+        // The user's configuration problem is not a service failure: the state stays untouched so
+        // fixing the configuration and pressing Start again works.
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Stopped
         );
     }
 

@@ -231,3 +231,70 @@ button:disabled {
   color: var(--muted);
   font-size: 0.8rem;
 }
+
+.printer-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.printer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+}
+
+.printer-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+}
+
+.printer-name {
+  overflow-wrap: anywhere;
+}
+
+.badge-shared {
+  color: #065f46;
+  border-color: #34d399;
+  background: rgba(52, 211, 153, 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  .badge-shared {
+    color: #6ee7b7;
+  }
+}
+
+.identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.9rem;
+}
+
+.identity h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.fingerprint {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(15, 118, 110, 0.08);
+}
