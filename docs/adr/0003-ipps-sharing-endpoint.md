@@ -18,7 +18,8 @@ effect without restarting sharing.
 Responses follow RFC 8010: the status code occupies the header field a request uses for its
 operation id, and each printer is reported as its own attributes group identified by
 `printer-uri-supported`. The endpoint returns the subset of printer attributes a client needs to
-list and address printers; the document-format and job attributes arrive with job submission (#32).
+list and address printers, and reports `printer-is-accepting-jobs` as false because job submission
+arrives with #32; the document-format and job attributes land with it.
 
 The server's identity is a self-signed certificate generated once and kept in the app data
 directory (`server-identity.cert.der` and `server-identity.key.der`, the key restricted to the

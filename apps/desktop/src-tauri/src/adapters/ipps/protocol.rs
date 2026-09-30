@@ -266,7 +266,9 @@ pub fn response(
         );
         write_integers(&mut out, tag::ENUM, "printer-state", &[PRINTER_STATE_IDLE]);
         write_text(&mut out, tag::KEYWORD, "printer-state-reasons", "none");
-        write_boolean(&mut out, "printer-is-accepting-jobs", true);
+        // #31 answers queries only; a job submitted now is refused, so claiming to accept jobs
+        // would be a lie to the client. #32 flips this when submission lands.
+        write_boolean(&mut out, "printer-is-accepting-jobs", false);
         write_text(&mut out, tag::CHARSET, "charset-configured", "utf-8");
         write_text(&mut out, tag::CHARSET, "charset-supported", "utf-8");
         write_text(
@@ -586,6 +588,15 @@ mod tests {
                 .find(|attribute| attribute.name == "printer-name")
                 .map(|attribute| attribute.value_tag),
             Some(tag::NAME)
+        );
+        // #31 refuses job submission, so the endpoint must not claim to accept jobs; #32 changes
+        // this assertion along with the behaviour.
+        assert_eq!(
+            attributes
+                .iter()
+                .find(|attribute| attribute.name == "printer-is-accepting-jobs")
+                .map(|attribute| attribute.values.clone()),
+            Some(vec![vec![0]])
         );
         assert_eq!(
             text(&attributes, "ipp-versions-supported"),
