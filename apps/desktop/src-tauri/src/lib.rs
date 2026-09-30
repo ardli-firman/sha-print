@@ -2,8 +2,8 @@
 //!
 //! The shell owns the lifetime of the client proxy and server sharing runtimes, shows their live
 //! status in a React UI, and stops them cleanly when the runtime closes (#30). Server sharing
-//! shares the local Windows printer queues the user selected and answers IPP queries about them
-//! over IPPS (#31); authorizing and submitting print jobs is #32.
+//! exposes selected Windows queues over IPPS, authorizes and submits print jobs (#32), and supports
+//! explicit manual server-certificate trust (#33).
 //!
 //! Layout (ADR 0002): `domain` holds types and rules, `application` holds the runtime coordinator
 //! and the use cases, `adapters` holds the service and platform implementations, and `ipc` holds
@@ -17,17 +17,20 @@
 pub mod adapters;
 pub mod application;
 pub mod domain;
+#[cfg(feature = "desktop")]
 pub mod ipc;
 
 use std::path::Path;
+#[cfg(feature = "desktop")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use adapters::ipps::NetworkChannel;
 use adapters::{
     ClientProxyService, FileIdentityStore, IdentityStore, IppsServer, ServerSharingService,
     SystemElevation, DEFAULT_PORT,
 };
-use application::{RuntimeCoordinator, Setup, Sharing};
+use application::{PrintJobSubmitter, RuntimeCoordinator, ServerConnections, Setup, Sharing};
 use domain::AppError;
 
 /// The state the desktop shell manages, built once at startup.
@@ -39,6 +42,8 @@ pub struct Shell {
     sharing: Arc<Sharing>,
     endpoint: Arc<IppsServer>,
     setup: Arc<Setup>,
+    client_connections: Arc<ServerConnections>,
+    network_channel: Arc<NetworkChannel>,
 }
 
 impl Shell {
@@ -46,7 +51,14 @@ impl Shell {
     pub fn new(data_dir: &Path) -> Result<Self, AppError> {
         let identity = Arc::new(FileIdentityStore::new(data_dir).load_or_create()?);
         let sharing = Arc::new(Sharing::new(default_printer_catalog()));
-        let endpoint = Arc::new(IppsServer::new(DEFAULT_PORT, identity));
+        let client_connections = Arc::new(ServerConnections::new(data_dir)?);
+        let network_channel = Arc::new(NetworkChannel::open(data_dir)?);
+        let endpoint = Arc::new(IppsServer::new(
+            DEFAULT_PORT,
+            identity,
+            Arc::clone(&network_channel),
+            default_print_job_submitter(),
+        ));
         let setup = Arc::new(Setup::new(Arc::new(SystemElevation::new())));
 
         // The client proxy opts into autostart (ADR 0001: installed queues must reach the proxy
@@ -64,6 +76,8 @@ impl Shell {
             sharing,
             endpoint,
             setup,
+            client_connections,
+            network_channel,
         })
     }
 
@@ -82,6 +96,14 @@ impl Shell {
     pub fn setup(&self) -> Arc<Setup> {
         Arc::clone(&self.setup)
     }
+
+    pub fn client_connections(&self) -> Arc<ServerConnections> {
+        Arc::clone(&self.client_connections)
+    }
+
+    pub fn network_channel(&self) -> Arc<NetworkChannel> {
+        Arc::clone(&self.network_channel)
+    }
 }
 
 /// The printer catalog for the platform this build targets.
@@ -95,7 +117,18 @@ fn default_printer_catalog() -> Arc<dyn application::LocalPrinterCatalog> {
     Arc::new(adapters::printers::UnsupportedPrinterCatalog::new())
 }
 
+#[cfg(windows)]
+fn default_print_job_submitter() -> Arc<dyn PrintJobSubmitter> {
+    Arc::new(adapters::printers::WindowsPrintJobSubmitter)
+}
+
+#[cfg(not(windows))]
+fn default_print_job_submitter() -> Arc<dyn PrintJobSubmitter> {
+    Arc::new(adapters::printers::UnsupportedPrintJobSubmitter)
+}
+
 /// Runs the desktop app until the user closes it.
+#[cfg(feature = "desktop")]
 pub fn run() -> Result<(), AppError> {
     let stopping = AtomicBool::new(false);
 
@@ -116,6 +149,11 @@ pub fn run() -> Result<(), AppError> {
             ipc::commands::set_shared_printers,
             ipc::commands::get_server_identity,
             ipc::commands::allow_sharing_access,
+            ipc::client_connections::inspect_server_connection,
+            ipc::client_connections::approve_server_connection,
+            ipc::client_connections::list_server_connection_printers,
+            ipc::server_settings::configure_network_channel,
+            ipc::server_settings::get_network_channel_status,
         ])
         .setup(move |app| {
             use tauri::Manager;
@@ -132,6 +170,8 @@ pub fn run() -> Result<(), AppError> {
             app.manage(shell.sharing());
             app.manage(shell.endpoint());
             app.manage(shell.setup());
+            app.manage(shell.client_connections());
+            app.manage(shell.network_channel());
 
             // Start the always-on services in the background: the window paints immediately, then
             // follows their status through the event stream. A service that cannot start is left

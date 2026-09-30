@@ -5,6 +5,7 @@
 //! Each service provides the supervised runtime slot: startup, readiness reporting, and
 //! cancellation, plus the protocol work its issue owns.
 
+pub mod client_connections;
 mod client_proxy;
 pub mod elevation;
 pub mod identity;

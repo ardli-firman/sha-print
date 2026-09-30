@@ -1,13 +1,16 @@
-//! The IPPS sharing endpoint: IPP over HTTP over TLS (ADR 0001).
+//! The IPPS sharing endpoint: IPP over HTTP over TLS (ADR 0003).
 //!
 //! The endpoint exists only while sharing runs: starting it binds the port and publishes its
-//! certificate fingerprint, and stopping it closes the listener, so a stopped server refuses new
-//! client connections. Queries answer from the current sharing selection, so a change to the
-//! selection takes effect immediately.
+//! certificate fingerprint, and stopping it closes the listener. Queries use the current sharing
+//! selection, and authorized Print-Job requests are submitted only through the injected printer
+//! adapter.
 
+mod channel;
 mod endpoint;
 mod http;
 pub mod protocol;
+
+pub use channel::NetworkChannel;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -20,7 +23,7 @@ use tokio::time::timeout;
 use tokio_rustls::{rustls::ServerConfig, TlsAcceptor};
 
 use crate::adapters::identity::ServerIdentity;
-use crate::application::{ServiceContext, SharedPrinterSource};
+use crate::application::{PrintJobSubmitter, ServiceContext, SharedPrinterSource};
 use crate::domain::{AppError, CertificateFingerprint};
 
 /// Port the sharing endpoint listens on.
@@ -35,22 +38,31 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a client has to send its request before the connection is dropped.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Serves IPP queries for the shared queues over TLS.
+/// Serves public IPP queries and authorized Print-Job submissions for shared queues over TLS.
 pub struct IppsServer {
     port: u16,
     identity: Arc<ServerIdentity>,
+    channel: Arc<NetworkChannel>,
+    submitter: Arc<dyn PrintJobSubmitter>,
     bound: Mutex<Option<SocketAddr>>,
 }
 
 impl IppsServer {
-    pub fn new(port: u16, identity: Arc<ServerIdentity>) -> Self {
+    /// Builds an endpoint with its Network Channel verifier and printer-submission adapter.
+    pub fn new(
+        port: u16,
+        identity: Arc<ServerIdentity>,
+        channel: Arc<NetworkChannel>,
+        submitter: Arc<dyn PrintJobSubmitter>,
+    ) -> Self {
         Self {
             port,
             identity,
+            channel,
+            submitter,
             bound: Mutex::new(None),
         }
     }
-
     /// The port clients are told to use.
     pub fn port(&self) -> u16 {
         self.port
@@ -103,6 +115,8 @@ impl IppsServer {
                             stream,
                             Arc::clone(&tls),
                             Arc::clone(&directory),
+                            Arc::clone(&self.channel),
+                            Arc::clone(&self.submitter),
                             peer,
                         ));
                     }
@@ -141,6 +155,8 @@ async fn serve_client(
     stream: TcpStream,
     tls: Arc<ServerConfig>,
     directory: Arc<dyn SharedPrinterSource>,
+    channel: Arc<NetworkChannel>,
+    submitter: Arc<dyn PrintJobSubmitter>,
     peer: SocketAddr,
 ) {
     let acceptor = TlsAcceptor::from(tls);
@@ -157,7 +173,14 @@ async fn serve_client(
         }
     };
 
-    if let Err(error) = answer_request(tls_stream, directory.as_ref()).await {
+    if let Err(error) = answer_request_with_jobs(
+        tls_stream,
+        directory.as_ref(),
+        channel.as_ref(),
+        submitter.as_ref(),
+    )
+    .await
+    {
         log::warn!(
             "client request failed peer={peer} code={} message={error}",
             error.code_str()
@@ -165,13 +188,12 @@ async fn serve_client(
     }
 }
 
-/// Reads one IPP request and writes its answer.
-///
-/// Takes any byte stream so the request handling can be exercised without TLS as well as through
-/// it.
-pub(crate) async fn answer_request<S>(
+/// Testable HTTP/IPPS seam with explicit channel and printer-submission ports.
+pub async fn answer_request_with_jobs<S>(
     stream: S,
     directory: &dyn SharedPrinterSource,
+    channel: &NetworkChannel,
+    submitter: &dyn PrintJobSubmitter,
 ) -> Result<(), AppError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -212,7 +234,7 @@ where
             return respond(&mut write, "400 Bad Request", "text/plain", &[]).await;
         }
     };
-    let answer = endpoint::answer(&body, authority, directory);
+    let answer = endpoint::answer_job(body, authority, directory, channel, submitter).await;
     respond(&mut write, "200 OK", http::IPP_CONTENT_TYPE, &answer).await
 }
 
@@ -241,7 +263,7 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    use crate::application::SharedPrinterSource;
+    use crate::application::{PrintJob, PrintJobSubmitter, SharedPrinterSource};
     use crate::domain::PrinterName;
 
     /// Shares a fixed set of queues.
@@ -250,6 +272,21 @@ mod tests {
     impl SharedPrinterSource for FakeShared {
         fn shared_printers(&self) -> Vec<PrinterName> {
             self.0.clone()
+        }
+    }
+
+    struct UnavailableSubmitter;
+
+    #[async_trait::async_trait]
+    impl PrintJobSubmitter for UnavailableSubmitter {
+        fn is_available(&self) -> bool {
+            false
+        }
+
+        async fn submit(&self, _printer: &PrinterName, _job: PrintJob) -> Result<u32, AppError> {
+            Err(AppError::unsupported(
+                "printer submission is unavailable in this test",
+            ))
         }
     }
 
@@ -277,20 +314,20 @@ mod tests {
     /// answers, and the raw answer comes back.
     async fn exchange(request: &[u8], directory: Arc<dyn SharedPrinterSource>) -> Vec<u8> {
         let (server, mut client) = tokio::io::duplex(16 * 1024);
-        let answering = tokio::spawn(async move {
-            answer_request(server, directory.as_ref())
+        let channel = NetworkChannel::in_memory();
+        let submitter = UnavailableSubmitter;
+        let answering = answer_request_with_jobs(server, directory.as_ref(), &channel, &submitter);
+        let exchange = async move {
+            client.write_all(request).await.expect("sends the request");
+            let mut answer = Vec::new();
+            client
+                .read_to_end(&mut answer)
                 .await
-                .expect("answers");
-        });
-
-        client.write_all(request).await.expect("sends the request");
-        let mut answer = Vec::new();
-        client
-            .read_to_end(&mut answer)
-            .await
-            .expect("reads the answer");
-        answering.await.expect("task finishes");
-
+                .expect("reads the answer");
+            answer
+        };
+        let (answer, result) = tokio::join!(exchange, answering);
+        result.expect("answers");
         answer
     }
 

@@ -1,22 +1,30 @@
 //! The IPP operations the sharing endpoint answers, independent of how the request arrived.
 //!
-//! Only queries are implemented (#31). Print jobs are #32, so this endpoint rejects every other
-//! operation instead of pretending to accept it.
+//! Query operations are public; Print-Job requires an authorized Network Channel and is submitted
+//! only to a queue in the current shared selection.
 
 use crate::application::SharedPrinterSource;
-use crate::domain::PrinterName;
+use crate::domain::{ErrorCode, PrinterName};
 
 use super::protocol::{
-    percent_decode, percent_encode, response, PrinterEntry, Request, Status, IPP_VERSION_1_1,
-    OPERATION_GET_PRINTERS, OPERATION_GET_PRINTER_ATTRIBUTES,
+    job_response, percent_decode, percent_encode, response, PrinterEntry, Request, Status,
+    IPP_VERSION_1_1, OPERATION_GET_PRINTERS, OPERATION_GET_PRINTER_ATTRIBUTES, OPERATION_PRINT_JOB,
 };
 
-/// Answers one IPP request from a client.
-///
-/// `host` is the authority the client used (`server:8631`), which becomes the advertised
-/// `printer-uri` authority. Every answer reflects the queues shared at this moment, so changing
-/// the selection takes effect without restarting sharing.
-pub fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> Vec<u8> {
+use crate::adapters::ipps::NetworkChannel;
+use crate::application::{DuplexMode, PrintJob, PrintJobSubmitter, PrintSettings};
+
+#[cfg(test)]
+fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> Vec<u8> {
+    answer_with_job_status(request, host, shared, false)
+}
+
+fn answer_with_job_status(
+    request: &[u8],
+    host: &str,
+    shared: &dyn SharedPrinterSource,
+    accepting_jobs: bool,
+) -> Vec<u8> {
     let request = match Request::parse(request) {
         Ok(request) => request,
         // The header was unreadable, so there is no request id to echo.
@@ -35,7 +43,7 @@ pub fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> V
             let printers: Vec<PrinterEntry> = shared
                 .shared_printers()
                 .iter()
-                .map(|name| entry(host, name))
+                .map(|name| entry(host, name, accepting_jobs))
                 .collect();
             response(request_id, version, Status::Ok, &printers)
         }
@@ -45,7 +53,12 @@ pub fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> V
                 .or_else(|| request.value("printer-name"));
             let shared = shared.shared_printers();
             match wanted.and_then(|wanted| find(&shared, wanted)) {
-                Some(name) => response(request_id, version, Status::Ok, &[entry(host, name)]),
+                Some(name) => response(
+                    request_id,
+                    version,
+                    Status::Ok,
+                    &[entry(host, name, accepting_jobs)],
+                ),
                 None => response(request_id, version, Status::NotFound, &[]),
             }
         }
@@ -53,11 +66,112 @@ pub fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> V
     }
 }
 
+/// Processes Print-Job with the authorization and queue-submission ports.
+pub async fn answer_job(
+    bytes: Vec<u8>,
+    host: &str,
+    shared: &dyn SharedPrinterSource,
+    channel: &NetworkChannel,
+    submitter: &dyn PrintJobSubmitter,
+) -> Vec<u8> {
+    let request = match Request::parse(&bytes) {
+        Ok(request) => request,
+        Err(_) => return response(0, IPP_VERSION_1_1, Status::BadRequest, &[]),
+    };
+    let request_id = request.request_id();
+    let version = request.response_version();
+    if !request.version_is_supported() {
+        return response(request_id, version, Status::VersionNotSupported, &[]);
+    }
+    if request.operation() != OPERATION_PRINT_JOB {
+        return answer_with_job_status(
+            &bytes,
+            host,
+            shared,
+            channel.is_configured() && submitter.is_available(),
+        );
+    }
+
+    let Some(candidate) = request.value("network-channel") else {
+        return response(request_id, version, Status::NotAuthorized, &[]);
+    };
+    if !channel.authorizes(candidate) {
+        return response(request_id, version, Status::NotAuthorized, &[]);
+    }
+    if !submitter.is_available() {
+        return response(request_id, version, Status::NotAcceptingJobs, &[]);
+    }
+    let shared_printers = shared.shared_printers();
+    let selected = request
+        .value("printer-uri")
+        .or_else(|| request.value("printer-name"))
+        .and_then(|value| find(&shared_printers, value))
+        .cloned();
+    let Some(printer) = selected else {
+        return response(request_id, version, Status::NotFound, &[]);
+    };
+    if request.document().is_empty() {
+        return response(request_id, version, Status::BadRequest, &[]);
+    }
+
+    let settings = match job_settings(&request) {
+        Ok(settings) => settings,
+        Err(status) => return response(request_id, version, status, &[]),
+    };
+    let document_start = request.document_start();
+    drop(request);
+    let job = PrintJob::from_ipp_body(bytes, document_start, settings);
+    match submitter.submit(&printer, job).await {
+        Ok(job_id) => {
+            let printer_uri = entry(host, &printer, true).uri;
+            let job_uri = format!("{printer_uri}/jobs/{job_id}");
+            job_response(request_id, version, job_id, &job_uri)
+        }
+        Err(error) => {
+            let status = match error.code() {
+                ErrorCode::InvalidInput => Status::AttributesOrValuesNotSupported,
+                ErrorCode::Unsupported => Status::NotAcceptingJobs,
+                _ => Status::InternalError,
+            };
+            response(request_id, version, status, &[])
+        }
+    }
+}
+
+fn job_settings(request: &Request<'_>) -> Result<PrintSettings, Status> {
+    let media = request.value("media").map(str::to_owned);
+    let color = match request.value("print-color-mode") {
+        Some("color") => Some(true),
+        Some("monochrome") | Some("bi-level") => Some(false),
+        Some(_) => return Err(Status::AttributesOrValuesNotSupported),
+        None => None,
+    };
+    let duplex = match request.value("sides") {
+        Some("one-sided") => Some(DuplexMode::Simplex),
+        Some("two-sided-long-edge") => Some(DuplexMode::LongEdge),
+        Some("two-sided-short-edge") => Some(DuplexMode::ShortEdge),
+        Some(_) => return Err(Status::AttributesOrValuesNotSupported),
+        None => None,
+    };
+    let copies = match request.integer("copies") {
+        Some(value) if (1..=999).contains(&value) => Some(value as u16),
+        Some(_) => return Err(Status::AttributesOrValuesNotSupported),
+        None => None,
+    };
+    Ok(PrintSettings {
+        media,
+        color,
+        duplex,
+        copies,
+    })
+}
+
 /// The advertisement for one shared queue.
-fn entry(host: &str, name: &PrinterName) -> PrinterEntry {
+fn entry(host: &str, name: &PrinterName, accepting_jobs: bool) -> PrinterEntry {
     PrinterEntry {
         name: name.as_str().to_owned(),
         uri: format!("ipps://{host}/ipp/print/{}", percent_encode(name.as_str())),
+        accepting_jobs,
     }
 }
 
@@ -261,16 +375,6 @@ mod tests {
         );
 
         assert_eq!(status(&answer), 0x0406);
-    }
-
-    #[test]
-    fn operations_the_mvp_does_not_implement_are_rejected() {
-        let shared = FakeShared::new(&["HP LaserJet"]);
-
-        // Print-Job (0x0002) arrives with #32.
-        let answer = answer(&request(0x0002, &[]), "server", &shared);
-
-        assert_eq!(status(&answer), 0x0501);
     }
 
     #[test]

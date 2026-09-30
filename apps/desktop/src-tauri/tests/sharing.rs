@@ -176,9 +176,9 @@ async fn a_client_that_has_not_approved_the_fingerprint_is_refused() {
 async fn operations_the_mvp_does_not_implement_are_rejected() {
     let shared = Shared::start(&["Zebra"]).await;
 
-    // Print-Job (0x0002) arrives with #32.
+    // Print-URI (0x0003) remains outside this MVP.
     let mut request = vec![2, 0];
-    request.extend(0x0002u16.to_be_bytes());
+    request.extend(0x0003u16.to_be_bytes());
     request.extend(9u32.to_be_bytes());
     request.push(0x01);
     request.push(0x03);

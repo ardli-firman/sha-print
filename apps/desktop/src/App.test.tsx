@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 import * as ipc from "./api/ipc";
+import * as networkChannel from "./api/networkChannel";
+import * as serverConnections from "./api/serverConnections";
 import type { LocalPrinters, RuntimeStatus, ServerIdentity } from "./api/types";
 
 vi.mock("./api/ipc", () => ({
@@ -15,6 +17,17 @@ vi.mock("./api/ipc", () => ({
   setSharedPrinters: vi.fn(),
   getServerIdentity: vi.fn(),
   allowSharingAccess: vi.fn(),
+}));
+
+vi.mock("./api/networkChannel", () => ({
+  getNetworkChannelStatus: vi.fn(),
+  configureNetworkChannel: vi.fn(),
+}));
+
+vi.mock("./api/serverConnections", () => ({
+  inspectServerConnection: vi.fn(),
+  approveServerConnection: vi.fn(),
+  listServerConnectionPrinters: vi.fn(),
 }));
 
 const runtimeWith = (
@@ -71,6 +84,7 @@ beforeEach(() => {
   vi.mocked(ipc.getRuntimeStatus).mockResolvedValue(runtimeWith("running", "stopped"));
   vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith());
   vi.mocked(ipc.getServerIdentity).mockResolvedValue(IDENTITY);
+  vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(false);
 });
 
 describe("runtime status panel", () => {
@@ -231,5 +245,88 @@ describe("shared printers panel", () => {
     const alert = await within(panel).findByRole("alert");
     expect(alert.textContent).toContain("unsupported");
     expect(alert.textContent).toContain("only supported on Windows");
+  });
+});
+describe("server connection panel", () => {
+  it("does not list printers before explicit fingerprint approval", async () => {
+    const review = {
+      address: "printer.example:8631",
+      current_fingerprint:
+        "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
+      previous_fingerprint: null,
+      trusted: false,
+    };
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
+    vi.mocked(serverConnections.approveServerConnection).mockResolvedValue({
+      ...review,
+      trusted: true,
+    });
+    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
+      address: review.address,
+      printers: ["Office Laser"],
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Server address"), {
+      target: { value: "printer.example" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inspect certificate" }));
+
+    await screen.findByText(review.current_fingerprint);
+    expect(serverConnections.listServerConnectionPrinters).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Approve this fingerprint" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show shared printers" }));
+
+    expect(await screen.findByText("Office Laser")).toBeTruthy();
+    expect(serverConnections.approveServerConnection).toHaveBeenCalledWith(
+      review.address,
+      review.current_fingerprint,
+    );
+    expect(serverConnections.listServerConnectionPrinters).toHaveBeenCalledWith(
+      review.address,
+    );
+  });
+
+  it("explains changed identity and requires explicit reapproval", async () => {
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue({
+      address: "printer.example:8631",
+      current_fingerprint:
+        "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
+      previous_fingerprint:
+        "AA:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
+      trusted: false,
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Server address"), {
+      target: { value: "printer.example" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inspect certificate" }));
+
+    expect(
+      await screen.findByText(/identity changed\. Printers are blocked/i),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Explicitly reapprove this fingerprint" }),
+    ).toBeTruthy();
+    expect(serverConnections.listServerConnectionPrinters).not.toHaveBeenCalled();
+  });
+});
+
+describe("Network Channel panel", () => {
+  it("saves a server channel without displaying the secret again", async () => {
+    vi.mocked(networkChannel.configureNetworkChannel).mockResolvedValue(true);
+    render(<App />);
+
+    const input = screen.getByLabelText("Network Channel") as HTMLInputElement;
+    const value = `network-${Date.now()}-${Math.random()}`;
+    fireEvent.change(input, { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "Set Network Channel" }));
+
+    expect(await screen.findByText("Network Channel updated.")).toBeTruthy();
+    expect(networkChannel.configureNetworkChannel).toHaveBeenCalledWith(value);
+    expect(input.value).toBe("");
+    expect(screen.queryByText(value)).toBeNull();
   });
 });

@@ -1,27 +1,34 @@
 # ShaPrint desktop app
 
-Tauri shell for the Windows-only IPP print-sharing MVP (issues #29, #30, and #31). It replaces the
-WPF application as the product path and lives beside the .NET projects while the transition lasts.
+Tauri shell for the Windows-only IPP print-sharing MVP (issues #29–#33). It replaces the WPF
+application as the product path and lives beside the .NET projects while the transition lasts.
 
 ## What exists today
 
 - A Tauri window rendered by React + TypeScript, with one modular Rust crate in `src-tauri`.
 - A runtime coordinator that owns the client proxy and server sharing runtimes: it starts them,
   publishes their live status to the window, and stops them cleanly when the window closes.
-- Server sharing: the user selects local Windows printer queues, starts or stops sharing explicitly,
-  and an IPPS client can query the shared printers while sharing runs. `Get-Printers` and
-  `Get-Printer-Attributes` answer over TLS; print job submission is #32.
-- A server certificate identity whose SHA-256 fingerprint is shown for a client to approve, kept in
-  the app data directory so it survives restarts.
+- Server sharing: the user selects local Windows printer queues and starts or stops sharing
+  explicitly. The IPPS endpoint answers `Get-Printers` and `Get-Printer-Attributes`, and accepts
+  `Print-Job` only for a selected shared queue when the configured Network Channel matches.
+- Windows spooler submission preserves common media size, color, duplex, and copy settings. A fake
+  adapter exercises the real TLS/IPPS request path without printing during integration tests.
+- The server identity's SHA-256 fingerprint stays stable in app data. A client can manually enter a
+  host or host:port, inspect the presented fingerprint without querying printers, explicitly approve
+  it, and list printers only while the live fingerprint matches the saved approval. Changed
+  fingerprints remain blocked until explicit reapproval.
+- Network Channel storage retains only a SHA-256 verifier; the value is never returned through IPC
+  or written to logs, status, or UI after configuration.
 - One elevated setup action: letting clients reach the endpoint through the Windows firewall. Every
-  other action — selecting queues, start/stop, showing the fingerprint — runs unprivileged.
+  other action — selecting queues, start/stop, fingerprint review, and channel configuration — runs
+  unprivileged.
 - Typed IPC: commands and status events use serializable DTOs, and failures carry stable codes
   (`invalid-input`, `unknown-service`, `invalid-state`, `timeout`, `unsupported`, `internal`).
 - Least-privilege capabilities: the main window may call the shell's commands and listen for status
   events, and nothing else (no shell, filesystem, dialog, or remote content access).
 
-Client-side work arrives with its own issues: authorized job submission (#32), discovery and trust
-(#33/#36), the client proxy (#34), and native queue installation (#35).
+Remaining client work: the local authenticated print proxy (#34), native queue installation (#35),
+and automatic server discovery (#36).
 
 ## Development
 
@@ -36,27 +43,33 @@ bun run tauri dev    # desktop app with hot reload
 bun run tauri build  # Windows installer (NSIS + MSI)
 ```
 
-Rust checks run from `src-tauri`:
+Core Rust checks run from `src-tauri` without the desktop runtime feature, so the fake-adapter IPPS
+integration tests do not require GTK or a native window system:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --no-default-features --all-targets -- -D warnings
+cargo test --no-default-features
 ```
 
-`tests/sharing.rs` is the end-to-end seam: it selects queues through a fake printer adapter, starts
-sharing, and queries the running endpoint over TLS with a client that approves the server's
-fingerprint. The real Windows paths — spooler enumeration and the elevated firewall rule — compile
-only on Windows and need a Windows smoke check.
+The default `desktop` feature enables Tauri/Wry for the Windows application and needs that target's
+Tauri prerequisites.
+
+`tests/sharing.rs` covers query behavior and sharing lifecycle. `tests/print_jobs.rs` submits a
+Print-Job through a live TLS/IPPS endpoint with a fake printer adapter, including authorization,
+queue selection, common settings, and Stop behavior. `tests/server_connections.rs` verifies
+first-use review without a printer query, persistent approval, changed-certificate blocking, and
+explicit reapproval. Actual Windows spooler output and the Windows app smoke check still require a
+Windows machine with an installed printer.
 
 ## Layout
 
 ```
-src/                 React UI: typed IPC client, status and sharing hooks, status and printer panels
+src/                 React UI: typed IPC clients, status/sharing/trust hooks, settings and printer panels
 src-tauri/src/
   domain/            Printer queues, the server fingerprint, setup policies, stable error codes
-  application/       Runtime coordinator, sharing and setup use cases, the ports they read through
-  adapters/          Service implementations: print spooler, IPPS endpoint, identity, elevation
+  application/       Runtime coordinator, sharing, server trust, and setup use cases
+  adapters/          Print spooler, IPPS endpoint, client TLS trust, identity, and elevation
   ipc/               Tauri command adapters, serializable DTOs, status event bridge
 ```
 
@@ -67,7 +80,9 @@ status payloads, or the UI.
 
 ## Sharing over IPPS
 
-While server sharing runs, the endpoint listens on port 8631 and answers IPP queries from clients
-that approved the certificate fingerprint shown in the window. The port is not 631: that belongs to
-Windows' own IPP service. Because the first connection from another computer has to pass the Windows
-firewall, the sharing panel offers the one action that asks for administrator permission.
+While server sharing runs, the endpoint listens on port 8631, answers IPP printer queries, and
+accepts `Print-Job` only when the request carries the configured Network Channel and targets a queue
+currently shared. The port is not 631: that belongs to Windows' own IPP service. Clients verify and
+explicitly approve the server certificate before querying printers; changed fingerprints block
+queries until explicit reapproval. Because the first connection from another computer has to pass
+the Windows firewall, the sharing panel offers the one action that asks for administrator permission.

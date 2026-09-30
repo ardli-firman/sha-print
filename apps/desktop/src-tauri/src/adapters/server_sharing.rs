@@ -1,7 +1,8 @@
 //! The server sharing runtime.
 //!
-//! Sharing exposes the local Windows printer queues the user selected over IPPS and answers client
-//! queries about them (issue #31; ADR 0001). Authorizing and submitting print jobs is #32.
+//! Sharing exposes the local Windows queues the user selected through IPPS, answers printer
+//! queries, and submits authorized Print-Job requests only through the injected spooler adapter
+//! (#31, #32; ADR 0003).
 //!
 //! Sharing never starts on its own: the user controls it through the shell's lifecycle commands,
 //! and the endpoint only exists while the service runs.
@@ -58,7 +59,8 @@ impl RuntimeService for ServerSharingService {
 mod tests {
     use super::*;
     use crate::adapters::identity::ServerIdentity;
-    use crate::application::LocalPrinterCatalog;
+    use crate::adapters::ipps::NetworkChannel;
+    use crate::application::{LocalPrinterCatalog, PrintJob, PrintJobSubmitter};
     use crate::domain::PrinterName;
 
     struct FakeCatalog(Vec<PrinterName>);
@@ -67,6 +69,21 @@ mod tests {
     impl LocalPrinterCatalog for FakeCatalog {
         async fn local_printers(&self) -> Result<Vec<PrinterName>, AppError> {
             Ok(self.0.clone())
+        }
+    }
+
+    struct UnavailableSubmitter;
+
+    #[async_trait]
+    impl PrintJobSubmitter for UnavailableSubmitter {
+        fn is_available(&self) -> bool {
+            false
+        }
+
+        async fn submit(&self, _printer: &PrinterName, _job: PrintJob) -> Result<u32, AppError> {
+            Err(AppError::unsupported(
+                "printer submission is unavailable in this test",
+            ))
         }
     }
 
@@ -79,7 +96,12 @@ mod tests {
         ));
         let sharing = Arc::new(Sharing::new(catalog));
         let identity = Arc::new(ServerIdentity::generate().expect("generates"));
-        let endpoint = Arc::new(IppsServer::new(0, identity));
+        let endpoint = Arc::new(IppsServer::new(
+            0,
+            identity,
+            Arc::new(NetworkChannel::in_memory()),
+            Arc::new(UnavailableSubmitter),
+        ));
         (
             ServerSharingService::new(Arc::clone(&sharing), endpoint),
             sharing,

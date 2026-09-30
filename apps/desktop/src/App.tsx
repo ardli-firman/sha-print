@@ -1,12 +1,18 @@
+import { NetworkChannelPanel } from "./components/NetworkChannelPanel";
 import { PrinterSharingPanel } from "./components/PrinterSharingPanel";
 import { RuntimeStatusPanel } from "./components/RuntimeStatusPanel";
+import { ServerConnectionsPanel } from "./components/ServerConnectionsPanel";
+import { useNetworkChannel } from "./hooks/useNetworkChannel";
 import { usePrinterSharing } from "./hooks/usePrinterSharing";
 import { useRuntimeStatus } from "./hooks/useRuntimeStatus";
+import { useServerConnections } from "./hooks/useServerConnections";
 import "./App.css";
 
 function App() {
   const runtime = useRuntimeStatus();
   const sharing = usePrinterSharing();
+  const networkChannel = useNetworkChannel();
+  const connections = useServerConnections();
 
   return (
     <main className="app">
@@ -18,6 +24,8 @@ function App() {
       <RuntimeStatusPanel runtime={runtime} />
 
       <PrinterSharingPanel sharing={sharing} />
+      <NetworkChannelPanel settings={networkChannel} />
+      <ServerConnectionsPanel connections={connections} />
 
       <footer className="app-footer">
         Documents are submitted by Windows, not by this window: ShaPrint never shows or logs print
