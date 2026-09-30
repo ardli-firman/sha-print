@@ -19,6 +19,9 @@ const CERTIFICATE_FILE: &str = "server-identity.cert.der";
 const KEY_FILE: &str = "server-identity.key.der";
 /// Subject shown when a user inspects the certificate.
 const COMMON_NAME: &str = "ShaPrint server";
+/// A protected DACL granting full access only to the file owner (the creating user).
+#[cfg(windows)]
+const PRIVATE_FILE_DACL: &str = "D:P(A;;FA;;;OW)";
 
 /// A certificate, its private key, and the fingerprint they produce.
 pub struct ServerIdentity {
@@ -168,6 +171,15 @@ fn read(path: &Path) -> Result<Vec<u8>, AppError> {
 /// Replaces `path` with `contents`, readable only by the current user where the platform supports
 /// it.
 fn write_private(path: &Path, contents: &[u8]) -> Result<(), AppError> {
+    #[cfg(windows)]
+    let result = write_private_windows(path, contents);
+    #[cfg(not(windows))]
+    let result = write_private_non_windows(path, contents);
+    result.map_err(|error| AppError::internal(format!("cannot write {}: {error}", path.display())))
+}
+
+#[cfg(not(windows))]
+fn write_private_non_windows(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let temporary = path.with_extension("tmp");
     let write = || -> std::io::Result<()> {
         let mut options = fs::OpenOptions::new();
@@ -182,11 +194,104 @@ fn write_private(path: &Path, contents: &[u8]) -> Result<(), AppError> {
         file.sync_all()
     };
 
-    write().map_err(|error| {
-        AppError::internal(format!("cannot write {}: {error}", temporary.display()))
-    })?;
+    write()?;
     fs::rename(&temporary, path)
-        .map_err(|error| AppError::internal(format!("cannot install {}: {error}", path.display())))
+}
+
+#[cfg(windows)]
+fn write_private_windows(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
+
+    for _ in 0..16 {
+        let mut temporary_name = path.as_os_str().to_os_string();
+        temporary_name.push(format!(
+            ".{}.{}.tmp",
+            std::process::id(),
+            NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed)
+        ));
+        let temporary = PathBuf::from(temporary_name);
+        let mut file = match create_private_file(&temporary) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+
+        let write = file.write_all(contents).and_then(|()| file.sync_all());
+        drop(file);
+        if let Err(error) = write {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        if let Err(error) = fs::rename(&temporary, path) {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        return Ok(());
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "cannot reserve a private temporary identity file",
+    ))
+}
+
+#[cfg(windows)]
+fn create_private_file(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{LocalFree, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL};
+
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let descriptor: Vec<u16> = PRIVATE_FILE_DACL.encode_utf16().chain(Some(0)).collect();
+    let mut security_descriptor = std::ptr::null_mut();
+    // SAFETY: both strings are NUL-terminated; the API allocates `security_descriptor`.
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            descriptor.as_ptr(),
+            SDDL_REVISION_1,
+            &mut security_descriptor,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let security_attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: security_descriptor,
+        bInheritHandle: 0,
+    };
+    // SAFETY: pointers remain valid for the call; CREATE_NEW prevents reuse of an
+    // attacker-created temporary file with a different ACL.
+    let handle = unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            GENERIC_WRITE,
+            0,
+            &security_attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    let create_error = (handle == INVALID_HANDLE_VALUE).then(std::io::Error::last_os_error);
+    // SAFETY: the descriptor was allocated by the SDDL conversion API.
+    unsafe {
+        LocalFree(security_descriptor);
+    }
+    if let Some(error) = create_error {
+        return Err(error);
+    }
+    // SAFETY: `handle` is an open file handle transferred to `File`.
+    Ok(unsafe { fs::File::from_raw_handle(handle) })
 }
 
 /// Names the certificate is valid for. Clients approve the fingerprint, so these only matter to

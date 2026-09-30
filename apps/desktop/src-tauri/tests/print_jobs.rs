@@ -15,6 +15,8 @@ use shaprint_desktop::application::{
 use shaprint_desktop::domain::{AppError, PrinterName, ServiceId};
 use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
 
+const OFFICE_PRINTER_URI: &str = "ipps://server:8631/ipp/print/Office%20Printer";
+
 struct Shared(Vec<PrinterName>);
 
 impl SharedPrinterSource for Shared {
@@ -62,10 +64,27 @@ fn integer_attribute(body: &mut Vec<u8>, name: &str, value: i32) {
 }
 
 fn print_job(channel: Option<&str>, printer: &str, sides: &str, document: &[u8]) -> Vec<u8> {
+    print_job_with_format(
+        channel,
+        printer,
+        "application/octet-stream",
+        sides,
+        document,
+    )
+}
+
+fn print_job_with_format(
+    channel: Option<&str>,
+    printer: &str,
+    document_format: &str,
+    sides: &str,
+    document: &[u8],
+) -> Vec<u8> {
     let mut body = vec![2, 0, 0, 2, 0, 0, 0, 9, 1];
     text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
     text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
     text_attribute(&mut body, 0x45, "printer-uri", printer);
+    text_attribute(&mut body, 0x49, "document-format", document_format);
     if let Some(channel) = channel {
         text_attribute(&mut body, 0x41, "network-channel", channel);
     }
@@ -77,6 +96,67 @@ fn print_job(channel: Option<&str>, printer: &str, sides: &str, document: &[u8])
     body.push(3);
     body.extend(document);
     body
+}
+#[tokio::test]
+async fn unsupported_document_format_is_rejected_before_queue_submission() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    let response = send(
+        &print_job_with_format(
+            Some(&secret),
+            OFFICE_PRINTER_URI,
+            "application/pdf",
+            "one-sided",
+            b"document",
+        ),
+        &shared,
+        &channel,
+        &submitter,
+    )
+    .await;
+
+    assert_eq!(ipp_status(&response), 0x040A);
+    assert!(submitter.0.lock().expect("reads submissions").is_empty());
+}
+
+#[tokio::test]
+async fn printer_uri_must_identify_a_queue_advertised_by_this_server() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    for printer_uri in [
+        "ipps://other-host/ipp/print/Office%20Printer",
+        "ipps://server:8631/unshared/Office%20Printer",
+        "ipp://server:8631/ipp/print/Office%20Printer",
+    ] {
+        let response = send(
+            &print_job(Some(&secret), printer_uri, "one-sided", b"document"),
+            &shared,
+            &channel,
+            &submitter,
+        )
+        .await;
+
+        assert_eq!(ipp_status(&response), 0x0406, "{printer_uri}");
+    }
+    assert!(submitter.0.lock().expect("reads submissions").is_empty());
 }
 
 async fn send(
@@ -212,7 +292,10 @@ async fn authorized_print_job_reaches_the_selected_queue_with_document_and_setti
     let server = LiveServer::start(Arc::clone(&channel), Arc::clone(&submitter)).await;
     let document = b"opaque printer document bytes";
     let address = server.endpoint.bound_address().expect("listens");
-    let printer_uri = format!("ipps://{address}/ipp/print/Office%20Printer");
+    let printer_uri = format!(
+        "ipps://127.0.0.1:{}/ipp/print/Office%20Printer",
+        address.port()
+    );
     let request = print_job(Some(&secret), &printer_uri, "two-sided-long-edge", document);
 
     let (http_status, response) = server
@@ -257,7 +340,7 @@ async fn short_edge_duplex_reaches_the_printer_adapter_unchanged() {
     let response = send(
         &print_job(
             Some(&secret),
-            "Office Printer",
+            OFFICE_PRINTER_URI,
             "two-sided-short-edge",
             b"document",
         ),
@@ -293,7 +376,7 @@ async fn missing_or_wrong_channel_never_reaches_a_queue() {
     let wrong_secret = channel_secret();
     for supplied in [None, Some(wrong_secret.as_str())] {
         let response = send(
-            &print_job(supplied, "Office Printer", "one-sided", b"document"),
+            &print_job(supplied, OFFICE_PRINTER_URI, "one-sided", b"document"),
             &shared,
             &channel,
             &submitter,
@@ -306,7 +389,7 @@ async fn missing_or_wrong_channel_never_reaches_a_queue() {
     let response = send(
         &print_job(
             Some(&attempted_secret),
-            "Office Printer",
+            OFFICE_PRINTER_URI,
             "one-sided",
             b"document",
         ),
@@ -333,7 +416,12 @@ async fn unshared_queue_never_reaches_a_queue_submitter() {
         .expect("configures channel");
 
     let response = send(
-        &print_job(Some(&secret), "Unshared Queue", "one-sided", b"document"),
+        &print_job(
+            Some(&secret),
+            "ipps://server:8631/ipp/print/Unshared%20Queue",
+            "one-sided",
+            b"document",
+        ),
         &shared,
         &channel,
         &submitter,
@@ -379,7 +467,10 @@ async fn stopping_sharing_refuses_new_jobs_before_the_printer_adapter() {
     let submitter = Arc::new(FakeSubmitter::default());
     let server = LiveServer::start(Arc::clone(&channel), Arc::clone(&submitter)).await;
     let address = server.endpoint.bound_address().expect("listens");
-    let printer_uri = format!("ipps://{address}/ipp/print/Office%20Printer");
+    let printer_uri = format!(
+        "ipps://127.0.0.1:{}/ipp/print/Office%20Printer",
+        address.port()
+    );
     let request = print_job(Some(&secret), &printer_uri, "one-sided", b"document");
 
     let (status, response) = server.client.post(&request).await.expect("reaches server");

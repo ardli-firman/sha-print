@@ -48,11 +48,14 @@ fn answer_with_job_status(
             response(request_id, version, Status::Ok, &printers)
         }
         OPERATION_GET_PRINTER_ATTRIBUTES => {
-            let wanted = request
-                .value("printer-uri")
-                .or_else(|| request.value("printer-name"));
             let shared = shared.shared_printers();
-            match wanted.and_then(|wanted| find(&shared, wanted)) {
+            let selected = match request.value("printer-uri") {
+                Some(uri) => find_by_uri(&shared, host, uri),
+                None => request
+                    .value("printer-name")
+                    .and_then(|name| find_by_name(&shared, name)),
+            };
+            match selected {
                 Some(name) => response(
                     request_id,
                     version,
@@ -104,12 +107,18 @@ pub async fn answer_job(
     let shared_printers = shared.shared_printers();
     let selected = request
         .value("printer-uri")
-        .or_else(|| request.value("printer-name"))
-        .and_then(|value| find(&shared_printers, value))
+        .and_then(|uri| find_by_uri(&shared_printers, host, uri))
         .cloned();
     let Some(printer) = selected else {
         return response(request_id, version, Status::NotFound, &[]);
     };
+
+    let Some(document_format) = request.value("document-format") else {
+        return response(request_id, version, Status::BadRequest, &[]);
+    };
+    if !document_format.eq_ignore_ascii_case("application/octet-stream") {
+        return response(request_id, version, Status::DocumentFormatNotSupported, &[]);
+    }
     if request.document().is_empty() {
         return response(request_id, version, Status::BadRequest, &[]);
     }
@@ -175,23 +184,35 @@ fn entry(host: &str, name: &PrinterName, accepting_jobs: bool) -> PrinterEntry {
     }
 }
 
-/// Finds the shared queue a client asked about, by its URI or its bare name.
-fn find<'a>(shared: &'a [PrinterName], requested: &str) -> Option<&'a PrinterName> {
-    if let Some(printer) = shared
-        .iter()
-        .find(|printer| printer.as_str().eq_ignore_ascii_case(requested))
-    {
-        return Some(printer);
-    }
-    let requested = requested.trim_end_matches('/');
-    let name = requested.rsplit('/').next().unwrap_or(requested);
-    if name.is_empty() {
+/// Finds a queue only when the request URI identifies its advertised IPPS authority and path.
+fn find_by_uri<'a>(
+    shared: &'a [PrinterName],
+    host: &str,
+    requested: &str,
+) -> Option<&'a PrinterName> {
+    let (authority, path) = ipps_authority_and_path(requested)?;
+    if !authority.eq_ignore_ascii_case(host) {
         return None;
     }
-    let name = percent_decode(name);
+    let encoded_name = path.strip_prefix("ipp/print/")?;
+    let decoded_name = percent_decode(encoded_name);
+    let printer = find_by_name(shared, &decoded_name)?;
+    (percent_encode(printer.as_str()) == encoded_name).then_some(printer)
+}
+
+fn ipps_authority_and_path(uri: &str) -> Option<(&str, &str)> {
+    let (scheme, remainder) = uri.split_once("://")?;
+    if !scheme.eq_ignore_ascii_case("ipps") {
+        return None;
+    }
+    let (authority, path) = remainder.split_once('/')?;
+    (!authority.is_empty() && !path.is_empty()).then_some((authority, path))
+}
+
+fn find_by_name<'a>(shared: &'a [PrinterName], requested: &str) -> Option<&'a PrinterName> {
     shared
         .iter()
-        .find(|printer| printer.as_str().eq_ignore_ascii_case(&name))
+        .find(|printer| printer.as_str().eq_ignore_ascii_case(requested))
 }
 
 #[cfg(test)]
@@ -300,6 +321,22 @@ mod tests {
         assert_eq!(advertised(&answer), vec!["HP LaserJet", "Zebra"]);
         assert!(
             String::from_utf8_lossy(&answer).contains("ipps://server:8631/ipp/print/HP%20LaserJet")
+        );
+    }
+
+    #[test]
+    fn get_printers_advertises_only_rendered_octet_stream_jobs() {
+        let shared = FakeShared::new(&["Zebra"]);
+
+        let answer = answer(
+            &request(OPERATION_GET_PRINTERS, &[]),
+            "server:8631",
+            &shared,
+        );
+
+        assert_eq!(
+            values_of(&answer, b"document-format-supported"),
+            vec!["application/octet-stream"]
         );
     }
 

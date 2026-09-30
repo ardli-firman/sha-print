@@ -158,9 +158,30 @@ mod tests {
             assert!(!printer.as_str().is_empty());
         }
     }
+
+    /// Submits one PCL page through the real Windows spooler adapter.
+    #[tokio::test]
+    #[ignore = "requires a Windows queue that accepts PCL; see the desktop README"]
+    async fn smoke_submits_a_print_ready_page_to_a_real_queue() {
+        let queue = std::env::var("SHAPRINT_WINDOWS_SMOKE_PRINTER")
+            .expect("set SHAPRINT_WINDOWS_SMOKE_PRINTER to an installed queue name");
+        let printer = PrinterName::parse(&queue).expect("uses a valid installed queue name");
+        let mut document = b"\x1bE\x1b&l0O\x1b&l2A".to_vec();
+        document.extend_from_slice(b"ShaPrint Windows real-queue smoke test\r\n");
+        document.push(0x0c);
+        let job =
+            PrintJob::from_ipp_body(document, 0, crate::application::PrintSettings::default());
+
+        let job_id = WindowsPrintJobSubmitter
+            .submit(&printer, job)
+            .await
+            .expect("the real queue accepts the PCL smoke page");
+
+        assert_ne!(job_id, 0);
+    }
 }
 
-/// Submits document bytes to the selected Windows-managed queue.
+/// Submits printer-ready `application/octet-stream` bytes as RAW to the selected Windows queue.
 #[derive(Debug, Default)]
 pub struct WindowsPrintJobSubmitter;
 

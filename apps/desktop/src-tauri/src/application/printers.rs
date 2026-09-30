@@ -21,7 +21,7 @@ pub struct PrintSettings {
     pub copies: Option<u16>,
 }
 
-/// A document and its requested settings, submitted only to an already shared queue.
+/// Printer-ready `application/octet-stream` bytes and requested settings for a shared queue.
 pub struct PrintJob {
     body: Vec<u8>,
     document_start: usize,
@@ -29,8 +29,8 @@ pub struct PrintJob {
 }
 
 impl PrintJob {
-    /// Takes ownership of the IPP body while retaining the document as a slice, avoiding a second
-    /// allocation and copy of a potentially large print document.
+    /// Takes ownership of the IPP body after the endpoint validates its printer-ready document
+    /// format, retaining the document as a slice to avoid a second large allocation or copy.
     pub(crate) fn from_ipp_body(
         body: Vec<u8>,
         document_start: usize,

@@ -57,10 +57,21 @@ Tauri prerequisites.
 
 `tests/sharing.rs` covers query behavior and sharing lifecycle. `tests/print_jobs.rs` submits a
 Print-Job through a live TLS/IPPS endpoint with a fake printer adapter, including authorization,
-queue selection, common settings, and Stop behavior. `tests/server_connections.rs` verifies
-first-use review without a printer query, persistent approval, changed-certificate blocking, and
-explicit reapproval. Actual Windows spooler output and the Windows app smoke check still require a
-Windows machine with an installed printer.
+queue selection, supported document format, common settings, and Stop behavior.
+`tests/server_connections.rs` verifies first-use review without a printer query, persistent approval,
+changed-certificate blocking, and explicit reapproval.
+
+On Windows, the real-queue spooler smoke test is ignored by default. From `apps/desktop/src-tauri`,
+set a local PCL-capable queue and run:
+
+```powershell
+$env:SHAPRINT_WINDOWS_SMOKE_PRINTER = "Your local printer queue"
+cargo test --no-default-features --lib smoke_submits_a_print_ready_page_to_a_real_queue -- --ignored --nocapture
+```
+
+Confirm the test passes and the printer produces the PCL smoke page. This covers the Windows spooler
+adapter; native app and physical-printer output still require a Windows machine with an installed
+PCL-capable printer.
 
 ## Layout
 
@@ -68,7 +79,7 @@ Windows machine with an installed printer.
 src/                 React UI: typed IPC clients, status/sharing/trust hooks, settings and printer panels
 src-tauri/src/
   domain/            Printer queues, the server fingerprint, setup policies, stable error codes
-  application/       Runtime coordinator, sharing, server trust, and setup use cases
+  application/       Runtime coordinator, sharing, setup use cases
   adapters/          Print spooler, IPPS endpoint, client TLS trust, identity, and elevation
   ipc/               Tauri command adapters, serializable DTOs, status event bridge
 ```
@@ -82,7 +93,9 @@ status payloads, or the UI.
 
 While server sharing runs, the endpoint listens on port 8631, answers IPP printer queries, and
 accepts `Print-Job` only when the request carries the configured Network Channel and targets a queue
-currently shared. The port is not 631: that belongs to Windows' own IPP service. Clients verify and
-explicitly approve the server certificate before querying printers; changed fingerprints block
-queries until explicit reapproval. Because the first connection from another computer has to pass
-the Windows firewall, the sharing panel offers the one action that asks for administrator permission.
+currently shared. It advertises and accepts only `application/octet-stream` printer-ready spool data;
+other document formats receive IPP `client-error-document-format-not-supported` without submission.
+The port is not 631: that belongs to Windows' own IPP service. Clients verify and explicitly approve
+the server certificate before querying printers; changed fingerprints block queries until explicit
+reapproval. Because the first connection from another computer has to pass the Windows firewall,
+the sharing panel offers the one action that asks for administrator permission.

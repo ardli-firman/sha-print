@@ -25,12 +25,13 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use adapters::client_connections::ClientConnections;
 use adapters::ipps::NetworkChannel;
 use adapters::{
     ClientProxyService, FileIdentityStore, IdentityStore, IppsServer, ServerSharingService,
     SystemElevation, DEFAULT_PORT,
 };
-use application::{PrintJobSubmitter, RuntimeCoordinator, ServerConnections, Setup, Sharing};
+use application::{PrintJobSubmitter, RuntimeCoordinator, Setup, Sharing};
 use domain::AppError;
 
 /// The state the desktop shell manages, built once at startup.
@@ -42,7 +43,7 @@ pub struct Shell {
     sharing: Arc<Sharing>,
     endpoint: Arc<IppsServer>,
     setup: Arc<Setup>,
-    client_connections: Arc<ServerConnections>,
+    client_connections: Arc<ClientConnections>,
     network_channel: Arc<NetworkChannel>,
 }
 
@@ -51,7 +52,7 @@ impl Shell {
     pub fn new(data_dir: &Path) -> Result<Self, AppError> {
         let identity = Arc::new(FileIdentityStore::new(data_dir).load_or_create()?);
         let sharing = Arc::new(Sharing::new(default_printer_catalog()));
-        let client_connections = Arc::new(ServerConnections::new(data_dir)?);
+        let client_connections = Arc::new(ClientConnections::new(data_dir)?);
         let network_channel = Arc::new(NetworkChannel::open(data_dir)?);
         let endpoint = Arc::new(IppsServer::new(
             DEFAULT_PORT,
@@ -97,7 +98,7 @@ impl Shell {
         Arc::clone(&self.setup)
     }
 
-    pub fn client_connections(&self) -> Arc<ServerConnections> {
+    pub fn client_connections(&self) -> Arc<ClientConnections> {
         Arc::clone(&self.client_connections)
     }
 

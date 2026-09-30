@@ -33,6 +33,7 @@ mod tag {
     pub(super) const URI: u8 = 0x45;
     pub(super) const CHARSET: u8 = 0x47;
     pub(super) const NATURAL_LANGUAGE: u8 = 0x48;
+    pub(super) const MIME_MEDIA_TYPE: u8 = 0x49;
 
     /// Delimiter tags that introduce an attribute group; they carry no name or value.
     pub(super) const fn is_delimiter(tag: u8) -> bool {
@@ -56,6 +57,8 @@ pub enum Status {
     AttributesOrValuesNotSupported,
     /// `client-error-bad-request`: the request could not be decoded.
     BadRequest,
+    /// `client-error-document-format-not-supported`.
+    DocumentFormatNotSupported,
     /// `client-error-not-found`: no such printer is shared.
     NotFound,
     /// `server-error-not-accepting-jobs`.
@@ -78,6 +81,7 @@ impl Status {
             Status::NotFound => 0x0406,
             Status::NotAcceptingJobs => 0x0508,
             Status::InternalError => 0x0500,
+            Status::DocumentFormatNotSupported => 0x040A,
             Status::VersionNotSupported => 0x0503,
             Status::UnsupportedOperation => 0x0501,
         }
@@ -294,14 +298,27 @@ pub fn response(
     status: Status,
     printers: &[PrinterEntry],
 ) -> Vec<u8> {
-    let mut out = response_start(request_id, version, status, 256 + printers.len() * 128);
+    let mut out = response_start(request_id, version, status, 256 + printers.len() * 512);
     for printer in printers {
         out.push(tag::PRINTER_ATTRIBUTES);
         // `printer-uri` is an operation attribute in a request; a printer attributes group is
         // identified by `printer-uri-supported` (RFC 8011 §5.4.1).
         write_text(&mut out, tag::URI, "printer-uri-supported", &printer.uri);
         write_text(&mut out, tag::NAME, "printer-name", &printer.name);
+        write_text(
+            &mut out,
+            tag::MIME_MEDIA_TYPE,
+            "document-format-default",
+            "application/octet-stream",
+        );
+        write_text(
+            &mut out,
+            tag::MIME_MEDIA_TYPE,
+            "document-format-supported",
+            "application/octet-stream",
+        );
         write_text(&mut out, tag::KEYWORD, "uri-security-supported", "tls");
+
         write_texts(
             &mut out,
             tag::KEYWORD,

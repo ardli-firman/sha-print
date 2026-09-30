@@ -70,7 +70,7 @@ impl Shared {
                 }
             })
             .collect();
-        format!("ipps://{address}/ipp/print/{encoded}")
+        format!("ipps://127.0.0.1:{}/ipp/print/{encoded}", address.port())
     }
 
     async fn printers(&self) -> Vec<String> {

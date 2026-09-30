@@ -1,14 +1,12 @@
 //! Application layer: the runtime coordinator, the sharing and setup use cases, and the seams they
 //! plug into.
 
-mod client_connections;
 mod coordinator;
 mod printers;
 mod runtime;
 mod setup;
 mod sharing;
 
-pub use client_connections::ServerConnections;
 pub use coordinator::{RuntimeCoordinator, SHUTDOWN_TIMEOUT, START_TIMEOUT};
 pub use printers::{
     DuplexMode, LocalPrinterCatalog, PrintJob, PrintJobSubmitter, PrintSettings,

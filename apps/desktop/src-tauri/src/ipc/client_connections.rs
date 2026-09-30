@@ -1,10 +1,10 @@
 //! Tauri commands for the manual client server-review flow.
 
-use crate::{application::ServerConnections, ipc::dto::AppErrorDto};
+use crate::{adapters::client_connections::ClientConnections, ipc::dto::AppErrorDto};
 use serde::Serialize;
 use tauri::State;
 
-pub type SharedServerConnections = std::sync::Arc<ServerConnections>;
+pub type SharedClientConnections = std::sync::Arc<ClientConnections>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServerConnectionReviewDto {
@@ -40,7 +40,7 @@ impl From<crate::adapters::client_connections::ConnectionPrinters> for ServerCon
 #[tauri::command]
 pub async fn inspect_server_connection(
     address: String,
-    connections: State<'_, SharedServerConnections>,
+    connections: State<'_, SharedClientConnections>,
 ) -> Result<ServerConnectionReviewDto, AppErrorDto> {
     connections
         .inspect(&address)
@@ -52,7 +52,7 @@ pub async fn inspect_server_connection(
 pub async fn approve_server_connection(
     address: String,
     fingerprint: String,
-    connections: State<'_, SharedServerConnections>,
+    connections: State<'_, SharedClientConnections>,
 ) -> Result<ServerConnectionReviewDto, AppErrorDto> {
     connections
         .approve(&address, &fingerprint)
@@ -63,7 +63,7 @@ pub async fn approve_server_connection(
 #[tauri::command]
 pub async fn list_server_connection_printers(
     address: String,
-    connections: State<'_, SharedServerConnections>,
+    connections: State<'_, SharedClientConnections>,
 ) -> Result<ServerConnectionPrintersDto, AppErrorDto> {
     connections
         .printers(&address)

@@ -1,8 +1,8 @@
 //! Observable manual-IPPS trust seam: TLS certificate review, explicit pinning and Get-Printers.
 
 use rustls::ServerConfig;
-use shaprint_desktop::adapters::client_connections::ServerAddress;
-use shaprint_desktop::{adapters::ServerIdentity, application::ServerConnections};
+use shaprint_desktop::adapters::client_connections::{ClientConnections, ServerAddress};
+use shaprint_desktop::adapters::ServerIdentity;
 use std::{
     fs,
     net::SocketAddr,
@@ -141,7 +141,7 @@ async fn an_untrusted_probe_sends_no_printer_query_and_approval_survives_reopen(
     let path = temp_dir();
     let server = TestServer::start().await;
     let address = endpoint(&server);
-    let client = ServerConnections::new(&path).unwrap_or_else(|error| panic!("store: {error}"));
+    let client = ClientConnections::new(&path).unwrap_or_else(|error| panic!("store: {error}"));
     let review = client
         .inspect(&address)
         .await
@@ -154,7 +154,7 @@ async fn an_untrusted_probe_sends_no_printer_query_and_approval_survives_reopen(
         .await
         .unwrap_or_else(|error| panic!("approve: {error}"));
     drop(client);
-    let reopened = ServerConnections::new(&path).unwrap_or_else(|error| panic!("reopen: {error}"));
+    let reopened = ClientConnections::new(&path).unwrap_or_else(|error| panic!("reopen: {error}"));
     let trusted = reopened
         .inspect(&address)
         .await
@@ -176,7 +176,7 @@ async fn changed_certificate_is_blocked_until_current_fingerprint_is_explicitly_
     let first = TestServer::start().await;
     let socket = first.address;
     let address = endpoint(&first);
-    let client = ServerConnections::new(&path).unwrap_or_else(|error| panic!("store: {error}"));
+    let client = ClientConnections::new(&path).unwrap_or_else(|error| panic!("store: {error}"));
     let original = client
         .inspect(&address)
         .await

@@ -24,10 +24,13 @@ effect without restarting sharing.
 
 Responses follow RFC 8010: the status code occupies the header field a request uses for its
 operation id, and each printer is reported as its own attributes group identified by
-`printer-uri-supported`. Printer status reports whether the channel and job-submission adapter are
-available. A successful `Print-Job` response includes the spooler's job id, job URI, and pending
-state. Common `media`, `print-color-mode`, `sides`, and `copies` values are mapped to the Windows
-queue's DEVMODE; unsupported values are rejected before the document is submitted.
+`printer-uri-supported`. The endpoint advertises only `application/octet-stream` as
+`document-format-supported`; clients must provide printer-ready spool data, while other formats are
+rejected with `client-error-document-format-not-supported` before submission. Printer status reports
+whether the channel and job-submission adapter are available. A successful `Print-Job` response
+includes the spooler's job id, job URI, and pending state. Common `media`, `print-color-mode`,
+`sides`, and `copies` values are mapped to the Windows queue's DEVMODE; unsupported values are
+rejected before the document is submitted.
 
 The server's identity is a self-signed certificate generated once and kept in the app data
 directory (`server-identity.cert.der` and `server-identity.key.der`, the key restricted to the
