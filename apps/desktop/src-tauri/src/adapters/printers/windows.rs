@@ -228,7 +228,7 @@ struct JobInfo2W {
     pages_printed: u32,
 }
 
-#[link(name = "winspool.drv")]
+#[link(name = "winspool")]
 unsafe extern "system" {
     fn OpenPrinterW(
         name: *const u16,
