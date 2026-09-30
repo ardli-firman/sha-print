@@ -200,6 +200,13 @@ impl PrintJobSubmitter for WindowsPrintJobSubmitter {
     }
 }
 
+#[repr(C)]
+struct DocInfo1W {
+    document_name: *const u16,
+    output_file: *const u16,
+    data_type: *const u16,
+}
+
 #[link(name = "winspool")]
 unsafe extern "system" {
     fn OpenPrinterW(
@@ -415,7 +422,7 @@ fn apply_job_settings(
 
     let mut job_info = JOB_INFO_2W {
         JobId: job_id,
-        pDevMode: dev_mode.as_mut_ptr(),
+        pDevMode: dev_mode.as_mut_ptr().cast(),
         ..Default::default()
     };
     // SAFETY: job info and devmode are valid for the synchronous SetJobW call.
