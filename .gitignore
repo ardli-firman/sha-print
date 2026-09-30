@@ -3,8 +3,13 @@
 .agents/
 .pi/
 docs/
+!docs/
+docs/*
+!docs/adr/
+!docs/adr/**
 skills-lock.json
 CONTEXT.md
+!CONTEXT.md
 
 # .NET
 bin/
