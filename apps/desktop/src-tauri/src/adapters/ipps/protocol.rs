@@ -14,7 +14,7 @@ const SUPPORTED_VERSIONS: [(u8, u8); 3] = [IPP_VERSION_2_0, IPP_VERSION_1_1, (1,
 
 /// Operation ids the sharing endpoint answers.
 pub const OPERATION_GET_PRINTER_ATTRIBUTES: u16 = 0x000b;
-pub const OPERATION_GET_PRINTERS: u16 = 0x0402;
+pub const OPERATION_GET_PRINTERS: u16 = 0x4002;
 
 /// `printer-state` for a queue that is idle and able to accept a job.
 const PRINTER_STATE_IDLE: i32 = 3;

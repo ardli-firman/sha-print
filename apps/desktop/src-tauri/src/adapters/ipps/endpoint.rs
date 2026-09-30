@@ -20,7 +20,6 @@ pub fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> V
     let request = match Request::parse(request) {
         Ok(request) => request,
         // The header was unreadable, so there is no request id to echo.
-        // The header was unreadable, so there is no request id to echo.
         Err(_) => return response(0, IPP_VERSION_1_1, Status::BadRequest, &[]),
     };
 
@@ -64,6 +63,12 @@ fn entry(host: &str, name: &PrinterName) -> PrinterEntry {
 
 /// Finds the shared queue a client asked about, by its URI or its bare name.
 fn find<'a>(shared: &'a [PrinterName], requested: &str) -> Option<&'a PrinterName> {
+    if let Some(printer) = shared
+        .iter()
+        .find(|printer| printer.as_str().eq_ignore_ascii_case(requested))
+    {
+        return Some(printer);
+    }
     let requested = requested.trim_end_matches('/');
     let name = requested.rsplit('/').next().unwrap_or(requested);
     if name.is_empty() {
@@ -302,6 +307,21 @@ mod tests {
 
         let answer = answer(
             &request(OPERATION_GET_PRINTER_ATTRIBUTES, &[("printer-uri", &uri)]),
+            "server",
+            &shared,
+        );
+
+        assert_eq!(status(&answer), 0x0000);
+    }
+
+    #[test]
+    fn a_printer_name_with_slashes_is_looked_up_by_name() {
+        let shared = FakeShared::new(&["Office/Floor2/Printer"]);
+        let answer = answer(
+            &request(
+                OPERATION_GET_PRINTER_ATTRIBUTES,
+                &[("printer-name", "Office/Floor2/Printer")],
+            ),
             "server",
             &shared,
         );

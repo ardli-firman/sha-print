@@ -200,7 +200,7 @@ impl ServerCertVerifier for FingerprintVerifier {
 
 /// Operation ids the client uses.
 const GET_PRINTER_ATTRIBUTES: u16 = 0x000b;
-const GET_PRINTERS: u16 = 0x0402;
+const GET_PRINTERS: u16 = 0x4002;
 
 /// An IPP `Get-Printers` request.
 pub fn get_printers(request_id: u32) -> Vec<u8> {

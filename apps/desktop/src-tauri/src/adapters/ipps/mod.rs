@@ -96,13 +96,13 @@ impl IppsServer {
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
+                Some(_) = connections.join_next(), if !connections.is_empty() => {}
                 accepted = listener.accept() => match accepted {
                     Ok((stream, peer)) => {
                         connections.spawn(serve_client(
                             stream,
                             Arc::clone(&tls),
                             Arc::clone(&directory),
-                            local,
                             peer,
                         ));
                     }
@@ -114,6 +114,9 @@ impl IppsServer {
         // Stop accepting immediately and drop the connections still in flight: a stopped server
         // answers no client.
         connections.shutdown().await;
+        if let Ok(mut bound) = self.bound.lock() {
+            *bound = None;
+        }
         log::info!("sharing endpoint stopped port={}", local.port());
         Ok(())
     }
@@ -138,7 +141,6 @@ async fn serve_client(
     stream: TcpStream,
     tls: Arc<ServerConfig>,
     directory: Arc<dyn SharedPrinterSource>,
-    local: SocketAddr,
     peer: SocketAddr,
 ) {
     let acceptor = TlsAcceptor::from(tls);
@@ -155,7 +157,7 @@ async fn serve_client(
         }
     };
 
-    if let Err(error) = answer_request(tls_stream, &local.to_string(), directory.as_ref()).await {
+    if let Err(error) = answer_request(tls_stream, directory.as_ref()).await {
         log::warn!(
             "client request failed peer={peer} code={} message={error}",
             error.code_str()
@@ -169,7 +171,6 @@ async fn serve_client(
 /// it.
 pub(crate) async fn answer_request<S>(
     stream: S,
-    fallback_authority: &str,
     directory: &dyn SharedPrinterSource,
 ) -> Result<(), AppError>
 where
@@ -204,7 +205,13 @@ where
         .map_err(|_| AppError::timeout("a client did not send its request in time"))?
         .map_err(|error| AppError::invalid_input(format!("unreadable request body: {error}")))?;
 
-    let authority = head.header("host").unwrap_or(fallback_authority);
+    let authority = match head.header("host") {
+        Some(host) if !host.trim().is_empty() => host.trim(),
+        _ => {
+            log::warn!("refusing a client request status=400 Bad Request missing Host");
+            return respond(&mut write, "400 Bad Request", "text/plain", &[]).await;
+        }
+    };
     let answer = endpoint::answer(&body, authority, directory);
     respond(&mut write, "200 OK", http::IPP_CONTENT_TYPE, &answer).await
 }
@@ -271,7 +278,7 @@ mod tests {
     async fn exchange(request: &[u8], directory: Arc<dyn SharedPrinterSource>) -> Vec<u8> {
         let (server, mut client) = tokio::io::duplex(16 * 1024);
         let answering = tokio::spawn(async move {
-            answer_request(server, "server:8631", directory.as_ref())
+            answer_request(server, directory.as_ref())
                 .await
                 .expect("answers");
         });
@@ -343,5 +350,19 @@ mod tests {
         let text = String::from_utf8_lossy(&answer).into_owned();
         assert!(text.starts_with("HTTP/1.1 100 Continue\r\n\r\n"));
         assert!(text.contains("HTTP/1.1 200 OK"));
+    }
+
+    #[tokio::test]
+    async fn a_request_without_host_is_refused_with_400_bad_request() {
+        let directory: Arc<dyn SharedPrinterSource> = Arc::new(FakeShared(Vec::new()));
+
+        let answer = exchange(
+            b"POST /ipp/print HTTP/1.1\r\nContent-Type: application/ipp\r\nContent-Length: 0\r\n\r\n",
+            directory,
+        )
+        .await;
+
+        let text = String::from_utf8_lossy(&answer).into_owned();
+        assert!(text.starts_with("HTTP/1.1 400 Bad Request\r\n"));
     }
 }

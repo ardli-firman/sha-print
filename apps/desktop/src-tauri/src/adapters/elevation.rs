@@ -163,7 +163,9 @@ mod windows {
 
         let exit_code = wait_for(info.hProcess);
         // Safety: the shell handed us the process handle and we are done with it.
-        unsafe { CloseHandle(info.hProcess) };
+        if !info.hProcess.is_null() {
+            unsafe { CloseHandle(info.hProcess) };
+        }
 
         match exit_code {
             Some(0) => {
@@ -214,7 +216,8 @@ mod windows {
     /// refuses to create a duplicate name.
     fn allow_inbound_sharing() -> Result<(), AppError> {
         let rule = format!("ShaPrint ({DEFAULT_PORT})");
-        run(
+        // Delete existing rule first if present; ignore failure if it does not exist yet.
+        let _ = run(
             "netsh",
             &[
                 "advfirewall",
@@ -223,7 +226,7 @@ mod windows {
                 "rule",
                 &format!("name={rule}"),
             ],
-        )?;
+        );
         run(
             "netsh",
             &[

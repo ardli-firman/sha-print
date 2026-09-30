@@ -141,7 +141,10 @@ impl IdentityStore for FileIdentityStore {
                     ))
                 })?;
                 write_private(&key_path, identity.key_der())?;
-                write_private(&certificate_path, identity.certificate_der())?;
+                if let Err(error) = write_private(&certificate_path, identity.certificate_der()) {
+                    let _ = fs::remove_file(&key_path);
+                    return Err(error);
+                }
                 log::info!(
                     "created the server certificate fingerprint={}",
                     identity.fingerprint()
