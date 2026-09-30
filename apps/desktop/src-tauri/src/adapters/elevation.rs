@@ -106,6 +106,7 @@ fn elevate(action: SetupAction) -> Result<(), AppError> {
 mod windows {
     use std::mem::size_of;
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::process::CommandExt;
     use std::path::Path;
 
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0};
@@ -241,8 +242,13 @@ mod windows {
     }
 
     fn run(program: &str, arguments: &[&str]) -> Result<(), AppError> {
+        // The parent is a GUI process with no console: without this flag Windows would flash a
+        // console window for every configuration command.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
         let output = std::process::Command::new(program)
             .args(arguments)
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|error| AppError::internal(format!("cannot run {program}: {error}")))?;
         if output.status.success() {
