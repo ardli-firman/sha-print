@@ -55,6 +55,13 @@ By utilizing a **Virtual Printer Port (Named Pipes)** architecture and direct TC
 
 ---
 
+## 🧭 Desktop app (in progress)
+
+The WPF application described above is the current release. A Windows-only Tauri desktop app is
+being built alongside it in [`apps/desktop`](apps/desktop/README.md): a React + TypeScript window
+over one modular Rust crate that supervises the client proxy and printer sharing services, with
+the architecture decisions recorded in [`docs/adr`](docs/adr).
+
 ## 💻 System Requirements
 
 Before installing ShaPrint, please ensure your system meets the following requirements:
