@@ -1,9 +1,12 @@
+import { PrinterSharingPanel } from "./components/PrinterSharingPanel";
 import { RuntimeStatusPanel } from "./components/RuntimeStatusPanel";
+import { usePrinterSharing } from "./hooks/usePrinterSharing";
 import { useRuntimeStatus } from "./hooks/useRuntimeStatus";
 import "./App.css";
 
 function App() {
   const runtime = useRuntimeStatus();
+  const sharing = usePrinterSharing();
 
   return (
     <main className="app">
@@ -13,6 +16,8 @@ function App() {
       </header>
 
       <RuntimeStatusPanel runtime={runtime} />
+
+      <PrinterSharingPanel sharing={sharing} />
 
       <footer className="app-footer">
         Documents are submitted by Windows, not by this window: ShaPrint never shows or logs print

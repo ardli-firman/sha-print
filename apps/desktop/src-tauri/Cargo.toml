@@ -16,16 +16,38 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 async-trait = "0.1"
+hex = "0.4"
 log = "0.4"
+# `ring` is the TLS backend for both rustls and rcgen on every platform we build, including the
+# Windows CI runner, so no assembly toolchain beyond the platform C compiler is required.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-log = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Printing",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
+async-trait = "0.1"
+hex = "0.4"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

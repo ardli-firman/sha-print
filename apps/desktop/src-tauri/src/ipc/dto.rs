@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::application::LocalPrinter;
 use crate::domain::{AppError, RuntimeStatus, ServiceStatus};
 
 /// Event the shell emits whenever runtime status changes.
@@ -67,10 +68,58 @@ impl From<&AppError> for AppErrorDto {
     }
 }
 
+/// One local printer queue as the sharing UI lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalPrinterDto {
+    /// Queue name; also the `printer-name` clients see.
+    pub name: String,
+    /// Whether the server currently shares this queue with clients.
+    pub shared: bool,
+}
+
+impl From<&LocalPrinter> for LocalPrinterDto {
+    fn from(printer: &LocalPrinter) -> Self {
+        Self {
+            name: printer.name().as_str().to_owned(),
+            shared: printer.shared(),
+        }
+    }
+}
+
+/// Every local queue and its sharing state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalPrintersDto {
+    pub printers: Vec<LocalPrinterDto>,
+}
+
+impl From<&[LocalPrinter]> for LocalPrintersDto {
+    fn from(printers: &[LocalPrinter]) -> Self {
+        Self {
+            printers: printers.iter().map(LocalPrinterDto::from).collect(),
+        }
+    }
+}
+
+/// The server identity a client user approves, and where clients reach it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerIdentityDto {
+    /// Uppercase, colon-separated SHA-256 fingerprint of the server certificate.
+    pub fingerprint: String,
+    /// Port the sharing endpoint listens on.
+    pub port: u16,
+}
+
+/// What a setup action did. Never carries credentials or permission tokens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupOutcomeDto {
+    /// Whether administrator permission was requested for the action.
+    pub elevated: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{ErrorCode, RuntimeStatus, ServiceId};
+    use crate::domain::{ErrorCode, PrinterName, RuntimeStatus, ServiceId};
 
     fn status(id: ServiceId, state: crate::domain::ServiceState, detail: &str) -> ServiceStatus {
         let mut status = ServiceStatus::stopped(id);
@@ -128,5 +177,46 @@ mod tests {
     #[test]
     fn event_name_matches_the_frontend_contract() {
         assert_eq!(RUNTIME_STATUS_EVENT, "runtime://status");
+    }
+
+    #[test]
+    fn local_printer_payload_shape_is_stable() {
+        let printers = LocalPrintersDto::from(
+            &[
+                LocalPrinter::new(PrinterName::parse("HP LaserJet").expect("valid name"), true),
+                LocalPrinter::new(PrinterName::parse("Zebra").expect("valid name"), false),
+            ][..],
+        );
+
+        let payload = serde_json::to_value(printers).expect("serializes");
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "printers": [
+                    { "name": "HP LaserJet", "shared": true },
+                    { "name": "Zebra", "shared": false }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn server_identity_payload_shape_is_stable() {
+        let payload = serde_json::to_value(ServerIdentityDto {
+            fingerprint: "AA:BB".to_owned(),
+            port: 8631,
+        })
+        .expect("serializes");
+
+        assert_eq!(
+            payload,
+            serde_json::json!({ "fingerprint": "AA:BB", "port": 8631 })
+        );
+    }
+
+    #[test]
+    fn setup_outcome_payload_shape_is_stable() {
+        let payload = serde_json::to_value(SetupOutcomeDto { elevated: true }).expect("serializes");
+        assert_eq!(payload, serde_json::json!({ "elevated": true }));
     }
 }

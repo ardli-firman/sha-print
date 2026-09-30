@@ -17,17 +17,20 @@ pub enum ErrorCode {
     InvalidState,
     /// A lifecycle action did not finish inside its deadline.
     Timeout,
+    /// The platform cannot perform the request; the message names what is missing.
+    Unsupported,
     /// Unexpected failure; specifics belong in the message, never in the code.
     Internal,
 }
 
 impl ErrorCode {
     /// Every code the shell can report, in a fixed order.
-    pub const ALL: [ErrorCode; 5] = [
+    pub const ALL: [ErrorCode; 6] = [
         ErrorCode::InvalidInput,
         ErrorCode::UnknownService,
         ErrorCode::InvalidState,
         ErrorCode::Timeout,
+        ErrorCode::Unsupported,
         ErrorCode::Internal,
     ];
 
@@ -38,6 +41,7 @@ impl ErrorCode {
             ErrorCode::UnknownService => "unknown-service",
             ErrorCode::InvalidState => "invalid-state",
             ErrorCode::Timeout => "timeout",
+            ErrorCode::Unsupported => "unsupported",
             ErrorCode::Internal => "internal",
         }
     }
@@ -75,6 +79,10 @@ impl AppError {
         Self::new(ErrorCode::Timeout, message)
     }
 
+    pub fn unsupported(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Unsupported, message)
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, message)
     }
@@ -106,6 +114,7 @@ mod tests {
                 "unknown-service",
                 "invalid-state",
                 "timeout",
+                "unsupported",
                 "internal"
             ]
         );

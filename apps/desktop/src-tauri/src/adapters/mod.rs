@@ -2,11 +2,18 @@
 //!
 //! Windows printer, registry, spooler, and startup APIs stay behind adapters in this module so the
 //! later Linux phase can supply its own implementations without moving domain behavior (ADR 0002).
-//! Each service here provides the supervised runtime slot: startup, readiness reporting, and
-//! cancellation. The protocol work arrives with its own issue (#31 sharing, #34 client proxy).
+//! Each service provides the supervised runtime slot: startup, readiness reporting, and
+//! cancellation, plus the protocol work its issue owns.
 
 mod client_proxy;
+pub mod elevation;
+pub mod identity;
+pub mod ipps;
+pub mod printers;
 mod server_sharing;
 
 pub use client_proxy::ClientProxyService;
+pub use elevation::SystemElevation;
+pub use identity::{FileIdentityStore, IdentityStore, ServerIdentity};
+pub use ipps::{IppsServer, DEFAULT_PORT};
 pub use server_sharing::ServerSharingService;

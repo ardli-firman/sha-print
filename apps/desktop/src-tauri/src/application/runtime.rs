@@ -104,6 +104,15 @@ pub trait RuntimeService: Send + Sync + 'static {
     /// Whether the shell starts this service when the app launches.
     fn autostart(&self) -> bool;
 
+    /// Whether the service can start right now.
+    ///
+    /// A service that needs user configuration reports it here: the shell hands the error straight
+    /// to the caller instead of driving the lifecycle into `failed` for something the user can fix
+    /// in one step.
+    fn preflight(&self) -> Result<(), AppError> {
+        Ok(())
+    }
+
     /// Runs the service until cancelled, reporting readiness through the context.
     async fn run(&self, context: ServiceContext) -> Result<(), AppError>;
 }

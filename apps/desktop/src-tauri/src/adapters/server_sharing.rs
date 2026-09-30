@@ -1,26 +1,28 @@
 //! The server sharing runtime.
 //!
-//! Sharing exposes the local Windows printer queues the user selected over IPPS, authorizes
-//! incoming jobs with the Network Channel, and submits accepted jobs to the selected queues
-//! (issues #31 and #32; ADR 0001).
+//! Sharing exposes the local Windows printer queues the user selected over IPPS and answers client
+//! queries about them (issue #31; ADR 0001). Authorizing and submitting print jobs is #32.
 //!
-//! This type is the supervised runtime slot for that work: it reports readiness once its startup
-//! prerequisites hold and returns as soon as the shell cancels it. Sharing never starts on its
-//! own — the user controls it through the shell's lifecycle commands (ADR 0001); #31 backs it with
-//! the selected queues and their IPPS advertisement.
+//! Sharing never starts on its own: the user controls it through the shell's lifecycle commands,
+//! and the endpoint only exists while the service runs.
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::application::{RuntimeService, ServiceContext};
+use crate::adapters::ipps::IppsServer;
+use crate::application::{RuntimeService, ServiceContext, SharedPrinterSource, Sharing};
 use crate::domain::{AppError, ServiceId};
 
 /// Supervises IPPS sharing of the local printer queues.
-#[derive(Debug, Default)]
-pub struct ServerSharingService;
+pub struct ServerSharingService {
+    sharing: Arc<Sharing>,
+    endpoint: Arc<IppsServer>,
+}
 
 impl ServerSharingService {
-    pub fn new() -> Self {
-        Self
+    pub fn new(sharing: Arc<Sharing>, endpoint: Arc<IppsServer>) -> Self {
+        Self { sharing, endpoint }
     }
 }
 
@@ -35,9 +37,71 @@ impl RuntimeService for ServerSharingService {
         false
     }
 
-    async fn run(&self, context: ServiceContext) -> Result<(), AppError> {
-        context.reporter().ready()?;
-        context.cancelled().await;
+    /// Sharing needs something to share: a server with no selected queue would open a port and
+    /// answer every client with an empty printer list.
+    fn preflight(&self) -> Result<(), AppError> {
+        if self.sharing.shared_printers().is_empty() {
+            return Err(AppError::invalid_state(
+                "select at least one printer to share before starting",
+            ));
+        }
         Ok(())
+    }
+
+    async fn run(&self, context: ServiceContext) -> Result<(), AppError> {
+        let directory: Arc<dyn SharedPrinterSource> = self.sharing.clone();
+        self.endpoint.serve(directory, context).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::identity::ServerIdentity;
+    use crate::application::LocalPrinterCatalog;
+    use crate::domain::PrinterName;
+
+    struct FakeCatalog(Vec<PrinterName>);
+
+    #[async_trait]
+    impl LocalPrinterCatalog for FakeCatalog {
+        async fn local_printers(&self) -> Result<Vec<PrinterName>, AppError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn service(queues: &[&str]) -> (ServerSharingService, Arc<Sharing>) {
+        let catalog = Arc::new(FakeCatalog(
+            queues
+                .iter()
+                .map(|name| PrinterName::parse(name).expect("valid name"))
+                .collect(),
+        ));
+        let sharing = Arc::new(Sharing::new(catalog));
+        let identity = Arc::new(ServerIdentity::generate().expect("generates"));
+        let endpoint = Arc::new(IppsServer::new(0, identity));
+        (
+            ServerSharingService::new(Arc::clone(&sharing), endpoint),
+            sharing,
+        )
+    }
+
+    #[tokio::test]
+    async fn sharing_cannot_start_before_the_user_selects_a_queue() {
+        let (service, sharing) = service(&["HP LaserJet"]);
+
+        let error = service.preflight().expect_err("rejected");
+
+        assert_eq!(error.code(), crate::domain::ErrorCode::InvalidState);
+        assert_eq!(
+            error.message(),
+            "select at least one printer to share before starting"
+        );
+
+        sharing
+            .set_shared(vec![PrinterName::parse("HP LaserJet").expect("valid name")])
+            .await
+            .expect("selects a queue");
+        service.preflight().expect("sharing has something to share");
     }
 }
