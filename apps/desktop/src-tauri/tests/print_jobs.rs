@@ -439,6 +439,7 @@ async fn channel_verifier_survives_reopen_without_persisting_plaintext() {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let directory = std::env::temp_dir().join(format!("shaprint-channel-{timestamp}"));
+    let second_directory = directory.with_extension("second");
     let secret = channel_secret();
 
     {
@@ -453,6 +454,69 @@ async fn channel_verifier_survives_reopen_without_persisting_plaintext() {
     assert!(!verifier
         .windows(secret.len())
         .any(|window| window == secret.as_bytes()));
+    let record: serde_json::Value =
+        serde_json::from_slice(&verifier).expect("verifier record is JSON");
+    let salt = record["salt"]
+        .as_str()
+        .expect("verifier has a per-configuration salt");
+    assert_eq!(hex::decode(salt).expect("salt is hex").len(), 16);
+    let digest = record["sha256"]
+        .as_str()
+        .expect("verifier has a digest")
+        .to_owned();
+
+    let second = NetworkChannel::open(second_directory.clone()).expect("opens second store");
+    assert!(second
+        .configure(&secret)
+        .await
+        .expect("persists second verifier"));
+    let second_record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(second_directory.join("network-channel-verifier.json"))
+            .expect("reads second verifier"),
+    )
+    .expect("second verifier record is JSON");
+    assert_ne!(
+        salt,
+        second_record["salt"]
+            .as_str()
+            .expect("second verifier has a salt")
+    );
+    assert_ne!(
+        digest,
+        second_record["sha256"]
+            .as_str()
+            .expect("second verifier has a digest")
+    );
+    let _ = std::fs::remove_dir_all(directory);
+    let _ = std::fs::remove_dir_all(second_directory);
+}
+
+#[tokio::test]
+async fn legacy_unsalted_channel_verifier_requires_reconfiguration() {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let directory = std::env::temp_dir().join(format!("shaprint-channel-legacy-{timestamp}"));
+    std::fs::create_dir_all(&directory).expect("creates legacy verifier directory");
+    std::fs::write(
+        directory.join("network-channel-verifier.json"),
+        r#"{"sha256":"0000000000000000000000000000000000000000000000000000000000000000"}"#,
+    )
+    .expect("writes legacy verifier");
+
+    let channel = NetworkChannel::open(directory.clone())
+        .expect("loads legacy verifier as requiring configuration");
+    assert!(!channel.is_configured());
+    assert!(!channel.authorizes("legacy-channel"));
+    let replacement = channel_secret();
+    assert!(channel
+        .configure(&replacement)
+        .await
+        .expect("replaces legacy verifier"));
+    let reopened = NetworkChannel::open(directory.clone()).expect("reopens salted verifier");
+    assert!(reopened.is_configured());
+    assert!(reopened.authorizes(&replacement));
     let _ = std::fs::remove_dir_all(directory);
 }
 

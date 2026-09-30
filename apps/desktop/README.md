@@ -17,8 +17,10 @@ application as the product path and lives beside the .NET projects while the tra
   host or host:port, inspect the presented fingerprint without querying printers, explicitly approve
   it, and list printers only while the live fingerprint matches the saved approval. Changed
   fingerprints remain blocked until explicit reapproval.
-- Network Channel storage retains only a SHA-256 verifier; the value is never returned through IPC
-  or written to logs, status, or UI after configuration.
+- Network Channel storage retains a salted SHA-256 verifier with a fresh 128-bit salt per
+  configuration. Older unsalted verifier files are treated as unconfigured and require the user to
+  set the Network Channel again. The plaintext value is never returned through IPC or written to
+  logs, status, or UI after configuration.
 - One elevated setup action: letting clients reach the endpoint through the Windows firewall. Every
   other action — selecting queues, start/stop, fingerprint review, and channel configuration — runs
   unprivileged.

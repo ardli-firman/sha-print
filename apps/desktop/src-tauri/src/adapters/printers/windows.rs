@@ -4,7 +4,9 @@
 
 use async_trait::async_trait;
 use windows_sys::Win32::Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER};
-use windows_sys::Win32::Graphics::Printing::{EnumPrintersW, PRINTER_ENUM_LOCAL, PRINTER_INFO_4W};
+use windows_sys::Win32::Graphics::Printing::{
+    EnumPrintersW, JOB_INFO_2W, PRINTER_ENUM_LOCAL, PRINTER_INFO_4W,
+};
 
 use crate::application::LocalPrinterCatalog;
 use crate::domain::{AppError, PrinterName};
@@ -169,8 +171,11 @@ mod tests {
         let mut document = b"\x1bE\x1b&l0O\x1b&l2A".to_vec();
         document.extend_from_slice(b"ShaPrint Windows real-queue smoke test\r\n");
         document.push(0x0c);
-        let job =
-            PrintJob::from_ipp_body(document, 0, crate::application::PrintSettings::default());
+        let settings = crate::application::PrintSettings {
+            copies: Some(1),
+            ..Default::default()
+        };
+        let job = PrintJob::from_ipp_body(document, 0, settings);
 
         let job_id = WindowsPrintJobSubmitter
             .submit(&printer, job)
@@ -193,39 +198,6 @@ impl PrintJobSubmitter for WindowsPrintJobSubmitter {
             .await
             .map_err(|_| AppError::internal("printer submission worker did not finish"))?
     }
-}
-
-#[repr(C)]
-struct DocInfo1W {
-    document_name: *const u16,
-    output_file: *const u16,
-    data_type: *const u16,
-}
-
-#[repr(C)]
-struct JobInfo2W {
-    printer_name: *mut u16,
-    machine_name: *mut u16,
-    user_name: *mut u16,
-    document_name: *mut u16,
-    notify_name: *mut u16,
-    data_type: *mut u16,
-    print_processor: *mut u16,
-    parameters: *mut u16,
-    driver_name: *mut u16,
-    dev_mode: *mut u8,
-    status_text: *mut u16,
-    security_descriptor: *mut std::ffi::c_void,
-    status: u32,
-    priority: u32,
-    position: u32,
-    start_time: u32,
-    until_time: u32,
-    total_pages: u32,
-    size: u32,
-    submitted: [u16; 8],
-    time: u32,
-    pages_printed: u32,
 }
 
 #[link(name = "winspool")]
@@ -441,29 +413,10 @@ fn apply_job_settings(
     }
     dev_mode[72..76].copy_from_slice(&fields.to_ne_bytes());
 
-    let mut job_info = JobInfo2W {
-        printer_name: std::ptr::null_mut(),
-        machine_name: std::ptr::null_mut(),
-        user_name: std::ptr::null_mut(),
-        document_name: std::ptr::null_mut(),
-        notify_name: std::ptr::null_mut(),
-        data_type: std::ptr::null_mut(),
-        print_processor: std::ptr::null_mut(),
-        parameters: std::ptr::null_mut(),
-        driver_name: std::ptr::null_mut(),
-        dev_mode: dev_mode.as_mut_ptr(),
-        status_text: std::ptr::null_mut(),
-        security_descriptor: std::ptr::null_mut(),
-        status: 0,
-        priority: 0,
-        position: 0,
-        start_time: 0,
-        until_time: 0,
-        total_pages: 0,
-        size: 0,
-        submitted: [0; 8],
-        time: 0,
-        pages_printed: 0,
+    let mut job_info = JOB_INFO_2W {
+        JobId: job_id,
+        pDevMode: dev_mode.as_mut_ptr(),
+        ..Default::default()
     };
     // SAFETY: job info and devmode are valid for the synchronous SetJobW call.
     if unsafe {
@@ -471,7 +424,7 @@ fn apply_job_settings(
             handle,
             job_id,
             2,
-            (&mut job_info as *mut JobInfo2W).cast(),
+            (&mut job_info as *mut JOB_INFO_2W).cast(),
             0,
         )
     } == 0

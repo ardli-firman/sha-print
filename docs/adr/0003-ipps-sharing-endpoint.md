@@ -13,8 +13,12 @@ speaks IPP over HTTP over TLS ("IPPS"). While sharing runs, it answers `Get-Prin
 - a platform print-job adapter is available.
 
 Missing or incorrect channels and unshared queues never reach the printer adapter. The configured
-Network Channel is replaced through an unprivileged UI action. App data retains only its SHA-256
-verifier; the channel value is never returned through IPC or written to logs, status, or responses.
+Network Channel is replaced through an unprivileged UI action. App data retains a SHA-256 verifier
+and a fresh random 128-bit salt for each configuration; hashing `salt || channel` prevents
+precomputed rainbow-table attacks without imposing a slow password-KDF cost on each print request.
+This does not prevent targeted offline guessing of a low-entropy Network Channel. Older unsalted
+verifier files are treated as unconfigured and require the user to set the Network Channel again.
+The channel value is never returned through IPC or written to logs, status, or responses.
 
 The endpoint listens on TCP 8631 by default, not 631: Windows' own IPP service owns 631 when the
 Internet Printing feature is installed, and ShaPrint must not compete for it. It binds while server

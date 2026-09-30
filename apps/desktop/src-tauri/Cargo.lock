@@ -3025,6 +3025,7 @@ dependencies = [
  "hex",
  "log",
  "rcgen",
+ "ring",
  "rustls",
  "serde",
  "serde_json",
