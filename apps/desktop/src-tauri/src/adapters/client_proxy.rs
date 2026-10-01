@@ -349,18 +349,23 @@ async fn read_head<R: tokio::io::AsyncBufRead + Unpin>(
             ));
         }
         bytes.extend_from_slice(&line);
-        if line == b"\r\n" {
+        if line == b"\r\n" || line == b"\n" {
             break;
         }
     }
     let text = std::str::from_utf8(&bytes)
         .map_err(|_| AppError::invalid_input("The local printer sent an invalid HTTP request."))?;
-    let mut lines = text.split("\r\n");
-    let mut request_line = lines.next().unwrap_or_default().split_whitespace();
-    let method = request_line.next().unwrap_or_default().to_owned();
-    let path = request_line.next().unwrap_or_default().to_owned();
-    let version = request_line.next();
-    if version.is_none() || request_line.next().is_some() || method.is_empty() || path.is_empty() {
+    let lines: Vec<&str> = text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
+    let mut iter = lines.iter();
+    let request_line = iter.next().copied().unwrap_or_default();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_owned();
+    let path = parts.next().unwrap_or_default().to_owned();
+    let version = parts.next();
+    if version.is_none() || parts.next().is_some() || method.is_empty() || path.is_empty() {
         return Err(AppError::invalid_input(
             "The local printer sent an invalid HTTP request.",
         ));
@@ -369,7 +374,10 @@ async fn read_head<R: tokio::io::AsyncBufRead + Unpin>(
     let mut content_length = None;
     let mut has_transfer_encoding = false;
     let mut expects_continue = false;
-    for line in lines {
+    for line in iter {
+        if line.is_empty() {
+            break;
+        }
         let Some((name, value)) = line.split_once(':') else {
             continue;
         };
@@ -450,4 +458,31 @@ async fn write_http<W: tokio::io::AsyncWrite + Unpin>(
         .shutdown()
         .await
         .map_err(|_| AppError::internal("Could not finish the local printer response."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[tokio::test]
+    async fn read_head_parses_crlf_and_bare_lf() {
+        let crlf = b"POST /ipp/print HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/ipp\r\nContent-Length: 42\r\nExpect: 100-continue\r\n\r\n";
+        let mut reader = Cursor::new(&crlf[..]);
+        let head = read_head(&mut reader).await.expect("parses CRLF head");
+        assert_eq!(head.method, "POST");
+        assert_eq!(head.path, "/ipp/print");
+        assert_eq!(head.content_type.as_deref(), Some("application/ipp"));
+        assert_eq!(head.content_length, Some(42));
+        assert!(head.expects_continue);
+
+        let bare_lf = b"POST /ipp/print HTTP/1.1\nHost: 127.0.0.1\nContent-Type: application/ipp\nContent-Length: 10\n\n";
+        let mut reader = Cursor::new(&bare_lf[..]);
+        let head = read_head(&mut reader).await.expect("parses bare LF head");
+        assert_eq!(head.method, "POST");
+        assert_eq!(head.path, "/ipp/print");
+        assert_eq!(head.content_type.as_deref(), Some("application/ipp"));
+        assert_eq!(head.content_length, Some(10));
+        assert!(!head.expects_continue);
+    }
 }

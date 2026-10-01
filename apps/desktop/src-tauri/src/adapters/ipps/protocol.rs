@@ -268,6 +268,7 @@ pub fn prepare_proxy_request(
     let mut output = Vec::with_capacity(bytes.len() + 128);
     output.extend_from_slice(&bytes[..8]);
     let mut position = 8;
+    let mut current_name = &[][..];
     let mut replaced_printer = false;
     let mut replaced_channel = false;
     while position < bytes.len() {
@@ -286,6 +287,7 @@ pub fn prepare_proxy_request(
             return Ok(output);
         }
         if (0x01..=0x05).contains(&value_tag) {
+            current_name = &[][..];
             output.push(value_tag);
             continue;
         }
@@ -295,6 +297,9 @@ pub fn prepare_proxy_request(
             .checked_add(name_length)
             .ok_or(ParseError::Overrun)?;
         let name = bytes.get(position..name_end).ok_or(ParseError::Overrun)?;
+        if !name.is_empty() {
+            current_name = name;
+        }
         position = name_end;
         let value_length = read_u16(bytes, &mut position)? as usize;
         let value_end = position
@@ -302,7 +307,11 @@ pub fn prepare_proxy_request(
             .ok_or(ParseError::Overrun)?;
         bytes.get(position..value_end).ok_or(ParseError::Overrun)?;
 
-        if name == b"printer-uri" {
+        if current_name == b"printer-uri" {
+            if name.is_empty() {
+                position = value_end;
+                continue;
+            }
             if replaced_printer {
                 return Err(ParseError::NotText);
             }
@@ -312,7 +321,11 @@ pub fn prepare_proxy_request(
             output.extend_from_slice(name);
             output.extend_from_slice(&(remote_printer_uri.len() as u16).to_be_bytes());
             output.extend_from_slice(remote_printer_uri.as_bytes());
-        } else if name == b"network-channel" {
+        } else if current_name == b"network-channel" {
+            if name.is_empty() {
+                position = value_end;
+                continue;
+            }
             if replaced_channel {
                 return Err(ParseError::NotText);
             }
@@ -1124,5 +1137,56 @@ mod tests {
             text(&attributes, "printer-uuid"),
             Some(printer_uuid("Office Printer"))
         );
+    }
+
+    #[test]
+    fn prepare_proxy_request_discards_client_network_channel_and_secondary_values() {
+        let mut request = Vec::new();
+        request.extend_from_slice(&[2, 0, 0, 2, 0, 0, 0, 1]); // Print-Job request id 1
+        request.push(tag::OPERATION_ATTRIBUTES);
+        write_text_attribute(
+            &mut request,
+            tag::URI,
+            "printer-uri",
+            "ipp://127.0.0.1:8632/local",
+        );
+        // Extra 1setOf value for printer-uri (empty name)
+        request.push(tag::URI);
+        request.extend_from_slice(&0u16.to_be_bytes());
+        request.extend_from_slice(&(b"ipp://127.0.0.1:8632/extra".len() as u16).to_be_bytes());
+        request.extend_from_slice(b"ipp://127.0.0.1:8632/extra");
+
+        // Client-supplied network-channel with 1setOf extra value
+        write_text_attribute(&mut request, 0x41, "network-channel", "rogue-secret");
+        request.push(0x41);
+        request.extend_from_slice(&0u16.to_be_bytes());
+        request.extend_from_slice(&(b"extra-rogue".len() as u16).to_be_bytes());
+        request.extend_from_slice(b"extra-rogue");
+
+        request.push(tag::END_OF_ATTRIBUTES);
+        request.extend_from_slice(b"fake document payload");
+
+        let prepared = prepare_proxy_request(
+            &request,
+            "ipps://server:8631/remote",
+            Some("configured-secret"),
+        )
+        .expect("prepares proxy request");
+
+        let parsed = Request::parse(&prepared).expect("valid IPP request");
+        assert_eq!(
+            parsed.value("printer-uri"),
+            Some("ipps://server:8631/remote")
+        );
+        assert_eq!(
+            parsed.text_values("printer-uri"),
+            vec!["ipps://server:8631/remote"]
+        );
+        assert_eq!(parsed.value("network-channel"), Some("configured-secret"));
+        assert_eq!(
+            parsed.text_values("network-channel"),
+            vec!["configured-secret"]
+        );
+        assert_eq!(parsed.document(), b"fake document payload");
     }
 }
