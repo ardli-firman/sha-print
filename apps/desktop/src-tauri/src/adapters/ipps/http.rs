@@ -10,8 +10,8 @@ use tokio::io::{
 /// Longest request head the endpoint reads.
 pub const MAX_HEAD_BYTES: usize = 8 * 1024;
 
-/// Longest request body the endpoint reads. An IPP query is a few hundred bytes.
-pub const MAX_BODY_BYTES: usize = 64 * 1024;
+/// Longest request body the endpoint reads, including the IPP attributes and document data.
+pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// Content type IPP requests and responses use.
 pub const IPP_CONTENT_TYPE: &str = "application/ipp";

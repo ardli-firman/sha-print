@@ -1,8 +1,7 @@
-//! Minimal IPP codec (RFC 8010/8011): enough to answer printer queries over IPPS.
+//! Minimal IPP codec (RFC 8010/8011): query support and authorized Print-Job submissions over IPPS.
 //!
-//! The sharing endpoint answers `Get-Printers` and `Get-Printer-Attributes` (#31). Print job
-//! submission and the attributes it needs arrive with #32; the encoder here writes the attribute
-//! groups a query response requires, and the decoder reads only what a query needs to be answered.
+//! The decoder keeps the document as opaque bytes and reads only common operation/job attributes;
+//! document content is never decoded, logged, or included in a response.
 
 /// Default IPP version the endpoint uses when it cannot honour the request's version.
 pub const IPP_VERSION_1_1: (u8, u8) = (1, 1);
@@ -13,9 +12,9 @@ pub const IPP_VERSION_2_0: (u8, u8) = (2, 0);
 const SUPPORTED_VERSIONS: [(u8, u8); 3] = [IPP_VERSION_2_0, IPP_VERSION_1_1, (1, 0)];
 
 /// Operation ids the sharing endpoint answers.
+pub const OPERATION_PRINT_JOB: u16 = 0x0002;
 pub const OPERATION_GET_PRINTER_ATTRIBUTES: u16 = 0x000b;
 pub const OPERATION_GET_PRINTERS: u16 = 0x4002;
-
 /// `printer-state` for a queue that is idle and able to accept a job.
 const PRINTER_STATE_IDLE: i32 = 3;
 
@@ -24,14 +23,17 @@ mod tag {
     pub(super) const OPERATION_ATTRIBUTES: u8 = 0x01;
     pub(super) const END_OF_ATTRIBUTES: u8 = 0x03;
     pub(super) const PRINTER_ATTRIBUTES: u8 = 0x04;
+    pub(super) const JOB_ATTRIBUTES: u8 = 0x02;
 
     pub(super) const BOOLEAN: u8 = 0x22;
+    pub(super) const INTEGER: u8 = 0x21;
     pub(super) const ENUM: u8 = 0x23;
     pub(super) const NAME: u8 = 0x42;
     pub(super) const KEYWORD: u8 = 0x44;
     pub(super) const URI: u8 = 0x45;
     pub(super) const CHARSET: u8 = 0x47;
     pub(super) const NATURAL_LANGUAGE: u8 = 0x48;
+    pub(super) const MIME_MEDIA_TYPE: u8 = 0x49;
 
     /// Delimiter tags that introduce an attribute group; they carry no name or value.
     pub(super) const fn is_delimiter(tag: u8) -> bool {
@@ -49,13 +51,23 @@ mod tag {
 pub enum Status {
     /// `successful-ok`: the request was answered.
     Ok,
+    /// `client-error-not-authorized`.
+    NotAuthorized,
+    /// `client-error-attributes-or-values-not-supported`.
+    AttributesOrValuesNotSupported,
     /// `client-error-bad-request`: the request could not be decoded.
     BadRequest,
+    /// `client-error-document-format-not-supported`.
+    DocumentFormatNotSupported,
     /// `client-error-not-found`: no such printer is shared.
     NotFound,
+    /// `server-error-not-accepting-jobs`.
+    NotAcceptingJobs,
+    /// `server-error-internal-error`.
+    InternalError,
     /// `server-error-version-not-supported`.
     VersionNotSupported,
-    /// `server-error-operation-not-supported`: this endpoint does not implement the operation.
+    /// `server-error-operation-not-supported`.
     UnsupportedOperation,
 }
 
@@ -63,8 +75,13 @@ impl Status {
     pub const fn code(self) -> u16 {
         match self {
             Status::Ok => 0x0000,
+            Status::NotAuthorized => 0x0403,
+            Status::AttributesOrValuesNotSupported => 0x040B,
             Status::BadRequest => 0x0400,
             Status::NotFound => 0x0406,
+            Status::NotAcceptingJobs => 0x0508,
+            Status::InternalError => 0x0500,
+            Status::DocumentFormatNotSupported => 0x040A,
             Status::VersionNotSupported => 0x0503,
             Status::UnsupportedOperation => 0x0501,
         }
@@ -83,7 +100,6 @@ pub enum ParseError {
 }
 
 /// One attribute of a request: its name, value tag, and one or more values.
-#[derive(Debug, Clone)]
 struct Attribute {
     name: String,
     tag: u8,
@@ -102,18 +118,19 @@ impl Attribute {
     }
 }
 
-/// A decoded IPP request.
-#[derive(Debug, Clone)]
-pub struct Request {
+/// A decoded IPP request borrowing its opaque document from the HTTP body.
+pub struct Request<'a> {
     version: (u8, u8),
     operation: u16,
     request_id: u32,
     attributes: Vec<Attribute>,
+    document: &'a [u8],
+    document_start: usize,
 }
 
-impl Request {
-    /// Decodes the header and the operation attributes of a request.
-    pub fn parse(bytes: &[u8]) -> Result<Self, ParseError> {
+impl<'a> Request<'a> {
+    /// Decodes the header and attributes, borrowing bytes after end-of-attributes as the document.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, ParseError> {
         if bytes.len() < 8 {
             return Err(ParseError::Truncated);
         }
@@ -122,6 +139,8 @@ impl Request {
             operation: u16::from_be_bytes([bytes[2], bytes[3]]),
             request_id: u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
             attributes: Vec::new(),
+            document: &[],
+            document_start: bytes.len(),
         };
 
         let mut position = 8;
@@ -129,6 +148,8 @@ impl Request {
             let value_tag = bytes[position];
             position += 1;
             if value_tag == tag::END_OF_ATTRIBUTES {
+                request.document = &bytes[position..];
+                request.document_start = position;
                 break;
             }
             if tag::is_delimiter(value_tag) {
@@ -138,7 +159,6 @@ impl Request {
             let name = read_text(bytes, &mut position)?;
             let value = read_raw(bytes, &mut position)?;
             if name.is_empty() {
-                // A further value of a 1setOf attribute repeats neither name nor tag.
                 if let Some(previous) = request.attributes.last_mut() {
                     previous.values.push(value);
                     continue;
@@ -151,22 +171,26 @@ impl Request {
                 values: vec![value],
             });
         }
-
         Ok(request)
     }
 
     pub fn version(&self) -> (u8, u8) {
         self.version
     }
-
     pub fn operation(&self) -> u16 {
         self.operation
     }
-
     pub fn request_id(&self) -> u32 {
         self.request_id
     }
+    pub fn document(&self) -> &[u8] {
+        self.document
+    }
 
+    /// The offset of the document within the original IPP request body.
+    pub fn document_start(&self) -> usize {
+        self.document_start
+    }
     /// The first value of `name` as text, if the request carries it.
     pub fn value(&self, name: &str) -> Option<&str> {
         self.attributes
@@ -175,13 +199,33 @@ impl Request {
             .and_then(Attribute::text)
     }
 
-    /// Whether the request uses a version the endpoint understands.
+    /// An integer-valued attribute's first value.
+    pub fn integer(&self, name: &str) -> Option<i32> {
+        let attribute = self
+            .attributes
+            .iter()
+            .find(|attribute| attribute.name == name)?;
+        let value: [u8; 4] = attribute.values.first()?.as_slice().try_into().ok()?;
+        Some(i32::from_be_bytes(value))
+    }
+
+    /// A boolean-valued attribute's first value.
+    pub fn boolean(&self, name: &str) -> Option<bool> {
+        let attribute = self
+            .attributes
+            .iter()
+            .find(|attribute| attribute.name == name)?;
+        match attribute.values.first()?.as_slice() {
+            [0] => Some(false),
+            [1] => Some(true),
+            _ => None,
+        }
+    }
+
     pub fn version_is_supported(&self) -> bool {
         SUPPORTED_VERSIONS.contains(&self.version)
     }
 
-    /// The version to answer with: the request's own when it is supported, else the oldest
-    /// version every client understands.
     pub fn response_version(&self) -> (u8, u8) {
         if self.version_is_supported() {
             self.version
@@ -222,8 +266,26 @@ pub struct PrinterEntry {
     pub name: String,
     /// `printer-uri`, the address a client submits to.
     pub uri: String,
+    /// Whether the server can accept an authorized job right now.
+    pub accepting_jobs: bool,
 }
 
+fn response_start(request_id: u32, version: (u8, u8), status: Status, capacity: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(capacity);
+    out.push(version.0);
+    out.push(version.1);
+    out.extend(status.code().to_be_bytes());
+    out.extend(request_id.to_be_bytes());
+    out.push(tag::OPERATION_ATTRIBUTES);
+    write_text(&mut out, tag::CHARSET, "attributes-charset", "utf-8");
+    write_text(
+        &mut out,
+        tag::NATURAL_LANGUAGE,
+        "attributes-natural-language",
+        "en",
+    );
+    out
+}
 /// Builds the response to `Get-Printers` or `Get-Printer-Attributes`.
 ///
 /// RFC 8010: a response header carries the version, the status code (in place of the request's
@@ -236,28 +298,27 @@ pub fn response(
     status: Status,
     printers: &[PrinterEntry],
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(256 + printers.len() * 128);
-    out.push(version.0);
-    out.push(version.1);
-    out.extend(status.code().to_be_bytes());
-    out.extend(request_id.to_be_bytes());
-
-    out.push(tag::OPERATION_ATTRIBUTES);
-    write_text(&mut out, tag::CHARSET, "attributes-charset", "utf-8");
-    write_text(
-        &mut out,
-        tag::NATURAL_LANGUAGE,
-        "attributes-natural-language",
-        "en",
-    );
-
+    let mut out = response_start(request_id, version, status, 256 + printers.len() * 512);
     for printer in printers {
         out.push(tag::PRINTER_ATTRIBUTES);
         // `printer-uri` is an operation attribute in a request; a printer attributes group is
         // identified by `printer-uri-supported` (RFC 8011 §5.4.1).
         write_text(&mut out, tag::URI, "printer-uri-supported", &printer.uri);
         write_text(&mut out, tag::NAME, "printer-name", &printer.name);
+        write_text(
+            &mut out,
+            tag::MIME_MEDIA_TYPE,
+            "document-format-default",
+            "application/octet-stream",
+        );
+        write_text(
+            &mut out,
+            tag::MIME_MEDIA_TYPE,
+            "document-format-supported",
+            "application/octet-stream",
+        );
         write_text(&mut out, tag::KEYWORD, "uri-security-supported", "tls");
+
         write_texts(
             &mut out,
             tag::KEYWORD,
@@ -266,9 +327,12 @@ pub fn response(
         );
         write_integers(&mut out, tag::ENUM, "printer-state", &[PRINTER_STATE_IDLE]);
         write_text(&mut out, tag::KEYWORD, "printer-state-reasons", "none");
-        // #31 answers queries only; a job submitted now is refused, so claiming to accept jobs
-        // would be a lie to the client. #32 flips this when submission lands.
-        write_boolean(&mut out, "printer-is-accepting-jobs", false);
+        // Print-Job is implemented; authorization is checked when each job arrives.
+        write_boolean(
+            &mut out,
+            "printer-is-accepting-jobs",
+            printer.accepting_jobs,
+        );
         write_text(&mut out, tag::CHARSET, "charset-configured", "utf-8");
         write_text(&mut out, tag::CHARSET, "charset-supported", "utf-8");
         write_text(
@@ -277,17 +341,34 @@ pub fn response(
             "natural-language-configured",
             "en",
         );
-        write_integers(
-            &mut out,
-            tag::ENUM,
-            "operations-supported",
+        let operations = if printer.accepting_jobs {
+            &[
+                i32::from(OPERATION_PRINT_JOB),
+                i32::from(OPERATION_GET_PRINTER_ATTRIBUTES),
+                i32::from(OPERATION_GET_PRINTERS),
+            ][..]
+        } else {
             &[
                 i32::from(OPERATION_GET_PRINTER_ATTRIBUTES),
                 i32::from(OPERATION_GET_PRINTERS),
-            ],
-        );
+            ][..]
+        };
+        write_integers(&mut out, tag::ENUM, "operations-supported", operations);
     }
 
+    out.push(tag::END_OF_ATTRIBUTES);
+    out
+}
+
+/// Builds the RFC 8011 success response to a submitted Print-Job.
+pub fn job_response(request_id: u32, version: (u8, u8), job_id: u32, job_uri: &str) -> Vec<u8> {
+    let mut out = response_start(request_id, version, Status::Ok, 160 + job_uri.len());
+    out.push(tag::JOB_ATTRIBUTES);
+    write_text(&mut out, tag::URI, "job-uri", job_uri);
+    out.push(tag::INTEGER);
+    write_name_and_value(&mut out, "job-id", &job_id.to_be_bytes());
+    write_integers(&mut out, tag::ENUM, "job-state", &[3]);
+    write_text(&mut out, tag::KEYWORD, "job-state-reasons", "none");
     out.push(tag::END_OF_ATTRIBUTES);
     out
 }
@@ -488,13 +569,10 @@ mod tests {
 
     #[test]
     fn a_truncated_request_is_rejected() {
+        assert_eq!(Request::parse(&[]).err(), Some(ParseError::Truncated));
         assert_eq!(
-            Request::parse(&[]).expect_err("empty"),
-            ParseError::Truncated
-        );
-        assert_eq!(
-            Request::parse(&[2, 0, 0x00, 0x0b, 0, 0, 0]).expect_err("short"),
-            ParseError::Truncated
+            Request::parse(&[2, 0, 0x00, 0x0b, 0, 0, 0]).err(),
+            Some(ParseError::Truncated)
         );
 
         let mut bytes = request(IPP_VERSION_2_0, OPERATION_GET_PRINTERS, 1, &[]);
@@ -511,10 +589,7 @@ mod tests {
         bytes.extend(b"name");
         bytes.extend(4000u16.to_be_bytes());
 
-        assert_eq!(
-            Request::parse(&bytes).expect_err("overrun"),
-            ParseError::Overrun
-        );
+        assert_eq!(Request::parse(&bytes).err(), Some(ParseError::Overrun));
     }
 
     #[test]
@@ -542,10 +617,12 @@ mod tests {
             PrinterEntry {
                 name: "HP LaserJet".to_owned(),
                 uri: "ipps://server:8631/ipp/print/HP%20LaserJet".to_owned(),
+                accepting_jobs: true,
             },
             PrinterEntry {
                 name: "Zebra".to_owned(),
                 uri: "ipps://server:8631/ipp/print/Zebra".to_owned(),
+                accepting_jobs: true,
             },
         ];
 
@@ -589,14 +666,12 @@ mod tests {
                 .map(|attribute| attribute.value_tag),
             Some(tag::NAME)
         );
-        // #31 refuses job submission, so the endpoint must not claim to accept jobs; #32 changes
-        // this assertion along with the behaviour.
         assert_eq!(
             attributes
                 .iter()
                 .find(|attribute| attribute.name == "printer-is-accepting-jobs")
                 .map(|attribute| attribute.values.clone()),
-            Some(vec![vec![0]])
+            Some(vec![vec![1]])
         );
         assert_eq!(
             text(&attributes, "ipp-versions-supported"),
@@ -615,6 +690,7 @@ mod tests {
             &[PrinterEntry {
                 name: "Zebra".to_owned(),
                 uri: "ipps://server:8631/ipp/print/Zebra".to_owned(),
+                accepting_jobs: true,
             }],
         );
 
@@ -631,6 +707,7 @@ mod tests {
         assert_eq!(
             operations,
             vec![
+                i32::from(OPERATION_PRINT_JOB).to_be_bytes().to_vec(),
                 i32::from(OPERATION_GET_PRINTER_ATTRIBUTES)
                     .to_be_bytes()
                     .to_vec(),

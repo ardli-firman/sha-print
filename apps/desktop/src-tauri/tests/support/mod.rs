@@ -18,8 +18,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
+use shaprint_desktop::adapters::ipps::NetworkChannel;
 use shaprint_desktop::adapters::{IppsServer, ServerIdentity};
-use shaprint_desktop::application::{LocalPrinterCatalog, Sharing};
+use shaprint_desktop::application::{LocalPrinterCatalog, PrintJob, PrintJobSubmitter, Sharing};
 use shaprint_desktop::domain::{AppError, PrinterName};
 
 /// A catalog over a fixed set of queues, standing in for the Windows spooler.
@@ -45,6 +46,21 @@ impl LocalPrinterCatalog for FakeCatalog {
     }
 }
 
+struct UnavailableSubmitter;
+
+#[async_trait]
+impl PrintJobSubmitter for UnavailableSubmitter {
+    fn is_available(&self) -> bool {
+        false
+    }
+
+    async fn submit(&self, _printer: &PrinterName, _job: PrintJob) -> Result<u32, AppError> {
+        Err(AppError::unsupported(
+            "printer submission is unavailable in this test",
+        ))
+    }
+}
+
 /// A directory unique to one test.
 pub fn temporary_directory(name: &str) -> PathBuf {
     static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -58,7 +74,12 @@ pub fn temporary_directory(name: &str) -> PathBuf {
 pub fn sharing_runtime(queues: &[&str]) -> (Arc<Sharing>, Arc<IppsServer>) {
     let sharing = Arc::new(Sharing::new(FakeCatalog::new(queues)));
     let identity = ServerIdentity::generate().expect("generates a server identity");
-    let endpoint = Arc::new(IppsServer::new(0, Arc::new(identity)));
+    let endpoint = Arc::new(IppsServer::new(
+        0,
+        Arc::new(identity),
+        Arc::new(NetworkChannel::in_memory()),
+        Arc::new(UnavailableSubmitter),
+    ));
     (sharing, endpoint)
 }
 

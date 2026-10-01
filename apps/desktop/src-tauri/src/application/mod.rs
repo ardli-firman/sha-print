@@ -8,7 +8,10 @@ mod setup;
 mod sharing;
 
 pub use coordinator::{RuntimeCoordinator, SHUTDOWN_TIMEOUT, START_TIMEOUT};
-pub use printers::{LocalPrinterCatalog, SharedPrinterSource};
+pub use printers::{
+    DuplexMode, LocalPrinterCatalog, PrintJob, PrintJobSubmitter, PrintSettings,
+    SharedPrinterSource,
+};
 pub use runtime::{RuntimeService, ServiceContext, ServiceReporter, Shutdown};
 pub use setup::{ElevationBroker, Setup, SetupOutcome};
 pub use sharing::{LocalPrinter, Sharing};
