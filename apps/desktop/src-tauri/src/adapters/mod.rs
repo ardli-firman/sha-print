@@ -7,6 +7,7 @@
 
 pub mod client_connections;
 mod client_proxy;
+pub mod discovery;
 pub mod elevation;
 pub mod identity;
 pub mod ipps;

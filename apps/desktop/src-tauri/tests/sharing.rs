@@ -8,7 +8,7 @@ mod support;
 
 use std::sync::Arc;
 
-use shaprint_desktop::adapters::{IppsServer, ServerSharingService};
+use shaprint_desktop::adapters::IppsServer;
 use shaprint_desktop::application::{RuntimeCoordinator, Sharing};
 use shaprint_desktop::domain::{ErrorCode, ServiceId, ServiceState};
 use tokio::net::TcpStream;
@@ -38,7 +38,7 @@ impl Shared {
             .await
             .expect("selects the shared queues");
 
-        let runtime = RuntimeCoordinator::new(vec![Arc::new(ServerSharingService::new(
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
             Arc::clone(&sharing),
             Arc::clone(&endpoint),
         ))]);
@@ -197,7 +197,7 @@ async fn operations_the_mvp_does_not_implement_are_rejected() {
 async fn sharing_without_a_selection_never_opens_the_endpoint() {
     let (sharing, endpoint) = support::sharing_runtime(&Shared::LOCAL_QUEUES);
     let runtime =
-        RuntimeCoordinator::new(vec![Arc::new(ServerSharingService::new(sharing, endpoint))]);
+        RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(sharing, endpoint))]);
 
     let error = runtime
         .start(ServiceId::ServerSharing)

@@ -6,9 +6,7 @@ mod support;
 use std::sync::Arc;
 
 use shaprint_desktop::adapters::ipps::NetworkChannel;
-use shaprint_desktop::adapters::{
-    client_connections::ClientConnections, ClientProxyService, ServerSharingService,
-};
+use shaprint_desktop::adapters::{client_connections::ClientConnections, ClientProxyService};
 use shaprint_desktop::application::{RuntimeCoordinator, Sharing};
 use shaprint_desktop::domain::{ErrorCode, ServiceId, ServiceState};
 use shaprint_desktop::Shell;
@@ -25,7 +23,7 @@ fn coordinator(queues: &[&str]) -> (RuntimeCoordinator, Arc<Sharing>) {
     let channel = Arc::new(NetworkChannel::in_memory());
     let runtime = RuntimeCoordinator::new(vec![
         Arc::new(ClientProxyService::with_port(connections, channel, 0)),
-        Arc::new(ServerSharingService::new(Arc::clone(&sharing), endpoint)),
+        Arc::new(support::sharing_service(Arc::clone(&sharing), endpoint)),
     ]);
     (runtime, sharing)
 }
@@ -142,7 +140,7 @@ async fn closing_the_runtime_stops_every_background_task() {
 async fn services_the_shell_does_not_own_are_rejected_with_a_stable_code() {
     let (sharing, endpoint) = sharing_runtime(&["HP LaserJet"]);
     let runtime =
-        RuntimeCoordinator::new(vec![Arc::new(ServerSharingService::new(sharing, endpoint))]);
+        RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(sharing, endpoint))]);
 
     let error = runtime
         .start(ServiceId::ClientProxy)

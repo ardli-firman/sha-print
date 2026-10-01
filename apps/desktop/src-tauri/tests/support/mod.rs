@@ -18,8 +18,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
+use shaprint_desktop::adapters::discovery::MdnsAdvertiser;
 use shaprint_desktop::adapters::ipps::NetworkChannel;
-use shaprint_desktop::adapters::{IppsServer, ServerIdentity};
+use shaprint_desktop::adapters::{IppsServer, ServerIdentity, ServerSharingService};
 use shaprint_desktop::application::{LocalPrinterCatalog, PrintJob, PrintJobSubmitter, Sharing};
 use shaprint_desktop::domain::{AppError, PrinterName};
 
@@ -72,15 +73,46 @@ pub fn temporary_directory(name: &str) -> PathBuf {
 ///
 /// The endpoint binds port 0, so tests can run in parallel and find the port they were given.
 pub fn sharing_runtime(queues: &[&str]) -> (Arc<Sharing>, Arc<IppsServer>) {
+    sharing_runtime_on(queues, 0)
+}
+
+/// The sharing configuration over `queues`, with the endpoint on `port` (0 asks the operating
+/// system). Discovery advertises the configured port, so a test that reads the advertised address
+/// back has to name one.
+pub fn sharing_runtime_on(queues: &[&str], port: u16) -> (Arc<Sharing>, Arc<IppsServer>) {
     let sharing = Arc::new(Sharing::new(FakeCatalog::new(queues)));
     let identity = ServerIdentity::generate().expect("generates a server identity");
     let endpoint = Arc::new(IppsServer::new(
-        0,
+        port,
         Arc::new(identity),
         Arc::new(NetworkChannel::in_memory()),
         Arc::new(UnavailableSubmitter),
     ));
     (sharing, endpoint)
+}
+
+/// A UDP port nothing is listening on, for a test that has to name a discovery port.
+pub fn free_udp_port() -> u16 {
+    std::net::UdpSocket::bind("127.0.0.1:0")
+        .and_then(|socket| socket.local_addr())
+        .map(|address| address.port())
+        .expect("a free UDP port")
+}
+
+/// A TCP port nothing is listening on, for a test that has to name one.
+pub fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .map(|address| address.port())
+        .expect("a free port")
+}
+
+/// The sharing runtime over `sharing` and `endpoint`.
+///
+/// The advertiser binds an ephemeral discovery port, so tests never compete with the machine's own
+/// multicast DNS responder and one test cannot take the port another test needs.
+pub fn sharing_service(sharing: Arc<Sharing>, endpoint: Arc<IppsServer>) -> ServerSharingService {
+    ServerSharingService::new(sharing, endpoint, Arc::new(MdnsAdvertiser::on(vec![0])))
 }
 
 /// Names of the queues the tests share through the fake catalog.

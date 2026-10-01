@@ -31,7 +31,7 @@ A feature or bug fix is not done until the changed surface was actually exercise
 - Branch names: `feat/<name>`, `fix/<name>`, `docs/<name>`, `review/<name>`.
 - Base branch: `dev-tauri` for Tauri/IPP migration work (spec #29), `main` for .NET work. Release PRs go `develop` → `main` and are titled `release: ...`.
 - Architecture decisions are recorded as ADRs in `docs/adr`; add one when a decision outlives the PR.
-- Never put credentials, Network Channel values, IPP URLs with keys, or print/scan job content in logs, status payloads, IPC DTOs, test fixtures, or commits. TCP payloads stay AES-256-GCM; discovery stays HMAC-SHA256.
+- Never put credentials, Network Channel values, IPP URLs with keys, or print/scan job content in logs, status payloads, IPC DTOs, test fixtures, or commits. TCP payloads stay AES-256-GCM; the .NET application's UDP discovery payloads stay HMAC-SHA256. The Tauri app's multicast DNS discovery is unsigned by design, because identity there is pinned by the TLS certificate fingerprint (ADR 0004).
 
 ## Pull requests
 

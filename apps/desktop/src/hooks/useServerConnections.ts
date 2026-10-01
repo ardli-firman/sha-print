@@ -10,6 +10,11 @@ export interface ServerConnectionsController {
   busy: "inspect" | "approve" | "printers" | null;
   error: AppError | null;
   inspect: () => Promise<void>;
+  /**
+   * Reviews `value` and shows it in the address field. Used for an address the user did not type,
+   * such as one discovery reported.
+   */
+  reviewAddress: (value: string) => Promise<void>;
   approve: () => Promise<void>;
   query: () => Promise<void>;
 }
@@ -24,6 +29,10 @@ export function useServerConnections(): ServerConnectionsController {
     try { success(await operation()); } catch (cause) { setError(toAppError(cause)); } finally { setBusy(null); }
   }, []);
   const inspect = useCallback(() => { setReview(null); setResult(null); return run("inspect", () => inspectServerConnection(address), setReview); }, [address, run]);
+  const reviewAddress = useCallback((value: string) => {
+    setAddress(value); setReview(null); setResult(null); setError(null);
+    return run("inspect", () => inspectServerConnection(value), setReview);
+  }, [run]);
   const approve = useCallback(() => {
     const current = review;
     if (!current) return Promise.resolve();
@@ -35,5 +44,5 @@ export function useServerConnections(): ServerConnectionsController {
     return run("printers", () => listServerConnectionPrinters(current.address), setResult);
   }, [review, run]);
   const updateAddress = useCallback((value: string) => { setAddress(value); setReview(null); setResult(null); setError(null); }, []);
-  return { address, setAddress: updateAddress, review, result, busy, error, inspect, approve, query };
+  return { address, setAddress: updateAddress, review, result, busy, error, inspect, reviewAddress, approve, query };
 }

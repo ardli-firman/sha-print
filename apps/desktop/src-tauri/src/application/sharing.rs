@@ -5,6 +5,8 @@
 
 use std::sync::{Arc, RwLock};
 
+use tokio::sync::watch;
+
 use crate::application::{LocalPrinterCatalog, SharedPrinterSource};
 use crate::domain::{AppError, PrinterName, SharedPrinters};
 
@@ -32,17 +34,28 @@ impl LocalPrinter {
 }
 
 /// The local queues the server user chose to share.
+///
+/// The selection lives here whether or not sharing runs, and it is published as it changes: the
+/// endpoint reads it on every request, and the discovery advertisement follows it (#36).
 pub struct Sharing {
     catalog: Arc<dyn LocalPrinterCatalog>,
     selection: RwLock<SharedPrinters>,
+    changes: watch::Sender<SharedPrinters>,
 }
 
 impl Sharing {
     pub fn new(catalog: Arc<dyn LocalPrinterCatalog>) -> Self {
+        let (changes, _) = watch::channel(SharedPrinters::default());
         Self {
             catalog,
             selection: RwLock::new(SharedPrinters::default()),
+            changes,
         }
+    }
+
+    /// Follows the selection; the receiver also holds the current selection.
+    pub fn subscribe(&self) -> watch::Receiver<SharedPrinters> {
+        self.changes.subscribe()
     }
 
     /// Every local queue with its sharing state, ordered by queue name.
@@ -78,7 +91,12 @@ impl Sharing {
                 .selection
                 .write()
                 .map_err(|_| AppError::internal("printer selection lock is poisoned"))?;
-            *current = selection;
+            *current = selection.clone();
+        }
+        // Only a real change is published: re-selecting the same queues must not make the endpoint
+        // or the advertisement do work again.
+        if *self.changes.borrow() != selection {
+            self.changes.send_replace(selection);
         }
         self.local_printers().await
     }
@@ -106,6 +124,7 @@ mod tests {
     use super::*;
     use crate::domain::ErrorCode;
     use async_trait::async_trait;
+    use std::time::Duration;
 
     /// A catalog over a fixed set of queues.
     struct FakeCatalog {
@@ -214,6 +233,31 @@ mod tests {
 
         assert!(printers.iter().all(|printer| !printer.shared()));
         assert!(sharing.selected().expect("selection").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_subscriber_follows_the_selection_while_sharing_runs() {
+        let sharing = sharing(&["HP LaserJet", "Zebra"]);
+        let mut changes = sharing.subscribe();
+        assert!(changes.borrow_and_update().is_empty());
+
+        sharing
+            .set_shared(vec![name("Zebra")])
+            .await
+            .expect("selects a queue");
+        changes.changed().await.expect("publishes the selection");
+        assert_eq!(changes.borrow_and_update().as_slice(), &[name("Zebra")]);
+
+        // Selecting what is already selected is not worth waking anything up for.
+        sharing
+            .set_shared(vec![name("Zebra")])
+            .await
+            .expect("selects the same queue");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), changes.changed())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

@@ -2,12 +2,17 @@
 //! plug into.
 
 mod coordinator;
+mod discovery;
 mod printers;
 mod runtime;
 mod setup;
 mod sharing;
 
 pub use coordinator::{RuntimeCoordinator, SHUTDOWN_TIMEOUT, START_TIMEOUT};
+pub use discovery::{
+    Advertisement, AdvertisementSink, Browse, Discovery, DiscoveryBrowser, DiscoveryService,
+    ServerAdvertiser,
+};
 pub use printers::{
     DuplexMode, LocalPrinterCatalog, PrintJob, PrintJobSubmitter, PrintSettings,
     SharedPrinterSource,

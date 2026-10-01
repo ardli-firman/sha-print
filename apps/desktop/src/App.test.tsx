@@ -2,10 +2,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
+import * as discovery from "./api/discovery";
 import * as ipc from "./api/ipc";
 import * as networkChannel from "./api/networkChannel";
 import * as serverConnections from "./api/serverConnections";
-import type { LocalPrinters, RuntimeStatus, ServerIdentity } from "./api/types";
+import type { LocalPrinters, NearbyServers, RuntimeStatus, ServerIdentity } from "./api/types";
 
 vi.mock("./api/ipc", () => ({
   RUNTIME_STATUS_EVENT: "runtime://status",
@@ -30,6 +31,12 @@ vi.mock("./api/serverConnections", () => ({
   listServerConnectionPrinters: vi.fn(),
 }));
 
+vi.mock("./api/discovery", () => ({
+  NEARBY_SERVERS_EVENT: "discovery://servers",
+  listNearbyServers: vi.fn(),
+  onNearbyServers: vi.fn(),
+}));
+
 const runtimeWith = (
   proxy: RuntimeStatus["services"][number]["state"],
   sharing: RuntimeStatus["services"][number]["state"],
@@ -38,6 +45,14 @@ const runtimeWith = (
     { id: "client-proxy", state: proxy, detail: proxy === "running" ? "running" : "" },
     { id: "server-sharing", state: sharing, detail: sharing === "running" ? "running" : "" },
   ],
+});
+
+const nearbyWith = (...names: string[]): NearbyServers => ({
+  servers: names.map((name, index) => ({
+    name,
+    address: `192.0.2.${10 + index}:8631`,
+    printers: ["Zebra"],
+  })),
 });
 
 const IDENTITY: ServerIdentity = {
@@ -85,6 +100,8 @@ beforeEach(() => {
   vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith());
   vi.mocked(ipc.getServerIdentity).mockResolvedValue(IDENTITY);
   vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(false);
+  vi.mocked(discovery.listNearbyServers).mockResolvedValue({ servers: [] });
+  vi.mocked(discovery.onNearbyServers).mockResolvedValue(() => {});
 });
 
 describe("runtime status panel", () => {
@@ -328,5 +345,63 @@ describe("Network Channel panel", () => {
     expect(networkChannel.configureNetworkChannel).toHaveBeenCalledWith(value);
     expect(input.value).toBe("");
     expect(screen.queryByText(value)).toBeNull();
+  });
+});
+
+describe("nearby servers panel", () => {
+  it("lists a server that advertises itself and reviews it without typing an address", async () => {
+    vi.mocked(discovery.listNearbyServers).mockResolvedValue(nearbyWith("DESKTOP-ABC"));
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue({
+      address: "192.0.2.10:8631",
+      current_fingerprint:
+        "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
+      previous_fingerprint: null,
+      trusted: false,
+    });
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Nearby servers" });
+    expect(await within(panel).findByText("DESKTOP-ABC")).toBeTruthy();
+    expect(within(panel).getByText("192.0.2.10:8631")).toBeTruthy();
+    expect(within(panel).getByText(/Shares: Zebra/)).toBeTruthy();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Review certificate" }));
+
+    // Reviewing a discovered server goes through the same inspection as a typed address, and the
+    // address field shows what is being reviewed.
+    await waitFor(() =>
+      expect(serverConnections.inspectServerConnection).toHaveBeenCalledWith("192.0.2.10:8631"),
+    );
+    expect((screen.getByLabelText("Server address") as HTMLInputElement).value).toBe(
+      "192.0.2.10:8631",
+    );
+    expect(serverConnections.listServerConnectionPrinters).not.toHaveBeenCalled();
+  });
+
+  it("follows the servers the shell publishes", async () => {
+    let publish: ((servers: NearbyServers) => void) | undefined;
+    vi.mocked(discovery.onNearbyServers).mockImplementation(async (handler) => {
+      publish = handler;
+      return () => {};
+    });
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Nearby servers" });
+    await waitFor(() => expect(publish).toBeDefined());
+    publish?.(nearbyWith("DESKTOP-ZULU"));
+
+    expect(await within(panel).findByText("DESKTOP-ZULU")).toBeTruthy();
+  });
+
+  it("keeps working by address when discovery finds nothing", async () => {
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Nearby servers" });
+    expect(
+      await within(panel).findByText(/No ShaPrint server has advertised itself/i),
+    ).toBeTruthy();
+    // The manual path is untouched by an empty discovery list.
+    expect(screen.getByLabelText("Server address")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Inspect certificate" })).toBeTruthy();
   });
 });

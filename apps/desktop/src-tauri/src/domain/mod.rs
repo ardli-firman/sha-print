@@ -4,12 +4,14 @@
 //! Nothing here depends on Tauri, tokio, or the operating system, so the rules stay testable and
 //! usable by the later Linux phase.
 
+mod discovery;
 mod error;
 mod identity;
 mod printer;
 mod service;
 mod setup;
 
+pub use discovery::NearbyServer;
 pub use error::{AppError, ErrorCode};
 pub use identity::CertificateFingerprint;
 pub use printer::{PrinterName, SharedPrinters};

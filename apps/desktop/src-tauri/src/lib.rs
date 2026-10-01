@@ -3,8 +3,9 @@
 //! The shell owns the lifetime of the client proxy and server sharing runtimes, shows their live
 //! status in a React UI, and stops them cleanly when the runtime closes (#30). The client proxy
 //! forwards authenticated jobs over pinned IPPS (#34). Server sharing exposes selected Windows
-//! queues over IPPS, authorizes and submits print jobs (#32), and supports explicit manual
-//! server-certificate trust (#33).
+//! queues over IPPS, authorizes and submits print jobs (#32), supports explicit manual
+//! server-certificate trust (#33), and lets a client find nearby servers on the local network
+//! (#36).
 //!
 //! Layout (ADR 0002): `domain` holds types and rules, `application` holds the runtime coordinator
 //! and the use cases, `adapters` holds the service and platform implementations, and `ipc` holds
@@ -27,12 +28,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use adapters::client_connections::ClientConnections;
+use adapters::discovery::{MdnsAdvertiser, MdnsBrowser};
 use adapters::ipps::NetworkChannel;
 use adapters::{
     ClientProxyService, FileIdentityStore, IdentityStore, IppsServer, ServerSharingService,
     SystemElevation, DEFAULT_PORT,
 };
-use application::{PrintJobSubmitter, RuntimeCoordinator, Setup, Sharing};
+use application::{
+    Discovery, DiscoveryBrowser, DiscoveryService, PrintJobSubmitter, RuntimeCoordinator,
+    ServerAdvertiser, Setup, Sharing,
+};
 use domain::AppError;
 
 /// The state the desktop shell manages, built once at startup.
@@ -46,6 +51,7 @@ pub struct Shell {
     setup: Arc<Setup>,
     client_connections: Arc<ClientConnections>,
     network_channel: Arc<NetworkChannel>,
+    discovery: Arc<Discovery>,
 }
 
 impl Shell {
@@ -62,9 +68,13 @@ impl Shell {
             default_print_job_submitter(),
         ));
         let setup = Arc::new(Setup::new(Arc::new(SystemElevation::new())));
+        let discovery = Arc::new(Discovery::new());
+        let browser: Arc<dyn DiscoveryBrowser> = Arc::new(MdnsBrowser::new());
+        let advertiser: Arc<dyn ServerAdvertiser> = Arc::new(MdnsAdvertiser::new());
 
-        // The client proxy opts into autostart (ADR 0001: installed queues must reach the proxy
-        // during normal use). Server sharing stays stopped until the user starts it.
+        // The client proxy and discovery opt into autostart (ADR 0001: installed queues must reach
+        // the proxy during normal use, and nearby servers must appear without being asked for).
+        // Server sharing stays stopped until the user starts it.
         let runtime = Arc::new(RuntimeCoordinator::new(vec![
             Arc::new(ClientProxyService::new(
                 Arc::clone(&client_connections),
@@ -73,7 +83,9 @@ impl Shell {
             Arc::new(ServerSharingService::new(
                 Arc::clone(&sharing),
                 Arc::clone(&endpoint),
+                advertiser,
             )),
+            Arc::new(DiscoveryService::new(Arc::clone(&discovery), browser)),
         ]));
 
         Ok(Self {
@@ -83,6 +95,7 @@ impl Shell {
             setup,
             client_connections,
             network_channel,
+            discovery,
         })
     }
 
@@ -108,6 +121,10 @@ impl Shell {
 
     pub fn network_channel(&self) -> Arc<NetworkChannel> {
         Arc::clone(&self.network_channel)
+    }
+
+    pub fn discovery(&self) -> Arc<Discovery> {
+        Arc::clone(&self.discovery)
     }
 }
 
@@ -159,6 +176,7 @@ pub fn run() -> Result<(), AppError> {
             ipc::client_connections::list_server_connection_printers,
             ipc::server_settings::configure_network_channel,
             ipc::server_settings::get_network_channel_status,
+            ipc::discovery::list_nearby_servers,
         ])
         .setup(move |app| {
             use tauri::Manager;
@@ -171,12 +189,14 @@ pub fn run() -> Result<(), AppError> {
             let shell = Shell::new(&data_dir)?;
 
             ipc::emitter::forward_status(app.handle().clone(), shell.runtime());
+            ipc::emitter::forward_nearby_servers(app.handle().clone(), shell.discovery());
             app.manage(shell.runtime());
             app.manage(shell.sharing());
             app.manage(shell.endpoint());
             app.manage(shell.setup());
             app.manage(shell.client_connections());
             app.manage(shell.network_channel());
+            app.manage(shell.discovery());
 
             // Start the always-on services in the background: the window paints immediately, then
             // follows their status through the event stream. A service that cannot start is left
