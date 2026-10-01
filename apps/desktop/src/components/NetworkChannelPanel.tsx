@@ -6,7 +6,7 @@ interface NetworkChannelPanelProps {
   settings: NetworkChannelController;
 }
 
-/** Lets the server user set or replace the print authorization secret. */
+/** Lets the user set or replace the shared print authorization secret. */
 export function NetworkChannelPanel({ settings }: NetworkChannelPanelProps) {
   const [value, setValue] = useState("");
   const [saved, setSaved] = useState(false);

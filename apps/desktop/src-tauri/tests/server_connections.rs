@@ -123,13 +123,15 @@ impl TestServer {
 }
 
 fn temp_dir() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     std::env::temp_dir().join(format!(
-        "shaprint-client-trust-{}-{}",
+        "shaprint-client-trust-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
-            .unwrap_or_default()
+            .unwrap_or_default(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ))
 }
 fn endpoint(server: &TestServer) -> String {

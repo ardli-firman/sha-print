@@ -1,6 +1,6 @@
 # ShaPrint desktop app
 
-Tauri shell for the Windows-only IPP print-sharing MVP (issues #29–#33). It replaces the WPF
+Tauri shell for the Windows-only IPP print-sharing MVP (issues #29–#34). It replaces the WPF
 application as the product path and lives beside the .NET projects while the transition lasts.
 
 ## What exists today
@@ -17,6 +17,11 @@ application as the product path and lives beside the .NET projects while the tra
   host or host:port, inspect the presented fingerprint without querying printers, explicitly approve
   it, and list printers only while the live fingerprint matches the saved approval. Changed
   fingerprints remain blocked until explicit reapproval.
+- The client proxy listens on `127.0.0.1:8632`. A manually configured IPP queue can route through it
+  with `ipp://127.0.0.1:8632/ipp/print/{encoded-server-host:port}/{encoded-printer-name}`. The proxy
+  replaces the local printer URI with the approved server's IPPS URI and supplies the Network
+  Channel. Windows stores that client credential with DPAPI; the salted verifier remains the
+  authorization form used by server sharing.
 - Network Channel storage retains a salted SHA-256 verifier with a fresh 128-bit salt per
   configuration. Older unsalted verifier files are treated as unconfigured and require the user to
   set the Network Channel again. The plaintext value is never returned through IPC or written to
@@ -29,8 +34,7 @@ application as the product path and lives beside the .NET projects while the tra
 - Least-privilege capabilities: the main window may call the shell's commands and listen for status
   events, and nothing else (no shell, filesystem, dialog, or remote content access).
 
-Remaining client work: the local authenticated print proxy (#34), native queue installation (#35),
-and automatic server discovery (#36).
+Remaining client work: native queue installation (#35) and automatic server discovery (#36).
 
 ## Development
 
@@ -62,6 +66,10 @@ Print-Job through a live TLS/IPPS endpoint with a fake printer adapter, includin
 queue selection, supported document format, common settings, and Stop behavior.
 `tests/server_connections.rs` verifies first-use review without a printer query, persistent approval,
 changed-certificate blocking, and explicit reapproval.
+`tests/client_proxy.rs` sends a native-queue IPP request through the loopback proxy, the pinned TLS/IPPS
+endpoint, and a fake printer adapter; it checks common settings and that a local driver cannot
+override the configured Network Channel. A Windows machine with an installed native IPP queue is
+still needed to smoke-check the spooler-to-loopback path.
 
 On Windows, the real-queue spooler smoke test is ignored by default. From `apps/desktop/src-tauri`,
 set a local PCL-capable queue and run:

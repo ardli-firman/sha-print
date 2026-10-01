@@ -13,7 +13,7 @@ pub mod ipps;
 pub mod printers;
 mod server_sharing;
 
-pub use client_proxy::ClientProxyService;
+pub use client_proxy::{client_queue_uri, ClientProxyService, CLIENT_PROXY_DEFAULT_PORT};
 pub use elevation::SystemElevation;
 pub use identity::{FileIdentityStore, IdentityStore, ServerIdentity};
 pub use ipps::{IppsServer, DEFAULT_PORT};

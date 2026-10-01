@@ -5,7 +5,10 @@ mod support;
 
 use std::sync::Arc;
 
-use shaprint_desktop::adapters::ServerSharingService;
+use shaprint_desktop::adapters::ipps::NetworkChannel;
+use shaprint_desktop::adapters::{
+    client_connections::ClientConnections, ClientProxyService, ServerSharingService,
+};
 use shaprint_desktop::application::{RuntimeCoordinator, Sharing};
 use shaprint_desktop::domain::{ErrorCode, ServiceId, ServiceState};
 use shaprint_desktop::Shell;
@@ -15,8 +18,13 @@ use support::{printer_names, sharing_runtime, temporary_directory};
 /// A coordinator with both supervised services, sharing over the fake printer catalog.
 fn coordinator(queues: &[&str]) -> (RuntimeCoordinator, Arc<Sharing>) {
     let (sharing, endpoint) = sharing_runtime(queues);
+    let connections = Arc::new(
+        ClientConnections::new(temporary_directory("runtime-proxy-trust"))
+            .expect("opens proxy trust store"),
+    );
+    let channel = Arc::new(NetworkChannel::in_memory());
     let runtime = RuntimeCoordinator::new(vec![
-        Arc::new(shaprint_desktop::adapters::ClientProxyService::new()),
+        Arc::new(ClientProxyService::with_port(connections, channel, 0)),
         Arc::new(ServerSharingService::new(Arc::clone(&sharing), endpoint)),
     ]);
     (runtime, sharing)

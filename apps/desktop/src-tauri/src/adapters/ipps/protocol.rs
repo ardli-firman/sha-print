@@ -34,6 +34,8 @@ mod tag {
     pub(super) const CHARSET: u8 = 0x47;
     pub(super) const NATURAL_LANGUAGE: u8 = 0x48;
     pub(super) const MIME_MEDIA_TYPE: u8 = 0x49;
+    pub(super) const RESOLUTION: u8 = 0x32;
+    pub(super) const RANGE_OF_INTEGER: u8 = 0x33;
 
     /// Delimiter tags that introduce an attribute group; they carry no name or value.
     pub(super) const fn is_delimiter(tag: u8) -> bool {
@@ -199,6 +201,25 @@ impl<'a> Request<'a> {
             .and_then(Attribute::text)
     }
 
+    /// All text values for the named attribute in order.
+    pub fn text_values(&self, name: &str) -> Vec<&str> {
+        self.attributes
+            .iter()
+            .find(|attribute| attribute.name == name)
+            .map(|attribute| {
+                attribute
+                    .values
+                    .iter()
+                    .filter_map(|val| {
+                        std::str::from_utf8(val)
+                            .ok()
+                            .map(|s| s.trim_end_matches('\0'))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// An integer-valued attribute's first value.
     pub fn integer(&self, name: &str) -> Option<i32> {
         let attribute = self
@@ -233,6 +254,193 @@ impl<'a> Request<'a> {
             IPP_VERSION_1_1
         }
     }
+}
+
+/// Rewrites the local printer URI and injects the Network Channel without interpreting or copying
+/// document bytes. Client supplied Network Channel values are discarded before the configured
+/// credential is inserted.
+pub fn prepare_proxy_request(
+    bytes: &[u8],
+    remote_printer_uri: &str,
+    network_channel: Option<&str>,
+) -> Result<Vec<u8>, ParseError> {
+    Request::parse(bytes)?;
+    let mut output = Vec::with_capacity(bytes.len() + 128);
+    output.extend_from_slice(&bytes[..8]);
+    let mut position = 8;
+    let mut current_name = &[][..];
+    let mut replaced_printer = false;
+    let mut replaced_channel = false;
+    while position < bytes.len() {
+        let start = position;
+        let value_tag = *bytes.get(position).ok_or(ParseError::Truncated)?;
+        position += 1;
+        if value_tag == 0x03 {
+            if !replaced_printer {
+                return Err(ParseError::NotText);
+            }
+            if let Some(channel) = network_channel.filter(|_| !replaced_channel) {
+                write_text_attribute(&mut output, 0x41, "network-channel", channel);
+            }
+            output.push(value_tag);
+            output.extend_from_slice(&bytes[position..]);
+            return Ok(output);
+        }
+        if (0x01..=0x05).contains(&value_tag) {
+            current_name = &[][..];
+            output.push(value_tag);
+            continue;
+        }
+
+        let name_length = read_u16(bytes, &mut position)? as usize;
+        let name_end = position
+            .checked_add(name_length)
+            .ok_or(ParseError::Overrun)?;
+        let name = bytes.get(position..name_end).ok_or(ParseError::Overrun)?;
+        if !name.is_empty() {
+            current_name = name;
+        }
+        position = name_end;
+        let value_length = read_u16(bytes, &mut position)? as usize;
+        let value_end = position
+            .checked_add(value_length)
+            .ok_or(ParseError::Overrun)?;
+        bytes.get(position..value_end).ok_or(ParseError::Overrun)?;
+
+        if current_name == b"printer-uri" {
+            if name.is_empty() {
+                position = value_end;
+                continue;
+            }
+            if replaced_printer {
+                return Err(ParseError::NotText);
+            }
+            replaced_printer = true;
+            output.push(value_tag);
+            output.extend_from_slice(&(name.len() as u16).to_be_bytes());
+            output.extend_from_slice(name);
+            output.extend_from_slice(&(remote_printer_uri.len() as u16).to_be_bytes());
+            output.extend_from_slice(remote_printer_uri.as_bytes());
+        } else if current_name == b"network-channel" {
+            if name.is_empty() {
+                position = value_end;
+                continue;
+            }
+            if replaced_channel {
+                return Err(ParseError::NotText);
+            }
+            replaced_channel = true;
+            if let Some(channel) = network_channel {
+                write_text_attribute(&mut output, 0x41, "network-channel", channel);
+            }
+        } else {
+            output.extend_from_slice(&bytes[start..value_end]);
+        }
+        position = value_end;
+    }
+    Err(ParseError::Truncated)
+}
+
+/// Rewrites the advertised URI for a proxied printer so the local client sees the URI it used to
+/// reach the proxy instead of the server's IPPS URI.
+pub fn rewrite_printer_uri_supported(
+    bytes: &[u8],
+    remote_printer_uri: &str,
+    local_printer_uri: &str,
+) -> Result<Vec<u8>, ParseError> {
+    Request::parse(bytes)?;
+
+    let mut output = Vec::with_capacity(bytes.len() + local_printer_uri.len());
+    output.extend_from_slice(&bytes[..8]);
+    let mut position = 8;
+    let mut current_name = &[][..];
+    let mut rewrite_security_in_current_group = false;
+    while position < bytes.len() {
+        let start = position;
+        let value_tag = *bytes.get(position).ok_or(ParseError::Truncated)?;
+        position += 1;
+        if value_tag == tag::END_OF_ATTRIBUTES {
+            output.push(value_tag);
+            output.extend_from_slice(&bytes[position..]);
+            return Ok(output);
+        }
+        if tag::is_delimiter(value_tag) {
+            if value_tag == tag::PRINTER_ATTRIBUTES {
+                rewrite_security_in_current_group = false;
+            }
+            output.push(value_tag);
+            continue;
+        }
+
+        let name_length = read_u16(bytes, &mut position)? as usize;
+        let name_end = position
+            .checked_add(name_length)
+            .ok_or(ParseError::Overrun)?;
+        let name = bytes.get(position..name_end).ok_or(ParseError::Overrun)?;
+        if !name.is_empty() {
+            current_name = name;
+        }
+        position = name_end;
+        let value_length = read_u16(bytes, &mut position)? as usize;
+        let value_end = position
+            .checked_add(value_length)
+            .ok_or(ParseError::Overrun)?;
+        let value = bytes.get(position..value_end).ok_or(ParseError::Overrun)?;
+
+        let matches_remote_printer = current_name == b"printer-uri-supported"
+            && std::str::from_utf8(value)
+                .is_ok_and(|value| same_printer_uri(value, remote_printer_uri));
+        if matches_remote_printer {
+            rewrite_security_in_current_group = true;
+            output.push(value_tag);
+            output.extend((name_length as u16).to_be_bytes());
+            output.extend_from_slice(name);
+            output.extend((local_printer_uri.len() as u16).to_be_bytes());
+            output.extend_from_slice(local_printer_uri.as_bytes());
+        } else if current_name == b"uri-security-supported"
+            && rewrite_security_in_current_group
+            && local_printer_uri.starts_with("ipp://")
+        {
+            let none_value = b"none";
+            output.push(value_tag);
+            output.extend((name_length as u16).to_be_bytes());
+            output.extend_from_slice(name);
+            output.extend((none_value.len() as u16).to_be_bytes());
+            output.extend_from_slice(none_value);
+        } else {
+            output.extend_from_slice(&bytes[start..value_end]);
+        }
+        position = value_end;
+    }
+    Err(ParseError::Truncated)
+}
+
+fn same_printer_uri(left: &str, right: &str) -> bool {
+    fn parts(uri: &str) -> Option<(&str, &str, &str)> {
+        let (scheme, remainder) = uri.split_once("://")?;
+        let (authority, path) = remainder.split_once('/')?;
+        let printer = path.strip_prefix("ipp/print/")?;
+        (!authority.is_empty()).then_some((scheme, authority, printer))
+    }
+
+    let (
+        Some((left_scheme, left_authority, left_printer)),
+        Some((right_scheme, right_authority, right_printer)),
+    ) = (parts(left), parts(right))
+    else {
+        return false;
+    };
+    left_scheme.eq_ignore_ascii_case(right_scheme)
+        && left_authority.eq_ignore_ascii_case(right_authority)
+        && percent_decode(left_printer).eq_ignore_ascii_case(&percent_decode(right_printer))
+}
+
+fn write_text_attribute(output: &mut Vec<u8>, value_tag: u8, name: &str, value: &str) {
+    output.push(value_tag);
+    output.extend((name.len() as u16).to_be_bytes());
+    output.extend(name.as_bytes());
+    output.extend((value.len() as u16).to_be_bytes());
+    output.extend(value.as_bytes());
 }
 
 fn read_text(bytes: &[u8], position: &mut usize) -> Result<String, ParseError> {
@@ -270,6 +478,27 @@ pub struct PrinterEntry {
     pub accepting_jobs: bool,
 }
 
+/// Deterministic RFC 4122 UUID for a shared printer queue.
+pub fn printer_uuid(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"shaprint-printer-uuid:");
+    hasher.update(name.as_bytes());
+    let hash = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&hash[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50; // UUID version 5
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+    format!(
+        "urn:uuid:{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5],
+        bytes[6], bytes[7],
+        bytes[8], bytes[9],
+        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    )
+}
+
 fn response_start(request_id: u32, version: (u8, u8), status: Status, capacity: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(capacity);
     out.push(version.0);
@@ -298,26 +527,100 @@ pub fn response(
     status: Status,
     printers: &[PrinterEntry],
 ) -> Vec<u8> {
-    let mut out = response_start(request_id, version, status, 256 + printers.len() * 512);
+    let mut out = response_start(request_id, version, status, 256 + printers.len() * 1024);
     for printer in printers {
         out.push(tag::PRINTER_ATTRIBUTES);
         // `printer-uri` is an operation attribute in a request; a printer attributes group is
         // identified by `printer-uri-supported` (RFC 8011 §5.4.1).
         write_text(&mut out, tag::URI, "printer-uri-supported", &printer.uri);
+        write_text(
+            &mut out,
+            tag::URI,
+            "printer-uuid",
+            &printer_uuid(&printer.name),
+        );
         write_text(&mut out, tag::NAME, "printer-name", &printer.name);
+        write_text(&mut out, 0x41, "printer-make-and-model", &printer.name);
+        write_text(&mut out, 0x41, "printer-info", &printer.name);
         write_text(
             &mut out,
             tag::MIME_MEDIA_TYPE,
             "document-format-default",
-            "application/octet-stream",
+            "image/pwg-raster",
         );
-        write_text(
+        write_texts(
             &mut out,
             tag::MIME_MEDIA_TYPE,
             "document-format-supported",
-            "application/octet-stream",
+            &[
+                "image/pwg-raster",
+                "application/oxps",
+                "application/pdf",
+                "application/PCLm",
+                "application/octet-stream",
+            ],
+        );
+        write_text(&mut out, tag::KEYWORD, "media-default", "iso_a4_210x297mm");
+        write_texts(
+            &mut out,
+            tag::KEYWORD,
+            "media-supported",
+            &["iso_a4_210x297mm", "na_letter_8.5x11in"],
+        );
+        write_text(&mut out, tag::KEYWORD, "sides-default", "one-sided");
+        write_texts(&mut out, tag::KEYWORD, "sides-supported", &["one-sided"]);
+        write_text(&mut out, tag::KEYWORD, "print-color-mode-default", "color");
+        write_texts(
+            &mut out,
+            tag::KEYWORD,
+            "print-color-mode-supported",
+            &["color", "monochrome"],
+        );
+        write_boolean(&mut out, "color-supported", true);
+        write_integers(&mut out, tag::INTEGER, "copies-default", &[1]);
+        write_range_of_integers(&mut out, "copies-supported", 1, 9999);
+        write_integers(&mut out, tag::ENUM, "orientation-requested-default", &[3]);
+        write_integers(
+            &mut out,
+            tag::ENUM,
+            "orientation-requested-supported",
+            &[3, 4],
+        );
+        write_resolution(&mut out, "printer-resolution-default", 300, 300, 3);
+        write_resolution(&mut out, "printer-resolution-supported", 300, 300, 3);
+        write_resolution(
+            &mut out,
+            "pwg-raster-document-resolution-supported",
+            300,
+            300,
+            3,
+        );
+        write_texts(
+            &mut out,
+            tag::KEYWORD,
+            "pwg-raster-document-type-supported",
+            &["sgray_8", "srgb_8"],
+        );
+        write_text(&mut out, tag::KEYWORD, "output-bin-default", "face-down");
+        write_texts(
+            &mut out,
+            tag::KEYWORD,
+            "output-bin-supported",
+            &["face-down"],
+        );
+        write_text(
+            &mut out,
+            tag::KEYWORD,
+            "pdl-override-supported",
+            "not-attempted",
         );
         write_text(&mut out, tag::KEYWORD, "uri-security-supported", "tls");
+        write_text(
+            &mut out,
+            tag::KEYWORD,
+            "uri-authentication-supported",
+            "none",
+        );
 
         write_texts(
             &mut out,
@@ -339,6 +642,12 @@ pub fn response(
             &mut out,
             tag::NATURAL_LANGUAGE,
             "natural-language-configured",
+            "en",
+        );
+        write_text(
+            &mut out,
+            tag::NATURAL_LANGUAGE,
+            "generated-natural-language-supported",
             "en",
         );
         let operations = if printer.accepting_jobs {
@@ -371,6 +680,23 @@ pub fn job_response(request_id: u32, version: (u8, u8), job_id: u32, job_uri: &s
     write_text(&mut out, tag::KEYWORD, "job-state-reasons", "none");
     out.push(tag::END_OF_ATTRIBUTES);
     out
+}
+
+fn write_resolution(out: &mut Vec<u8>, name: &str, xres: i32, yres: i32, units: u8) {
+    out.push(tag::RESOLUTION);
+    let mut val = [0u8; 9];
+    val[0..4].copy_from_slice(&xres.to_be_bytes());
+    val[4..8].copy_from_slice(&yres.to_be_bytes());
+    val[8] = units;
+    write_name_and_value(out, name, &val);
+}
+
+fn write_range_of_integers(out: &mut Vec<u8>, name: &str, lower: i32, upper: i32) {
+    out.push(tag::RANGE_OF_INTEGER);
+    let mut val = [0u8; 8];
+    val[0..4].copy_from_slice(&lower.to_be_bytes());
+    val[4..8].copy_from_slice(&upper.to_be_bytes());
+    write_name_and_value(out, name, &val);
 }
 
 fn write_text(out: &mut Vec<u8>, value_tag: u8, name: &str, value: &str) {
@@ -757,5 +1083,110 @@ mod tests {
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("bad%zz"), "bad%zz");
         assert_eq!(percent_decode("a%2"), "a%2");
+    }
+
+    #[test]
+    fn printer_uuid_is_deterministic_and_urn_uuid_formatted() {
+        let uuid1 = printer_uuid("Office Printer");
+        let uuid2 = printer_uuid("Office Printer");
+        let uuid_other = printer_uuid("Other Printer");
+
+        assert_eq!(uuid1, uuid2);
+        assert_ne!(uuid1, uuid_other);
+        assert!(uuid1.starts_with("urn:uuid:"));
+        let hex_part = uuid1.strip_prefix("urn:uuid:").unwrap();
+        assert_eq!(hex_part.len(), 36);
+        let segments: Vec<&str> = hex_part.split('-').collect();
+        assert_eq!(segments.len(), 5);
+        assert_eq!(segments[0].len(), 8);
+        assert_eq!(segments[1].len(), 4);
+        assert_eq!(segments[2].len(), 4);
+        assert_eq!(segments[3].len(), 4);
+        assert_eq!(segments[4].len(), 12);
+        // Version 5
+        assert!(segments[2].starts_with('5'));
+    }
+
+    #[test]
+    fn rewrite_printer_uri_supported_changes_security_to_none_for_ipp_scheme() {
+        let remote_uri = "ipps://server:8631/ipp/print/Office%20Printer";
+        let local_uri = "ipp://127.0.0.1:8632/ipp/print/server%3A8631/Office%20Printer";
+        let bytes = response(
+            1,
+            IPP_VERSION_2_0,
+            Status::Ok,
+            &[PrinterEntry {
+                name: "Office Printer".to_owned(),
+                uri: remote_uri.to_owned(),
+                accepting_jobs: true,
+            }],
+        );
+
+        let rewritten =
+            rewrite_printer_uri_supported(&bytes, remote_uri, local_uri).expect("rewrites");
+        let attributes = decode(&rewritten);
+        assert_eq!(
+            text(&attributes, "printer-uri-supported"),
+            Some(local_uri.to_owned())
+        );
+        assert_eq!(
+            text(&attributes, "uri-security-supported"),
+            Some("none".to_owned())
+        );
+        assert_eq!(
+            text(&attributes, "printer-uuid"),
+            Some(printer_uuid("Office Printer"))
+        );
+    }
+
+    #[test]
+    fn prepare_proxy_request_discards_client_network_channel_and_secondary_values() {
+        let mut request = Vec::new();
+        request.extend_from_slice(&[2, 0, 0, 2, 0, 0, 0, 1]); // Print-Job request id 1
+        request.push(tag::OPERATION_ATTRIBUTES);
+        write_text_attribute(
+            &mut request,
+            tag::URI,
+            "printer-uri",
+            "ipp://127.0.0.1:8632/local",
+        );
+        // Extra 1setOf value for printer-uri (empty name)
+        request.push(tag::URI);
+        request.extend_from_slice(&0u16.to_be_bytes());
+        request.extend_from_slice(&(b"ipp://127.0.0.1:8632/extra".len() as u16).to_be_bytes());
+        request.extend_from_slice(b"ipp://127.0.0.1:8632/extra");
+
+        // Client-supplied network-channel with 1setOf extra value
+        write_text_attribute(&mut request, 0x41, "network-channel", "rogue-secret");
+        request.push(0x41);
+        request.extend_from_slice(&0u16.to_be_bytes());
+        request.extend_from_slice(&(b"extra-rogue".len() as u16).to_be_bytes());
+        request.extend_from_slice(b"extra-rogue");
+
+        request.push(tag::END_OF_ATTRIBUTES);
+        request.extend_from_slice(b"fake document payload");
+
+        let prepared = prepare_proxy_request(
+            &request,
+            "ipps://server:8631/remote",
+            Some("configured-secret"),
+        )
+        .expect("prepares proxy request");
+
+        let parsed = Request::parse(&prepared).expect("valid IPP request");
+        assert_eq!(
+            parsed.value("printer-uri"),
+            Some("ipps://server:8631/remote")
+        );
+        assert_eq!(
+            parsed.text_values("printer-uri"),
+            vec!["ipps://server:8631/remote"]
+        );
+        assert_eq!(parsed.value("network-channel"), Some("configured-secret"));
+        assert_eq!(
+            parsed.text_values("network-channel"),
+            vec!["configured-secret"]
+        );
+        assert_eq!(parsed.document(), b"fake document payload");
     }
 }

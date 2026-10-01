@@ -1,9 +1,10 @@
 //! ShaPrint desktop shell.
 //!
 //! The shell owns the lifetime of the client proxy and server sharing runtimes, shows their live
-//! status in a React UI, and stops them cleanly when the runtime closes (#30). Server sharing
-//! exposes selected Windows queues over IPPS, authorizes and submits print jobs (#32), and supports
-//! explicit manual server-certificate trust (#33).
+//! status in a React UI, and stops them cleanly when the runtime closes (#30). The client proxy
+//! forwards authenticated jobs over pinned IPPS (#34). Server sharing exposes selected Windows
+//! queues over IPPS, authorizes and submits print jobs (#32), and supports explicit manual
+//! server-certificate trust (#33).
 //!
 //! Layout (ADR 0002): `domain` holds types and rules, `application` holds the runtime coordinator
 //! and the use cases, `adapters` holds the service and platform implementations, and `ipc` holds
@@ -65,7 +66,10 @@ impl Shell {
         // The client proxy opts into autostart (ADR 0001: installed queues must reach the proxy
         // during normal use). Server sharing stays stopped until the user starts it.
         let runtime = Arc::new(RuntimeCoordinator::new(vec![
-            Arc::new(ClientProxyService::new()),
+            Arc::new(ClientProxyService::new(
+                Arc::clone(&client_connections),
+                Arc::clone(&network_channel),
+            )),
             Arc::new(ServerSharingService::new(
                 Arc::clone(&sharing),
                 Arc::clone(&endpoint),
