@@ -27,7 +27,7 @@ use tokio_rustls::{
 };
 
 use crate::{
-    adapters::ipps::protocol::OPERATION_GET_PRINTERS,
+    adapters::ipps::protocol::{self, OPERATION_GET_PRINTERS},
     domain::{AppError, ErrorCode},
 };
 
@@ -162,6 +162,11 @@ impl ClientConnections {
         })
     }
 
+    /// Parses a server address into the canonical form stored with the approved certificate.
+    pub fn normalize_address(input: &str) -> Result<String, AppError> {
+        ServerAddress::parse(input).map(|address| address.normalized)
+    }
+
     /// Contacts TLS only. No IPP request is sent by this operation.
     pub async fn inspect(&self, input: &str) -> Result<ConnectionReview, AppError> {
         let address = ServerAddress::parse(input)?;
@@ -238,6 +243,72 @@ impl ClientConnections {
             address: address.normalized,
             printers: names,
         })
+    }
+
+    /// Sends one IPP request to a previously approved server, preserving its pinned certificate
+    /// check and adding the configured Network Channel only for print jobs.
+    pub async fn forward_ipp(
+        &self,
+        input: &str,
+        printer_uri: &str,
+        body: &[u8],
+        network_channel: Option<&str>,
+    ) -> Result<Vec<u8>, AppError> {
+        let address = ServerAddress::parse(input)?;
+        let pinned = self
+            .store
+            .lock()
+            .map_err(|_| AppError::internal("Saved server approvals are unavailable; restart the app and try again."))?
+            .servers
+            .get(&address.normalized)
+            .map(|record| record.fingerprint.clone())
+            .ok_or_else(|| AppError::invalid_state("This server is not approved. Inspect its certificate fingerprint and explicitly approve it before printing."))?;
+        let (mut tls, live) = connect(&address).await?;
+        if live != pinned {
+            return Err(AppError::invalid_state("The server certificate changed. Printing is blocked until you inspect the current fingerprint and explicitly reapprove the server."));
+        }
+
+        let request =
+            protocol::prepare_proxy_request(body, printer_uri, network_channel).map_err(|_| {
+                AppError::invalid_input("The local printer sent an invalid IPP request.")
+            })?;
+        let head = format!(
+            "POST /ipp/print HTTP/1.1\r\nHost: {}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            address.socket(),
+            request.len()
+        );
+        let response = timeout(Duration::from_secs(30), async {
+            tls.write_all(head.as_bytes()).await?;
+            tls.write_all(&request).await?;
+            let mut response = Vec::new();
+            tls.take((MAX_RESPONSE + 8192) as u64)
+                .read_to_end(&mut response)
+                .await?;
+            Ok::<_, std::io::Error>(response)
+        })
+        .await
+        .map_err(|_| AppError::timeout("The print server did not finish the job in time."))?
+        .map_err(|_| AppError::internal("Could not complete the secure print request. Check that the server is online and sharing the selected printer."))?;
+        let boundary = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| index + 4)
+            .ok_or_else(|| {
+                AppError::invalid_state("The print server returned an invalid IPPS response.")
+            })?;
+        if !response
+            .get(..boundary)
+            .is_some_and(|header| header.starts_with(b"HTTP/1.1 200"))
+        {
+            return Err(AppError::invalid_state("The IPPS server rejected the print request. Confirm it is a ShaPrint server and the selected printer is shared."));
+        }
+        let ipp = response
+            .get(boundary..)
+            .filter(|body| body.len() >= 9 && body.len() <= MAX_RESPONSE)
+            .ok_or_else(|| {
+                AppError::invalid_state("The print server returned an incomplete IPP response.")
+            })?;
+        Ok(ipp.to_vec())
     }
 }
 

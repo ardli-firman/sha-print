@@ -116,7 +116,14 @@ pub async fn answer_job(
     let Some(document_format) = request.value("document-format") else {
         return response(request_id, version, Status::BadRequest, &[]);
     };
-    if !document_format.eq_ignore_ascii_case("application/octet-stream") {
+    if !matches!(
+        document_format.to_ascii_lowercase().as_str(),
+        "application/octet-stream"
+            | "image/pwg-raster"
+            | "application/pdf"
+            | "application/pclm"
+            | "application/oxps"
+    ) {
         return response(request_id, version, Status::DocumentFormatNotSupported, &[]);
     }
     if request.document().is_empty() {
@@ -190,14 +197,34 @@ fn find_by_uri<'a>(
     host: &str,
     requested: &str,
 ) -> Option<&'a PrinterName> {
-    let (authority, path) = ipps_authority_and_path(requested)?;
+    let Some((authority, path)) = ipps_authority_and_path(requested) else {
+        trace_issue34("server-uri=malformed");
+        return None;
+    };
     if !authority.eq_ignore_ascii_case(host) {
+        trace_issue34("server-uri-authority=mismatch");
         return None;
     }
-    let encoded_name = path.strip_prefix("ipp/print/")?;
+    let Some(encoded_name) = path.strip_prefix("ipp/print/") else {
+        trace_issue34("server-uri-path=mismatch");
+        return None;
+    };
     let decoded_name = percent_decode(encoded_name);
-    let printer = find_by_name(shared, &decoded_name)?;
-    (percent_encode(printer.as_str()) == encoded_name).then_some(printer)
+    let Some(printer) = find_by_name(shared, &decoded_name) else {
+        trace_issue34("server-printer=not-shared");
+        return None;
+    };
+    if decoded_name != printer.as_str() {
+        trace_issue34("server-printer-case=normalized");
+    }
+    trace_issue34("server-lookup=matched");
+    Some(printer)
+}
+
+fn trace_issue34(message: &str) {
+    if std::env::var_os("SHAPRINT_ISSUE34_IPP_TRACE").is_some() {
+        eprintln!("[DEBUG-34IPP] {message}");
+    }
 }
 
 fn ipps_authority_and_path(uri: &str) -> Option<(&str, &str)> {
@@ -276,6 +303,7 @@ mod tests {
     fn values_of(answer: &[u8], wanted: &[u8]) -> Vec<String> {
         let mut values = Vec::new();
         let mut position = 8;
+        let mut matching = false;
         while position + 1 < answer.len() {
             let value_tag = answer[position];
             position += 1;
@@ -283,11 +311,15 @@ mod tests {
                 break;
             }
             if (0x01..=0x05).contains(&value_tag) {
+                matching = false;
                 continue;
             }
             let name = read(answer, &mut position);
             let value = read(answer, &mut position);
-            if name == wanted {
+            if !name.is_empty() {
+                matching = name == wanted;
+            }
+            if matching {
                 values.push(String::from_utf8_lossy(&value).into_owned());
             }
         }
@@ -325,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn get_printers_advertises_only_rendered_octet_stream_jobs() {
+    fn get_printers_advertises_supported_document_formats() {
         let shared = FakeShared::new(&["Zebra"]);
 
         let answer = answer(
@@ -336,7 +368,13 @@ mod tests {
 
         assert_eq!(
             values_of(&answer, b"document-format-supported"),
-            vec!["application/octet-stream"]
+            vec![
+                "image/pwg-raster",
+                "application/oxps",
+                "application/pdf",
+                "application/PCLm",
+                "application/octet-stream"
+            ]
         );
     }
 
@@ -365,6 +403,26 @@ mod tests {
 
         assert_eq!(status(&answer), 0x0000);
         assert_eq!(advertised(&answer), vec!["Zebra"]);
+    }
+
+    #[test]
+    fn get_printer_attributes_accepts_a_case_normalized_queue_uri() {
+        let shared = FakeShared::new(&["Office Printer"]);
+
+        let answer = answer(
+            &request(
+                OPERATION_GET_PRINTER_ATTRIBUTES,
+                &[(
+                    "printer-uri",
+                    "ipps://server:8631/ipp/print/office%20printer",
+                )],
+            ),
+            "server:8631",
+            &shared,
+        );
+
+        assert_eq!(status(&answer), 0x0000);
+        assert_eq!(advertised(&answer), vec!["Office Printer"]);
     }
 
     #[test]

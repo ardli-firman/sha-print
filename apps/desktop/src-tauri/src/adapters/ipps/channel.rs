@@ -1,4 +1,4 @@
-//! Durable Network Channel verifier used only to authorize print jobs.
+//! Durable Network Channel storage for server authorization and the local client proxy.
 
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
@@ -13,10 +13,11 @@ use crate::domain::AppError;
 
 const VERIFIER_FILE: &str = "network-channel-verifier.json";
 
-/// Holds a salted one-way SHA-256 verifier, never the configured channel itself.
+/// Holds a salted one-way server verifier and, on Windows, a DPAPI-protected client credential.
 pub struct NetworkChannel {
     path: Option<PathBuf>,
     verifier: RwLock<Option<ChannelVerifier>>,
+    client_secret: RwLock<Option<String>>,
     configure_lock: Mutex<()>,
 }
 
@@ -25,6 +26,7 @@ impl NetworkChannel {
         Self {
             path: None,
             verifier: RwLock::new(None),
+            client_secret: RwLock::new(None),
             configure_lock: Mutex::new(()),
         }
     }
@@ -32,29 +34,36 @@ impl NetworkChannel {
     /// Loads the verifier from app data. Legacy unsalted records are not trusted.
     pub fn open(directory: impl Into<PathBuf>) -> Result<Self, AppError> {
         let path = directory.into().join(VERIFIER_FILE);
-        let verifier = if path.exists() {
+        let (verifier, client_secret) = if path.exists() {
             let bytes = fs::read(&path)
                 .map_err(|_| AppError::internal("cannot read the Network Channel verifier"))?;
             let record: VerifierRecord = serde_json::from_slice(&bytes)
                 .map_err(|_| AppError::internal("the Network Channel verifier is invalid"))?;
-            match record.salt {
+            let verifier = match record.salt {
                 Some(salt) => Some(ChannelVerifier {
                     salt: decode_hex(salt)?,
                     digest: decode_hex(record.sha256)?,
                 }),
                 None => None,
-            }
+            };
+            let secret = record
+                .client_secret_protected
+                .as_deref()
+                .map(decode_secret)
+                .transpose()?;
+            (verifier, secret)
         } else {
-            None
+            (None, None)
         };
         Ok(Self {
             path: Some(path),
             verifier: RwLock::new(verifier),
+            client_secret: RwLock::new(client_secret),
             configure_lock: Mutex::new(()),
         })
     }
 
-    /// Replaces the Network Channel with its digest. The secret is never retained or serialized.
+    /// Replaces the server verifier and persists a user-protected copy for client forwarding.
     pub async fn configure(&self, channel: &str) -> Result<bool, AppError> {
         if channel.is_empty() {
             return Err(AppError::invalid_input("Network Channel cannot be empty"));
@@ -68,8 +77,9 @@ impl NetworkChannel {
             salt,
             digest: channel_digest(&salt, channel),
         };
+        let client_secret_protected = protect_secret(channel)?;
         if let Some(path) = self.path.clone() {
-            tokio::task::spawn_blocking(move || persist(&path, verifier))
+            tokio::task::spawn_blocking(move || persist(&path, verifier, client_secret_protected))
                 .await
                 .map_err(|_| AppError::internal("Network Channel storage worker stopped"))??;
         }
@@ -78,6 +88,11 @@ impl NetworkChannel {
             .write()
             .map_err(|_| AppError::internal("Network Channel state is unavailable"))?;
         *current = Some(verifier);
+        let mut secret = self
+            .client_secret
+            .write()
+            .map_err(|_| AppError::internal("Network Channel state is unavailable"))?;
+        *secret = Some(channel.to_owned());
         Ok(true)
     }
 
@@ -105,6 +120,15 @@ impl NetworkChannel {
             .fold(0u8, |difference, (left, right)| difference | (left ^ right))
             == 0
     }
+
+    /// Credential held by the local client proxy. This value is never exposed through IPC or
+    /// status; durable Windows copies are protected by DPAPI for the current user.
+    pub fn client_credential(&self) -> Option<String> {
+        self.client_secret
+            .read()
+            .ok()
+            .and_then(|value| value.clone())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -112,6 +136,8 @@ struct VerifierRecord {
     #[serde(default)]
     salt: Option<String>,
     sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client_secret_protected: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -134,7 +160,11 @@ fn decode_hex<const N: usize>(encoded: String) -> Result<[u8; N], AppError> {
         .map_err(|_| AppError::internal("the Network Channel verifier is invalid"))
 }
 
-fn persist(path: &Path, verifier: ChannelVerifier) -> Result<(), AppError> {
+fn persist(
+    path: &Path,
+    verifier: ChannelVerifier,
+    client_secret_protected: Option<String>,
+) -> Result<(), AppError> {
     let parent = path
         .parent()
         .ok_or_else(|| AppError::internal("cannot locate Network Channel storage"))?;
@@ -144,6 +174,7 @@ fn persist(path: &Path, verifier: ChannelVerifier) -> Result<(), AppError> {
     let record = VerifierRecord {
         salt: Some(hex::encode(verifier.salt)),
         sha256: hex::encode(verifier.digest),
+        client_secret_protected,
     };
     let bytes = serde_json::to_vec(&record)
         .map_err(|_| AppError::internal("cannot encode the Network Channel verifier"))?;
@@ -164,6 +195,110 @@ fn persist(path: &Path, verifier: ChannelVerifier) -> Result<(), AppError> {
     drop(file);
     fs::rename(&temporary, path)
         .map_err(|_| AppError::internal("cannot persist the Network Channel verifier"))
+}
+
+fn protect_secret(value: &str) -> Result<Option<String>, AppError> {
+    #[cfg(windows)]
+    {
+        protect_data(value.as_bytes()).map(|bytes| Some(hex::encode(bytes)))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = value;
+        Ok(None)
+    }
+}
+
+fn decode_secret(encoded: &str) -> Result<String, AppError> {
+    #[cfg(windows)]
+    {
+        let protected = hex::decode(encoded)
+            .map_err(|_| AppError::internal("the protected Network Channel is invalid"))?;
+        let bytes = unprotect_data(&protected)?;
+        String::from_utf8(bytes)
+            .map_err(|_| AppError::internal("the protected Network Channel is invalid"))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = encoded;
+        Err(AppError::unsupported(
+            "protected Network Channel storage is available on Windows only",
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn protect_data(value: &[u8]) -> Result<Vec<u8>, AppError> {
+    use std::{ptr, slice};
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::Cryptography::{CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB},
+    };
+
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: value.len() as u32,
+        pbData: value.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    let protected = unsafe {
+        CryptProtectData(
+            &input,
+            ptr::null(),
+            ptr::null(),
+            ptr::null(),
+            ptr::null(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+    };
+    if protected == 0 {
+        return Err(AppError::internal(
+            "Windows could not protect the Network Channel for the local proxy.",
+        ));
+    }
+    let result = unsafe { slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
+    unsafe {
+        LocalFree(output.pbData.cast());
+    }
+    Ok(result)
+}
+
+#[cfg(windows)]
+fn unprotect_data(value: &[u8]) -> Result<Vec<u8>, AppError> {
+    use std::{ptr, slice};
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::Cryptography::{
+            CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+        },
+    };
+
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: value.len() as u32,
+        pbData: value.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    let unprotected = unsafe {
+        CryptUnprotectData(
+            &input,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
+            ptr::null(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+    };
+    if unprotected == 0 {
+        return Err(AppError::internal(
+            "Windows could not open the protected Network Channel for the local proxy.",
+        ));
+    }
+    let result = unsafe { slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
+    unsafe {
+        LocalFree(output.pbData.cast());
+    }
+    Ok(result)
 }
 
 impl std::fmt::Debug for NetworkChannel {

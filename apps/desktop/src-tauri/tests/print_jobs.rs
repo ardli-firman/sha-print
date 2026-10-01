@@ -114,7 +114,7 @@ async fn unsupported_document_format_is_rejected_before_queue_submission() {
         &print_job_with_format(
             Some(&secret),
             OFFICE_PRINTER_URI,
-            "application/pdf",
+            "text/html",
             "one-sided",
             b"document",
         ),
@@ -449,6 +449,11 @@ async fn channel_verifier_survives_reopen_without_persisting_plaintext() {
     let reopened = NetworkChannel::open(directory.clone()).expect("reopens verifier store");
     assert!(reopened.is_configured());
     assert!(reopened.authorizes(&secret));
+    #[cfg(windows)]
+    assert_eq!(
+        reopened.client_credential().as_deref(),
+        Some(secret.as_str())
+    );
     let verifier =
         std::fs::read(directory.join("network-channel-verifier.json")).expect("reads verifier");
     assert!(!verifier
