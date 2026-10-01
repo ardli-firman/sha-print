@@ -41,6 +41,23 @@ pub fn login_command() -> String {
     }
 }
 
+/// Decodes the little-endian UTF-16 bytes Windows stores a `REG_SZ` value as.
+///
+/// The value ends at its null terminator; a trailing byte that cannot complete a code unit is
+/// ignored rather than treated as text. This is the one part of reading the registration that is
+/// not a call into Windows, so it is compiled for tests on every platform and checked there.
+#[cfg(any(windows, test))]
+fn decode_registry_string(bytes: &[u8]) -> String {
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .take_while(|unit| *unit != 0)
+        .collect();
+    String::from_utf16_lossy(&units)
+}
+
 /// Reads and writes the per-user login registration.
 #[cfg(windows)]
 pub struct WindowsStartup {
@@ -170,12 +187,7 @@ mod registry {
                 "Windows could not read the ShaPrint login registration.",
             ));
         }
-        let units: Vec<u16> = buffer
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .take_while(|unit| *unit != 0)
-            .collect();
-        Ok(Some(String::from_utf16_lossy(&units)))
+        Ok(Some(super::decode_registry_string(&buffer)))
     }
 
     /// Writes one string value into the per-user `Run` key, creating the key when needed.
@@ -309,5 +321,47 @@ mod tests {
 
         assert!(command.ends_with(BACKGROUND_ARG), "{command}");
         assert!(command.starts_with('"'), "{command}");
+    }
+
+    /// A helper for the decoding test: `text` as Windows stores a `REG_SZ` value.
+    fn registry_bytes(text: &str) -> Vec<u8> {
+        text.encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect()
+    }
+
+    /// A command line as the registration records it, with a path that needs quoting.
+    const REGISTERED: &str = "\"C:\\Program Files\\ShaPrint\\shaprint-desktop.exe\" --background";
+
+    #[test]
+    fn a_registry_string_is_decoded_as_little_endian_utf16() {
+        assert_eq!(
+            decode_registry_string(&registry_bytes(REGISTERED)),
+            REGISTERED
+        );
+        assert_eq!(
+            decode_registry_string(&registry_bytes("ShaPrint")),
+            "ShaPrint"
+        );
+        assert_eq!(decode_registry_string(&registry_bytes("")), "");
+    }
+
+    #[test]
+    fn a_registry_string_ends_at_its_null_terminator() {
+        // Windows reports the size it wrote; anything after the terminator is not part of the value.
+        let mut bytes = registry_bytes("ShaPrint");
+        bytes.extend_from_slice(&u16::to_le_bytes(b'X' as u16));
+
+        assert_eq!(decode_registry_string(&bytes), "ShaPrint");
+    }
+
+    #[test]
+    fn an_incomplete_trailing_code_unit_is_ignored() {
+        let mut bytes = registry_bytes("ab");
+        bytes.push(0xFF);
+
+        assert_eq!(decode_registry_string(&bytes), "ab");
+        assert_eq!(decode_registry_string(&[]), "");
     }
 }
