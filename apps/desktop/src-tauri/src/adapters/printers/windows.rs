@@ -4,9 +4,7 @@
 
 use async_trait::async_trait;
 use windows_sys::Win32::Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER};
-use windows_sys::Win32::Graphics::Printing::{
-    EnumPrintersW, JOB_INFO_2W, PRINTER_ENUM_LOCAL, PRINTER_INFO_4W,
-};
+use windows_sys::Win32::Graphics::Printing::{EnumPrintersW, PRINTER_ENUM_LOCAL, PRINTER_INFO_4W};
 
 use crate::application::LocalPrinterCatalog;
 use crate::domain::{AppError, PrinterName};
@@ -226,13 +224,6 @@ unsafe extern "system" {
     fn EndPagePrinter(printer: *mut std::ffi::c_void) -> i32;
     fn EndDocPrinter(printer: *mut std::ffi::c_void) -> i32;
     fn AbortPrinter(printer: *mut std::ffi::c_void) -> i32;
-    fn SetJobW(
-        printer: *mut std::ffi::c_void,
-        job_id: u32,
-        level: u32,
-        info: *const u8,
-        command: u32,
-    ) -> i32;
     fn DocumentPropertiesW(
         window: *mut std::ffi::c_void,
         printer: *mut std::ffi::c_void,
@@ -241,6 +232,13 @@ unsafe extern "system" {
         input: *const u8,
         mode: u32,
     ) -> i32;
+}
+
+#[repr(C)]
+struct PrinterDefaultsW {
+    p_datatype: *mut u16,
+    p_devmode: *mut u8,
+    desired_access: u32,
 }
 
 fn submit_windows_job(printer: &str, job: &PrintJob) -> Result<u32, AppError> {
@@ -256,19 +254,48 @@ fn submit_windows_job(printer: &str, job: &PrintJob) -> Result<u32, AppError> {
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let raw_wide: Vec<u16> = "RAW".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut raw_wide: Vec<u16> = "RAW".encode_utf16().chain(std::iter::once(0)).collect();
     let info = DocInfo1W {
         document_name: document_wide.as_ptr(),
         output_file: ptr::null(),
         data_type: raw_wide.as_ptr(),
     };
-    let mut handle = ptr::null_mut();
+
+    let mut query_handle = ptr::null_mut();
     // SAFETY: pointers refer to NUL-terminated strings and writable handle storage.
-    let opened = unsafe { OpenPrinterW(printer_wide.as_ptr(), &mut handle, ptr::null()) };
+    let opened = unsafe { OpenPrinterW(printer_wide.as_ptr(), &mut query_handle, ptr::null()) };
     if opened == 0 {
         return Err(spooler_error("cannot open the selected Windows printer"));
     }
-    let result = submit_open_printer(handle, printer_wide.as_ptr(), &info, job);
+    let dev_mode = prepare_dev_mode(query_handle, printer_wide.as_ptr(), job.settings());
+    // SAFETY: query_handle was returned successfully by OpenPrinterW.
+    unsafe {
+        ClosePrinter(query_handle);
+    }
+    let mut dev_mode = dev_mode?;
+
+    let mut defaults = PrinterDefaultsW {
+        p_datatype: raw_wide.as_mut_ptr(),
+        p_devmode: match &mut dev_mode {
+            Some(dm) => dm.as_mut_ptr(),
+            None => ptr::null_mut(),
+        },
+        desired_access: 0x0000_0008, // PRINTER_ACCESS_USE
+    };
+
+    let mut handle = ptr::null_mut();
+    // SAFETY: pointers refer to valid NUL-terminated wide string and defaults.
+    let opened = unsafe {
+        OpenPrinterW(
+            printer_wide.as_ptr(),
+            &mut handle,
+            (&mut defaults as *mut PrinterDefaultsW).cast(),
+        )
+    };
+    if opened == 0 {
+        return Err(spooler_error("cannot open the selected Windows printer"));
+    }
+    let result = submit_open_printer(handle, &info, job);
     // SAFETY: handle was returned successfully by OpenPrinterW.
     unsafe {
         ClosePrinter(handle);
@@ -278,7 +305,6 @@ fn submit_windows_job(printer: &str, job: &PrintJob) -> Result<u32, AppError> {
 
 fn submit_open_printer(
     handle: *mut std::ffi::c_void,
-    printer_name: *const u16,
     info: &DocInfo1W,
     job: &PrintJob,
 ) -> Result<u32, AppError> {
@@ -290,7 +316,6 @@ fn submit_open_printer(
 
     let document = job.document();
     let result = (|| {
-        apply_job_settings(handle, job_id, printer_name, job.settings())?;
         // SAFETY: handle is a live printer handle.
         if unsafe { StartPagePrinter(handle) } == 0 {
             return Err(spooler_error("cannot start a Windows printer page"));
@@ -330,18 +355,17 @@ fn submit_open_printer(
     Ok(job_id)
 }
 
-fn apply_job_settings(
+fn prepare_dev_mode(
     handle: *mut std::ffi::c_void,
-    job_id: u32,
     printer_name: *const u16,
     settings: &crate::application::PrintSettings,
-) -> Result<(), AppError> {
+) -> Result<Option<Vec<u8>>, AppError> {
     if settings.media.is_none()
         && settings.color.is_none()
         && settings.duplex.is_none()
         && settings.copies.is_none()
     {
-        return Ok(());
+        return Ok(None);
     }
     if settings
         .copies
@@ -419,28 +443,7 @@ fn apply_job_settings(
         fields |= 0x0000_1000;
     }
     dev_mode[72..76].copy_from_slice(&fields.to_ne_bytes());
-
-    let mut job_info = JOB_INFO_2W {
-        JobId: job_id,
-        pDevMode: dev_mode.as_mut_ptr().cast(),
-        ..Default::default()
-    };
-    // SAFETY: job info and devmode are valid for the synchronous SetJobW call.
-    if unsafe {
-        SetJobW(
-            handle,
-            job_id,
-            2,
-            (&mut job_info as *mut JOB_INFO_2W).cast(),
-            0,
-        )
-    } == 0
-    {
-        return Err(spooler_error(
-            "Windows rejected the requested print settings",
-        ));
-    }
-    Ok(())
+    Ok(Some(dev_mode))
 }
 
 fn spooler_error(message: &str) -> AppError {
