@@ -18,3 +18,7 @@ A document and its requested print settings submitted to a shared printer.
 
 **Network Channel**:
 A shared secret configured by ShaPrint installations to authorize print jobs between clients and servers.
+
+**Nearby server**:
+A server a client has seen advertise itself on the local network, as opposed to an address entered by
+hand. A nearby server is a hint to review, never a trusted server.

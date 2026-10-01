@@ -12,17 +12,24 @@ pub enum ServiceId {
     ClientProxy,
     /// IPPS sharing of the local printer queues the user selected.
     ServerSharing,
+    /// Browsing the local network for servers that share printers with this client.
+    ServerDiscovery,
 }
 
 impl ServiceId {
     /// Every service the shell supervises, in the order it reports them.
-    pub const ALL: [ServiceId; 2] = [ServiceId::ClientProxy, ServiceId::ServerSharing];
+    pub const ALL: [ServiceId; 3] = [
+        ServiceId::ClientProxy,
+        ServiceId::ServerSharing,
+        ServiceId::ServerDiscovery,
+    ];
 
     /// The stable id used by IPC payloads, log lines, and the UI.
     pub const fn as_str(self) -> &'static str {
         match self {
             ServiceId::ClientProxy => "client-proxy",
             ServiceId::ServerSharing => "server-sharing",
+            ServiceId::ServerDiscovery => "server-discovery",
         }
     }
 
@@ -203,7 +210,10 @@ mod tests {
     #[test]
     fn service_ids_are_stable_and_parse_back() {
         let ids: Vec<&str> = ServiceId::ALL.iter().map(|id| id.as_str()).collect();
-        assert_eq!(ids, vec!["client-proxy", "server-sharing"]);
+        assert_eq!(
+            ids,
+            vec!["client-proxy", "server-sharing", "server-discovery"]
+        );
         for id in ServiceId::ALL {
             assert_eq!(ServiceId::parse(id.as_str()).ok(), Some(id));
         }

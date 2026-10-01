@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use shaprint_desktop::adapters::ipps::{answer_request_with_jobs, IppsServer, NetworkChannel};
-use shaprint_desktop::adapters::{ServerIdentity, ServerSharingService};
+use shaprint_desktop::adapters::ServerIdentity;
 use shaprint_desktop::application::{
     DuplexMode, PrintJob, PrintJobSubmitter, PrintSettings, RuntimeCoordinator,
     SharedPrinterSource, Sharing,
@@ -262,7 +262,7 @@ impl LiveServer {
             .expect("selects printer");
         let identity = Arc::new(ServerIdentity::generate().expect("generates identity"));
         let endpoint = Arc::new(IppsServer::new(0, identity, channel, submitter));
-        let runtime = RuntimeCoordinator::new(vec![Arc::new(ServerSharingService::new(
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
             Arc::clone(&sharing),
             Arc::clone(&endpoint),
         ))]);

@@ -1,0 +1,34 @@
+//! Local-network discovery of ShaPrint servers (ADR 0004).
+//!
+//! The client browses for nearby servers and the server advertises the queues it shares, using
+//! multicast DNS messages. Discovery is a hint, never a trust decision: a discovered address still
+//! has to pass the certificate-fingerprint approval before any printer query.
+
+mod advertise;
+mod browse;
+pub mod wire;
+
+pub use advertise::{MdnsAdvertiser, ADVERTISED_TTL};
+pub use browse::MdnsBrowser;
+
+use std::net::Ipv4Addr;
+
+/// The multicast group every multicast DNS responder listens on (RFC 6762 §3).
+pub const MDNS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
+
+/// Ports a ShaPrint responder listens on, in the order it tries them.
+///
+/// 5353 is the registered multicast DNS port; 5354 is the fallback for the common case where the
+/// operating system already runs a multicast DNS responder of its own and holds 5353. A browser
+/// asks on every port in this list, because it cannot know which one a server managed to take.
+pub const DISCOVERY_PORTS: [u16; 2] = [5353, 5354];
+
+/// Largest datagram discovery reads or writes.
+pub const MAX_DATAGRAM: usize = 1500;
+
+/// `TXT` keys ShaPrint puts in an advertisement, and reads back out of one.
+pub const PATH_PROPERTY: &str = "rp";
+pub const NAME_PROPERTY: &str = "name";
+pub const QUEUE_PROPERTY: &str = "queue";
+/// The resource path a browser connects to, shared with the IPPS endpoint.
+pub const RESOURCE_PATH: &str = "ipp/print";

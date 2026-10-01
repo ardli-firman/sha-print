@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use shaprint_desktop::adapters::ipps::{protocol, NetworkChannel};
 use shaprint_desktop::adapters::{
     client_connections::ClientConnections, client_queue_uri, ClientProxyService, IppsServer,
-    ServerIdentity, ServerSharingService,
+    ServerIdentity,
 };
 use shaprint_desktop::application::{
     DuplexMode, PrintJob, PrintJobSubmitter, RuntimeCoordinator, Sharing,
@@ -101,7 +101,7 @@ impl RunningPair {
             submitter.clone(),
         ));
         let server = Arc::new(RuntimeCoordinator::new(vec![Arc::new(
-            ServerSharingService::new(sharing, endpoint.clone()),
+            support::sharing_service(sharing, endpoint.clone()),
         )]));
         server
             .start(ServiceId::ServerSharing)

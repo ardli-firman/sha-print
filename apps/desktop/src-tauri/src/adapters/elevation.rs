@@ -120,6 +120,7 @@ mod windows {
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     use super::SETUP_FLAG;
+    use crate::adapters::discovery::DISCOVERY_PORTS;
     use crate::adapters::ipps::DEFAULT_PORT;
     use crate::domain::{AppError, SetupAction};
 
@@ -210,23 +211,25 @@ mod windows {
         }
     }
 
-    /// Lets clients reach the sharing endpoint through the Windows firewall.
+    /// Lets clients reach this server through the Windows firewall.
     ///
-    /// The rule is removed first: re-running setup must repair a rule that changed, and `netsh`
+    /// Two things have to get in: the IPPS requests a client sends to the endpoint's port, and the
+    /// discovery queries a client sends to the ports a responder may have taken (ADR 0004).
+    ///
+    /// Every rule is removed first: re-running setup must repair a rule that changed, and `netsh`
     /// refuses to create a duplicate name.
     fn allow_inbound_sharing() -> Result<(), AppError> {
-        let rule = format!("ShaPrint ({DEFAULT_PORT})");
-        // Delete existing rule first if present; ignore failure if it does not exist yet.
-        let _ = run(
-            "netsh",
-            &[
-                "advfirewall",
-                "firewall",
-                "delete",
-                "rule",
-                &format!("name={rule}"),
-            ],
-        );
+        let endpoint_rule = format!("ShaPrint ({DEFAULT_PORT})");
+        let discovery_rules: Vec<(String, String)> = DISCOVERY_PORTS
+            .iter()
+            .map(|port| (format!("ShaPrint discovery ({port})"), port.to_string()))
+            .collect();
+
+        remove_rule(&endpoint_rule);
+        for (name, _) in &discovery_rules {
+            remove_rule(name);
+        }
+
         run(
             "netsh",
             &[
@@ -234,14 +237,49 @@ mod windows {
                 "firewall",
                 "add",
                 "rule",
-                &format!("name={rule}"),
+                &format!("name={endpoint_rule}"),
                 "dir=in",
                 "action=allow",
                 "protocol=TCP",
                 &format!("localport={DEFAULT_PORT}"),
                 "profile=any",
             ],
-        )
+        )?;
+
+        // A client never has to be allowed in: it asks from its own port and only hears the answer,
+        // which Windows lets back in as the reply to a request this machine started.
+        for (name, port) in &discovery_rules {
+            run(
+                "netsh",
+                &[
+                    "advfirewall",
+                    "firewall",
+                    "add",
+                    "rule",
+                    &format!("name={name}"),
+                    "dir=in",
+                    "action=allow",
+                    "protocol=UDP",
+                    &format!("localport={port}"),
+                    "profile=any",
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Removes one rule if it exists; a rule that is not there yet is not a failure.
+    fn remove_rule(name: &str) {
+        let _ = run(
+            "netsh",
+            &[
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
+                &format!("name={name}"),
+            ],
+        );
     }
 
     fn run(program: &str, arguments: &[&str]) -> Result<(), AppError> {

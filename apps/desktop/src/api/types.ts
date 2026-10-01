@@ -4,7 +4,7 @@
  */
 
 /** Runtime services the desktop shell supervises. */
-export type ServiceId = "client-proxy" | "server-sharing";
+export type ServiceId = "client-proxy" | "server-sharing" | "server-discovery";
 
 /** Lifecycle state of a supervised service. */
 export type ServiceState = "stopped" | "starting" | "running" | "stopping" | "failed";
@@ -57,6 +57,23 @@ export interface ServerIdentity {
   fingerprint: string;
   /** Port the sharing endpoint listens on. */
   port: number;
+}
+
+/** A server the client can see on the local network, before any trust decision. */
+export interface NearbyServer {
+  /** Identifier of the advertisement this came from. */
+  instance: string;
+  /** Label the server advertises for itself. */
+  name: string;
+  /** Address to review and approve before any printer is listed. */
+  address: string;
+  /** The queues the server says it shares. */
+  printers: string[];
+}
+
+/** Every server currently visible on the local network. */
+export interface NearbyServers {
+  servers: NearbyServer[];
 }
 
 /** What a setup action did. */

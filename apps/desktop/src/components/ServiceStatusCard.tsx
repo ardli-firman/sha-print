@@ -10,6 +10,10 @@ const SERVICE_LABELS: Partial<Record<ServiceId, { title: string; description: st
     title: "Server sharing",
     description: "Shares the local printer queues you selected with other ShaPrint users.",
   },
+  "server-discovery": {
+    title: "Server discovery",
+    description: "Finds ShaPrint servers on this network so you can review and connect to them.",
+  },
 };
 
 const STATE_LABELS: Record<ServiceState, string> = {

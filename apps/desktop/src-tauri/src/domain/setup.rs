@@ -8,8 +8,9 @@
 /// A configuration action the shell can perform for the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SetupAction {
-    /// Let clients reach the sharing endpoint through the Windows firewall. Machine-wide state, so
-    /// Windows asks for administrator permission.
+    /// Let clients reach this server through the Windows firewall: the IPPS endpoint and the
+    /// discovery ports a nearby-server query arrives on. Machine-wide state, so Windows asks for
+    /// administrator permission.
     AllowInboundSharing,
     /// Choose which local queues are shared. Per-user configuration.
     SelectPrinters,

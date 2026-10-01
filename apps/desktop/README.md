@@ -1,6 +1,6 @@
 # ShaPrint desktop app
 
-Tauri shell for the Windows-only IPP print-sharing MVP (issues #29–#34). It replaces the WPF
+Tauri shell for the Windows-only IPP print-sharing MVP (issues #29–#36). It replaces the WPF
 application as the product path and lives beside the .NET projects while the transition lasts.
 
 ## What exists today
@@ -26,15 +26,19 @@ application as the product path and lives beside the .NET projects while the tra
   configuration. Older unsalted verifier files are treated as unconfigured and require the user to
   set the Network Channel again. The plaintext value is never returned through IPC or written to
   logs, status, or UI after configuration.
+- Discovery: while sharing runs, the server advertises its shared queues over multicast DNS, and a
+  client browses for nearby servers and lists them live. Acting on a discovered server only fills in
+  the address and starts the same certificate review; a discovered server is never trusted on the
+  strength of its advertisement, and manual address entry keeps working where discovery cannot reach.
 - One elevated setup action: letting clients reach the endpoint through the Windows firewall. Every
-  other action — selecting queues, start/stop, fingerprint review, and channel configuration — runs
-  unprivileged.
+  other action — selecting queues, start/stop, fingerprint review, discovery, and channel
+  configuration — runs unprivileged.
 - Typed IPC: commands and status events use serializable DTOs, and failures carry stable codes
   (`invalid-input`, `unknown-service`, `invalid-state`, `timeout`, `unsupported`, `internal`).
 - Least-privilege capabilities: the main window may call the shell's commands and listen for status
   events, and nothing else (no shell, filesystem, dialog, or remote content access).
 
-Remaining client work: native queue installation (#35) and automatic server discovery (#36).
+Remaining client work: native queue installation (#35).
 
 ## Development
 
@@ -70,6 +74,12 @@ changed-certificate blocking, and explicit reapproval.
 endpoint, and a fake printer adapter; it checks common settings and that a local driver cannot
 override the configured Network Channel. A Windows machine with an installed native IPP queue is
 still needed to smoke-check the spooler-to-loopback path.
+`tests/discovery.rs` runs the real advertiser and the real browser over real sockets: a server appears
+with the queues it shares, disappears when sharing stops, a discovered server still requires
+fingerprint approval before any printer is listed, and a manual address still works when discovery
+reaches nothing. The tests ask loopback instead of the multicast group, because a test machine usually
+cannot take port 5353 from whatever multicast DNS responder it already runs; the wire format, the
+query/answer exchange, the withdrawal, and the cache are the production ones.
 
 On Windows, the real-queue spooler smoke test is ignored by default. From `apps/desktop/src-tauri`,
 set a local PCL-capable queue and run:
@@ -88,9 +98,9 @@ PCL-capable printer.
 ```
 src/                 React UI: typed IPC clients, status/sharing/trust hooks, settings and printer panels
 src-tauri/src/
-  domain/            Printer queues, the server fingerprint, setup policies, stable error codes
-  application/       Runtime coordinator, sharing, setup use cases
-  adapters/          Print spooler, IPPS endpoint, client TLS trust, identity, and elevation
+  domain/            Printer queues, the server fingerprint, nearby servers, setup policies, codes
+  application/       Runtime coordinator, sharing, discovery, setup use cases
+  adapters/          Print spooler, IPPS endpoint, client TLS trust, identity, discovery, elevation
   ipc/               Tauri command adapters, serializable DTOs, status event bridge
 ```
 
@@ -98,6 +108,19 @@ Boundaries follow ADR 0002, and ADR 0003 records how the IPPS endpoint, its iden
 elevated setup action work. Command handlers only validate, translate, and delegate; domain rules
 stay independent of Tauri and the operating system; secrets and print job content never reach logs,
 status payloads, or the UI.
+
+## Finding nearby servers
+
+While sharing runs, the server answers queries for `_shaprint-ipps._tcp.local.` and carries one
+`queue` entry per shared queue, so a client can show what a server shares before it trusts it.
+Stopping sharing withdraws the advertisement, and a stopped server answers no query. The responder
+takes multicast DNS port 5353 when it is free and 5354 otherwise; a client asks on both, because the
+operating system's own multicast DNS responder usually holds 5353.
+
+A browsing client needs nothing from the firewall: it asks from its own port and only hears the
+answer. A server has to accept the query, so the sharing panel's single administrator action allows
+inbound UDP on the discovery ports as well as inbound TCP on the endpoint's port. Discovery does not
+cross subnets, so the address field stays the path for a server on another network.
 
 ## Sharing over IPPS
 
