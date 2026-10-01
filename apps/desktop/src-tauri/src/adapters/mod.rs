@@ -12,6 +12,7 @@ pub mod elevation;
 pub mod identity;
 pub mod ipps;
 pub mod printers;
+pub mod queue_installation;
 mod server_sharing;
 
 pub use client_proxy::{client_queue_uri, ClientProxyService, CLIENT_PROXY_DEFAULT_PORT};

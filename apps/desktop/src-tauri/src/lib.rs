@@ -35,15 +35,16 @@ use adapters::{
     SystemElevation, DEFAULT_PORT,
 };
 use application::{
-    Discovery, DiscoveryBrowser, DiscoveryService, PrintJobSubmitter, RuntimeCoordinator,
-    ServerAdvertiser, Setup, Sharing,
+    ClientProxyState, Discovery, DiscoveryBrowser, DiscoveryService, PrintJobSubmitter,
+    QueueInstallation, RuntimeCoordinator, ServerAdvertiser, Setup, Sharing, TrustedServerPrinters,
 };
 use domain::AppError;
 
 /// The state the desktop shell manages, built once at startup.
 ///
 /// Commands read the piece they need — the supervised runtimes, the sharing configuration, the
-/// IPPS endpoint, or the setup actions — so each one states its own dependencies.
+/// IPPS endpoint, the setup actions, or the client queue installer — so each one states its own
+/// dependencies.
 pub struct Shell {
     runtime: Arc<RuntimeCoordinator>,
     sharing: Arc<Sharing>,
@@ -52,6 +53,7 @@ pub struct Shell {
     client_connections: Arc<ClientConnections>,
     network_channel: Arc<NetworkChannel>,
     discovery: Arc<Discovery>,
+    queue_installation: Arc<QueueInstallation>,
 }
 
 impl Shell {
@@ -88,6 +90,16 @@ impl Shell {
             Arc::new(DiscoveryService::new(Arc::clone(&discovery), browser)),
         ]));
 
+        // Installing a client queue reuses the client trust store for its precondition and the same
+        // elevation path as the firewall rule, so a queue is only ever created for an approved
+        // server while the proxy that carries its jobs is running (ADR 0005).
+        let queue_installation = Arc::new(QueueInstallation::new(
+            Arc::clone(&setup),
+            Arc::clone(&client_connections) as Arc<dyn TrustedServerPrinters>,
+            adapters::queue_installation::platform_installer(),
+            Arc::clone(&runtime) as Arc<dyn ClientProxyState>,
+        ));
+
         Ok(Self {
             runtime,
             sharing,
@@ -96,6 +108,7 @@ impl Shell {
             client_connections,
             network_channel,
             discovery,
+            queue_installation,
         })
     }
 
@@ -125,6 +138,10 @@ impl Shell {
 
     pub fn discovery(&self) -> Arc<Discovery> {
         Arc::clone(&self.discovery)
+    }
+
+    pub fn queue_installation(&self) -> Arc<QueueInstallation> {
+        Arc::clone(&self.queue_installation)
     }
 }
 
@@ -174,6 +191,7 @@ pub fn run() -> Result<(), AppError> {
             ipc::client_connections::inspect_server_connection,
             ipc::client_connections::approve_server_connection,
             ipc::client_connections::list_server_connection_printers,
+            ipc::commands::install_printer_queue,
             ipc::server_settings::configure_network_channel,
             ipc::server_settings::get_network_channel_status,
             ipc::discovery::list_nearby_servers,
@@ -197,6 +215,7 @@ pub fn run() -> Result<(), AppError> {
             app.manage(shell.client_connections());
             app.manage(shell.network_channel());
             app.manage(shell.discovery());
+            app.manage(shell.queue_installation());
 
             // Start the always-on services in the background: the window paints immediately, then
             // follows their status through the event stream. A service that cannot start is left

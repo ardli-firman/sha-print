@@ -1,7 +1,7 @@
 import type { ServerConnectionsController } from "../hooks/useServerConnections";
 
 export function ServerConnectionsPanel({ connections }: { connections: ServerConnectionsController }) {
-  const { address, setAddress, review, result, busy, error, inspect, approve, query } = connections;
+  const { address, setAddress, review, result, installed, busy, error, inspect, approve, query, install } = connections;
   return <section className="panel" aria-labelledby="client-connections-heading">
     <div className="panel-header"><h2 id="client-connections-heading">Connect to a server</h2></div>
     <p className="hint">Enter a server host or host:port (default port 8631). The first review reads its certificate only; shared printers are not requested before you approve it.</p>
@@ -25,6 +25,14 @@ export function ServerConnectionsPanel({ connections }: { connections: ServerCon
         <button type="button" onClick={() => void approve()} disabled={busy !== null}>{busy === "approve" ? "Saving approval…" : review.previous_fingerprint ? "Explicitly reapprove this fingerprint" : "Approve this fingerprint"}</button>
       </>}
     </div> : null}
-    {result ? <div aria-live="polite"><h3>Shared printers at {result.address}</h3>{result.printers.length ? <ul>{result.printers.map(name => <li key={name}>{name}</li>)}</ul> : <p className="hint">This server is not currently sharing any printers.</p>}</div> : null}
+    {result ? <div aria-live="polite">
+      <h3>Shared printers at {result.address}</h3>
+      {result.printers.length ? <ul className="printer-list">{result.printers.map(name => <li key={name} className="printer" data-shared-printer={name}>
+        <span className="printer-name">{name}</span>
+        <button type="button" onClick={() => void install(name)} disabled={busy !== null} aria-label={`Install a Windows queue for ${name}`}>{busy === "install" ? "Installing…" : "Install Windows queue"}</button>
+      </li>)}</ul> : <p className="hint">This server is not currently sharing any printers.</p>}
+      <p className="hint">Installing creates a normal Windows printer queue that sends its jobs through this app's local proxy. Windows asks for administrator permission once; the queue keeps working after ShaPrint restarts.</p>
+    </div> : null}
+    {installed ? <p className="hint" role="status">Installed <strong>{installed.queue_name}</strong>. It now appears in your Windows print dialogs; start the client proxy before printing to {installed.printer_name}.</p> : null}
   </section>;
 }

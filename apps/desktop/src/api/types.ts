@@ -83,6 +83,18 @@ export interface SetupOutcome {
   elevated: boolean;
 }
 
+/** A native Windows queue the shell installed for a shared printer. */
+export interface ClientQueue {
+  /** Queue name as it appears in Windows print dialogs. */
+  queue_name: string;
+  /** Canonical host:port of the server that shares the printer. */
+  server_address: string;
+  /** Printer queue name on that server. */
+  printer_name: string;
+  /** IPP URI the installed queue routes through; it points at the local proxy. */
+  uri: string;
+}
+
 const KNOWN_ERROR_CODES: Record<string, true> = Object.fromEntries(
   ERROR_CODES.map((code) => [code, true]),
 );

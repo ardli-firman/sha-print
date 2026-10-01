@@ -29,6 +29,7 @@ vi.mock("./api/serverConnections", () => ({
   inspectServerConnection: vi.fn(),
   approveServerConnection: vi.fn(),
   listServerConnectionPrinters: vi.fn(),
+  installPrinterQueue: vi.fn(),
 }));
 
 vi.mock("./api/discovery", () => ({
@@ -303,6 +304,82 @@ describe("server connection panel", () => {
     expect(serverConnections.listServerConnectionPrinters).toHaveBeenCalledWith(
       review.address,
     );
+  });
+
+  it("installs a Windows queue for an approved server's shared printer", async () => {
+    const review = {
+      address: "printer.example:8631",
+      current_fingerprint:
+        "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
+      previous_fingerprint: null,
+      trusted: true,
+    };
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
+    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
+      address: review.address,
+      printers: ["Office Laser"],
+    });
+    vi.mocked(serverConnections.installPrinterQueue).mockResolvedValue({
+      queue_name: "Office Laser (ShaPrint printer.example-8631)",
+      server_address: review.address,
+      printer_name: "Office Laser",
+      uri: "ipp://127.0.0.1:8632/ipp/print/printer.example%3A8631/Office%20Laser",
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Server address"), {
+      target: { value: "printer.example" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inspect certificate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show shared printers" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Install a Windows queue for Office Laser",
+      }),
+    );
+
+    // The installed queue is named after the printer and the server, so the user can find it.
+    expect(await screen.findByText(/Office Laser \(ShaPrint printer\.example-8631\)/)).toBeTruthy();
+    expect(serverConnections.installPrinterQueue).toHaveBeenCalledWith(
+      review.address,
+      "Office Laser",
+    );
+  });
+
+  it("shows the action a user can take when the queue install fails", async () => {
+    const review = {
+      address: "printer.example:8631",
+      current_fingerprint:
+        "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
+      previous_fingerprint: null,
+      trusted: true,
+    };
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
+    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
+      address: review.address,
+      printers: ["Office Laser"],
+    });
+    vi.mocked(serverConnections.installPrinterQueue).mockRejectedValue({
+      code: "invalid-state",
+      message:
+        'Could not install the Windows queue "Office Laser (ShaPrint printer.example-8631)" for printer "Office Laser": the Windows Print Spooler service is not running. Start it (services.msc), then try again.',
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Server address"), {
+      target: { value: "printer.example" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inspect certificate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show shared printers" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Install a Windows queue for Office Laser",
+      }),
+    );
+
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain("Print Spooler service is not running");
+    expect(banner.textContent).toContain("services.msc");
   });
 
   it("explains changed identity and requires explicit reapproval", async () => {

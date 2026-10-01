@@ -7,18 +7,20 @@
 //!
 //! `start_service`/`stop_service` are the shell's generic lifecycle actions for every supervised
 //! service. The sharing commands cover what a server user configures: which local queues are
-//! shared, the identity clients approve, and the one setup action that needs administrator
-//! permission.
+//! shared, the identity clients approve, and the setup actions that need administrator permission.
+//! `install_printer_queue` is the client counterpart: it creates the Windows queue a shared printer
+//! prints through (issue #35).
 
 use std::sync::Arc;
 
 use tauri::State;
 
 use crate::adapters::IppsServer;
-use crate::application::{RuntimeCoordinator, Setup, SetupOutcome, Sharing};
+use crate::application::{QueueInstallation, RuntimeCoordinator, Setup, SetupOutcome, Sharing};
 use crate::domain::{AppError, PrinterName, ServiceId, SetupAction};
 use crate::ipc::dto::{
-    AppErrorDto, LocalPrintersDto, RuntimeStatusDto, ServerIdentityDto, SetupOutcomeDto,
+    AppErrorDto, ClientQueueDto, LocalPrintersDto, RuntimeStatusDto, ServerIdentityDto,
+    SetupOutcomeDto,
 };
 
 /// Runtime state shared by every command.
@@ -32,6 +34,9 @@ pub type SharedEndpoint = Arc<IppsServer>;
 
 /// Setup actions that may need administrator permission.
 pub type SharedSetup = Arc<Setup>;
+
+/// Native client queue installation.
+pub type SharedQueueInstallation = Arc<QueueInstallation>;
 
 /// Returns the current status of every supervised service.
 #[tauri::command]
@@ -129,8 +134,8 @@ pub async fn get_server_identity(
 
 /// Lets clients reach the sharing endpoint through the Windows firewall.
 ///
-/// The only action the shell asks the operating system for that needs administrator permission
-/// (ADR 0001); everything else a user does while running the app stays unprivileged.
+/// One of the two actions the shell asks the operating system for that need administrator permission
+/// (ADR 0001, ADR 0005); everything else a user does while running the app stays unprivileged.
 #[tauri::command]
 pub async fn allow_sharing_access(
     setup: State<'_, SharedSetup>,
@@ -161,6 +166,38 @@ pub async fn allow_sharing_access(
         Err(error) => {
             log::warn!(
                 "command=allow_sharing_access code={} message={}",
+                error.code_str(),
+                error
+            );
+            Err(AppErrorDto::from(&error))
+        }
+    }
+}
+
+/// Installs the native Windows queue for a printer a trusted server shares.
+///
+/// The use case checks every precondition — an approved server that currently shares the printer,
+/// and a running local proxy — before the one UAC prompt this needs.
+#[tauri::command]
+pub async fn install_printer_queue(
+    server_address: String,
+    printer_name: String,
+    queues: State<'_, SharedQueueInstallation>,
+) -> Result<ClientQueueDto, AppErrorDto> {
+    // The prompt and the helper run for as long as the user takes to decide, so the use case is
+    // called through its own handle rather than borrowing the managed state across the await.
+    let installation = Arc::clone(queues.inner());
+    match installation.install(&server_address, &printer_name).await {
+        Ok(queue) => {
+            log::info!(
+                "command=install_printer_queue queue={} code=ok",
+                queue.name()
+            );
+            Ok(ClientQueueDto::from(&queue))
+        }
+        Err(error) => {
+            log::warn!(
+                "command=install_printer_queue code={} message={}",
                 error.code_str(),
                 error
             );
