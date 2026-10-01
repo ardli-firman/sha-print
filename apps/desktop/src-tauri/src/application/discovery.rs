@@ -21,25 +21,31 @@ use crate::domain::{AppError, NearbyServer, PrinterName, ServiceId};
 /// How often the cache drops advertisements whose lifetime ran out.
 const DEFAULT_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
-/// The server-side seam: tells the local network which queues this server shares.
+/// Longest a browser keeps an advertisement, whatever lifetime it claims.
+///
+/// A browsing client asks again every few seconds, so a longer lifetime buys nothing, and it would
+/// let one advertisement park a stale entry in the list for as long as the app runs.
+pub const DEFAULT_MAX_LIFETIME: Duration = Duration::from_secs(60 * 60);
+
+/// The server-side seam: tells the local network which printers this server shares.
 #[async_trait]
 pub trait ServerAdvertiser: Send + Sync + 'static {
-    /// Advertises `queues`, reachable on the endpoint's `port`.
+    /// Advertises `printers`, reachable on the endpoint's `port`.
     ///
     /// Fails when this machine cannot advertise at all — for example because no discovery socket
     /// can be opened — so the caller can decide whether that is fatal to sharing.
     async fn advertise(
         &self,
         port: u16,
-        queues: &[PrinterName],
+        printers: &[PrinterName],
     ) -> Result<Arc<dyn Advertisement>, AppError>;
 }
 
 /// One live advertisement this server keeps up to date.
 #[async_trait]
 pub trait Advertisement: Send + Sync {
-    /// Replaces the advertised queues; an empty list withdraws the advertisement.
-    async fn replace(&self, queues: &[PrinterName]) -> Result<(), AppError>;
+    /// Replaces the advertised printers; an empty list withdraws the advertisement.
+    async fn replace(&self, printers: &[PrinterName]) -> Result<(), AppError>;
 
     /// Announces that this server stopped sharing and stops answering queries.
     async fn withdraw(&self) -> Result<(), AppError>;
@@ -67,12 +73,15 @@ pub trait Browse: Send + Sync {
 }
 
 /// Where a browse session reports what it hears.
+///
+/// An advertisement is reported and withdrawn by the address it describes, because that is what a
+/// user reviews and what a saved approval is keyed by (ADR 0003).
 pub trait AdvertisementSink: Send + Sync + 'static {
     /// One advertisement, valid for `lifetime`. A zero lifetime withdraws it.
     fn advertised(&self, server: NearbyServer, lifetime: Duration);
 
-    /// One advertisement that announced it is going away.
-    fn withdrawn(&self, instance: &str);
+    /// One advertisement that announced it is going away, or that a browser saw stop.
+    fn withdrawn(&self, address: &str);
 }
 
 /// One advertisement and the moment it stops being valid.
@@ -82,7 +91,7 @@ struct Entry {
     expires: Instant,
 }
 
-/// The servers currently visible on the local network.
+/// The servers currently visible on the local network, keyed by address.
 ///
 /// The cache is what the UI reads and what the shell publishes, so it is the one place that decides
 /// when an advertisement is gone: at its own goodbye, or when its lifetime runs out.
@@ -90,6 +99,7 @@ pub struct Discovery {
     entries: Mutex<BTreeMap<String, Entry>>,
     changes: watch::Sender<Vec<NearbyServer>>,
     sweep_interval: Duration,
+    max_lifetime: Duration,
 }
 
 impl Default for Discovery {
@@ -105,6 +115,7 @@ impl Discovery {
             entries: Mutex::new(BTreeMap::new()),
             changes,
             sweep_interval: DEFAULT_SWEEP_INTERVAL,
+            max_lifetime: DEFAULT_MAX_LIFETIME,
         }
     }
 
@@ -112,6 +123,13 @@ impl Discovery {
     #[must_use]
     pub fn with_sweep_interval(mut self, interval: Duration) -> Self {
         self.sweep_interval = interval;
+        self
+    }
+
+    /// Overrides how long one advertisement may stay cached. Used by tests.
+    #[must_use]
+    pub fn with_max_lifetime(mut self, lifetime: Duration) -> Self {
+        self.max_lifetime = lifetime;
         self
     }
 
@@ -179,18 +197,19 @@ impl Discovery {
 
 impl AdvertisementSink for Discovery {
     fn advertised(&self, server: NearbyServer, lifetime: Duration) {
-        // A goodbye is an advertisement with no lifetime left (RFC 6762 §10.1).
+        // A goodbye is an advertisement with no lifetime left (RFC 6762 §10.1). A browser decides
+        // that before calling here, so this only keeps the cache honest about what it was handed.
         if lifetime.is_zero() {
-            self.withdrawn(server.instance());
+            self.withdrawn(server.address());
             return;
         }
         let servers = match self.lock() {
             Ok(mut entries) => {
                 entries.insert(
-                    server.instance().to_owned(),
+                    server.address().to_owned(),
                     Entry {
                         server,
-                        expires: Instant::now() + lifetime,
+                        expires: Instant::now() + lifetime.min(self.max_lifetime),
                     },
                 );
                 snapshot(&entries)
@@ -200,10 +219,10 @@ impl AdvertisementSink for Discovery {
         self.publish(servers);
     }
 
-    fn withdrawn(&self, instance: &str) {
+    fn withdrawn(&self, address: &str) {
         let servers = match self.lock() {
             Ok(mut entries) => {
-                entries.remove(instance);
+                entries.remove(address);
                 snapshot(&entries)
             }
             Err(()) => return,
@@ -217,7 +236,7 @@ fn expire(entries: &mut BTreeMap<String, Entry>, now: Instant) {
     entries.retain(|_, entry| entry.expires > now);
 }
 
-/// The visible servers, ordered by label and then by address.
+/// The visible servers, ordered by label and then by address so the list does not jump.
 fn snapshot(entries: &BTreeMap<String, Entry>) -> Vec<NearbyServer> {
     let mut servers: Vec<NearbyServer> =
         entries.values().map(|entry| entry.server.clone()).collect();
@@ -279,7 +298,6 @@ mod tests {
 
     fn server(label: &str, address: &str, printers: &[&str]) -> NearbyServer {
         NearbyServer::new(
-            &format!("{label}._shaprint-ipps._tcp.local."),
             label,
             address,
             printers
@@ -315,7 +333,7 @@ mod tests {
         discovery.advertised(advertised.clone(), minute());
         assert_eq!(discovery.nearby_servers().len(), 1);
 
-        discovery.withdrawn(advertised.instance());
+        discovery.withdrawn(advertised.address());
 
         assert!(discovery.nearby_servers().is_empty());
     }
@@ -346,6 +364,45 @@ mod tests {
     }
 
     #[test]
+    fn an_advertisement_cannot_keep_a_stale_entry_for_as_long_as_it_claims() {
+        // A lifetime arrives from the network, so it is bounded here: one advertisement must not
+        // be able to park an entry in the list for as long as the app runs.
+        let discovery = Discovery::new().with_max_lifetime(Duration::from_millis(30));
+        discovery.advertised(
+            server("DESKTOP-ABC", "192.0.2.10:8631", &["Zebra"]),
+            Duration::from_secs(u64::from(u32::MAX)),
+        );
+        assert_eq!(discovery.nearby_servers().len(), 1);
+
+        std::thread::sleep(Duration::from_millis(150));
+
+        assert!(discovery.nearby_servers().is_empty());
+    }
+
+    #[test]
+    fn two_servers_that_advertise_one_label_are_listed_separately() {
+        let discovery = Discovery::new();
+        discovery.advertised(
+            server("DESKTOP-ABC", "192.0.2.10:8631", &["Zebra"]),
+            minute(),
+        );
+        discovery.advertised(
+            server("DESKTOP-ABC", "192.0.2.11:8631", &["Canon"]),
+            minute(),
+        );
+
+        let servers = discovery.nearby_servers();
+        assert_eq!(servers.len(), 2);
+        assert_eq!(labels(&servers), vec!["DESKTOP-ABC", "DESKTOP-ABC"]);
+
+        // One of them stopping sharing leaves the other alone.
+        discovery.withdrawn("192.0.2.10:8631");
+        let servers = discovery.nearby_servers();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].address(), "192.0.2.11:8631");
+    }
+
+    #[test]
     fn a_repeated_advertisement_replaces_what_the_server_told_us_before() {
         let discovery = Discovery::new();
         discovery.advertised(
@@ -353,14 +410,15 @@ mod tests {
             minute(),
         );
 
+        // The same server, at the same address, now sharing one more printer.
         discovery.advertised(
-            server("DESKTOP-ABC", "192.0.2.11:8631", &["Zebra", "Canon"]),
+            server("DESKTOP-ABC", "192.0.2.10:8631", &["Zebra", "Canon"]),
             minute(),
         );
 
         let servers = discovery.nearby_servers();
         assert_eq!(servers.len(), 1);
-        assert_eq!(servers[0].address(), "192.0.2.11:8631");
+        assert_eq!(servers[0].address(), "192.0.2.10:8631");
         assert_eq!(
             servers[0]
                 .printers()
@@ -403,7 +461,7 @@ mod tests {
                 .is_err()
         );
 
-        discovery.withdrawn("DESKTOP-ABC._shaprint-ipps._tcp.local.");
+        discovery.withdrawn("192.0.2.10:8631");
         changes.changed().await.expect("publishes the removal");
         assert!(changes.borrow_and_update().is_empty());
     }

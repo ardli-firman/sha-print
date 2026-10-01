@@ -21,20 +21,18 @@ pub const NEARBY_SERVERS_EVENT: &str = "discovery://servers";
 /// One nearby server as the UI lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NearbyServerDto {
-    /// Identifier of the advertisement this came from.
-    pub instance: String,
     /// Label the server advertises for itself.
     pub name: String,
-    /// Address to review and approve before any printer is listed.
+    /// Address to review and approve before any printer is listed; also what tells two servers
+    /// apart when they advertise the same label.
     pub address: String,
-    /// The queues the server says it shares.
+    /// The printers the server says it shares.
     pub printers: Vec<String>,
 }
 
 impl From<&NearbyServer> for NearbyServerDto {
     fn from(server: &NearbyServer) -> Self {
         Self {
-            instance: server.instance().to_owned(),
             name: server.name().to_owned(),
             address: server.address().to_owned(),
             printers: server
@@ -82,7 +80,6 @@ mod tests {
     #[test]
     fn nearby_server_payload_shape_is_stable() {
         let server = NearbyServer::new(
-            "DESKTOP-ABC._shaprint-ipps._tcp.local.",
             "DESKTOP-ABC",
             "192.0.2.10:8631",
             vec![PrinterName::parse("Zebra").expect("valid printer name")],
@@ -96,7 +93,6 @@ mod tests {
             payload,
             serde_json::json!({
                 "servers": [{
-                    "instance": "DESKTOP-ABC._shaprint-ipps._tcp.local.",
                     "name": "DESKTOP-ABC",
                     "address": "192.0.2.10:8631",
                     "printers": ["Zebra"]

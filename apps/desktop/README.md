@@ -77,9 +77,11 @@ still needed to smoke-check the spooler-to-loopback path.
 `tests/discovery.rs` runs the real advertiser and the real browser over real sockets: a server appears
 with the queues it shares, disappears when sharing stops, a discovered server still requires
 fingerprint approval before any printer is listed, and a manual address still works when discovery
-reaches nothing. The tests ask loopback instead of the multicast group, because a test machine usually
-cannot take port 5353 from whatever multicast DNS responder it already runs; the wire format, the
-query/answer exchange, the withdrawal, and the cache are the production ones.
+reaches nothing. Two servers that advertise the same label stay two entries, because a nearby server
+is identified by the address a user reviews. The tests ask loopback instead of the multicast group,
+because a test machine usually cannot take port 5353 from whatever multicast DNS responder it already
+runs; the wire format, the query/answer exchange, the withdrawal, and the cache are the production
+ones.
 
 On Windows, the real-queue spooler smoke test is ignored by default. From `apps/desktop/src-tauri`,
 set a local PCL-capable queue and run:
@@ -112,8 +114,10 @@ status payloads, or the UI.
 ## Finding nearby servers
 
 While sharing runs, the server answers queries for `_shaprint-ipps._tcp.local.` and carries one
-`queue` entry per shared queue, so a client can show what a server shares before it trusts it.
-Stopping sharing withdraws the advertisement, and a stopped server answers no query. The responder
+`queue` entry per shared printer, so a client can show what a server shares before it trusts it.
+Stopping sharing withdraws the advertisement: the server sends the withdrawal back to the clients
+that asked recently, and answers no further query. A client that sees no withdrawal still forgets an
+advertisement within seconds, so a server that crashes does not linger in the list. The responder
 takes multicast DNS port 5353 when it is free and 5354 otherwise; a client asks on both, because the
 operating system's own multicast DNS responder usually holds 5353.
 

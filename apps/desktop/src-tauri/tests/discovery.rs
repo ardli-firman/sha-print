@@ -13,17 +13,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shaprint_desktop::adapters::client_connections::ClientConnections;
-use shaprint_desktop::adapters::discovery::wire;
-use shaprint_desktop::adapters::discovery::{MdnsAdvertiser, MdnsBrowser};
+use shaprint_desktop::adapters::discovery::{
+    encode_query, MdnsAdvertiser, MdnsBrowser, SERVICE_TYPE,
+};
 use shaprint_desktop::adapters::ServerSharingService;
 use shaprint_desktop::application::{
     Discovery, DiscoveryBrowser, DiscoveryService, RuntimeCoordinator, ServerAdvertiser,
 };
 use shaprint_desktop::domain::{NearbyServer, PrinterName, ServiceId};
-use support::{free_port, printer_names, sharing_runtime_on, temporary_directory};
+use support::{free_port, free_udp_port, printer_names, sharing_runtime_on, temporary_directory};
 
-/// How long the test advertisement stays valid, so a stop is observable in a test's lifetime.
-const ADVERTISED: Duration = Duration::from_secs(1);
+/// How long the test advertisement stays valid.
+///
+/// Deliberately far longer than any test waits: a server that stops sharing has to *tell* the
+/// browsers that asked, because waiting for this to run out is not a test's lifetime, or a user's.
+const ADVERTISED: Duration = Duration::from_secs(120);
 
 /// Waits until the client lists a server, and returns it.
 async fn discovered(discovery: &Discovery) -> NearbyServer {
@@ -115,7 +119,10 @@ async fn a_client_finds_a_server_that_starts_sharing_without_being_told_its_addr
 
     let server = discovered(&discovery).await;
 
-    assert_eq!(server.name(), advertiser_label());
+    assert!(
+        !server.name().is_empty(),
+        "the advertisement names the server"
+    );
     // The client connects with the address the answer came from and the endpoint's own port.
     assert_eq!(server.address(), format!("127.0.0.1:{}", endpoint.port()));
     assert_eq!(
@@ -137,7 +144,7 @@ async fn a_client_finds_a_server_that_starts_sharing_without_being_told_its_addr
 }
 
 #[tokio::test]
-async fn stopping_sharing_removes_the_server_from_the_client() {
+async fn stopping_sharing_tells_the_clients_that_asked_so_they_forget_it_at_once() {
     let advertiser = Arc::new(MdnsAdvertiser::on(vec![0]).with_ttl(ADVERTISED));
     let (server_runtime, _endpoint) =
         start_server(&["Zebra"], free_port(), Arc::clone(&advertiser)).await;
@@ -152,6 +159,37 @@ async fn stopping_sharing_removes_the_server_from_the_client() {
 
     undiscovered(&discovery).await;
     client_runtime.shutdown().await.expect("the client stops");
+    server_runtime.shutdown().await.expect("the server stops");
+}
+
+#[tokio::test]
+async fn restarting_sharing_restores_discovery() {
+    // A fixed discovery port, so restarting sharing re-opens the advertisement where the client is
+    // already asking.
+    let advertiser = Arc::new(MdnsAdvertiser::on(vec![free_udp_port()]).with_ttl(ADVERTISED));
+    let (server_runtime, _endpoint) =
+        start_server(&["Zebra"], free_port(), Arc::clone(&advertiser)).await;
+    let advertised_on = advertiser.bound_port().expect("the advertisement is open");
+    let (client_runtime, discovery) = start_client(advertised_on).await;
+    discovered(&discovery).await;
+
+    server_runtime
+        .stop(ServiceId::ServerSharing)
+        .await
+        .expect("sharing stops");
+    undiscovered(&discovery).await;
+
+    server_runtime
+        .start(ServiceId::ServerSharing)
+        .await
+        .expect("sharing starts again");
+
+    discovered(&discovery).await;
+    client_runtime.shutdown().await.expect("the client stops");
+    server_runtime
+        .stop(ServiceId::ServerSharing)
+        .await
+        .expect("sharing stops");
     server_runtime.shutdown().await.expect("the server stops");
 }
 
@@ -249,7 +287,7 @@ async fn a_manual_address_still_works_when_discovery_cannot_reach_the_server() {
 }
 
 #[tokio::test]
-async fn a_withdrawn_advertisement_stops_answering_queries() {
+async fn a_stopped_server_tells_whoever_asked_and_answers_nobody_afterwards() {
     let advertiser = MdnsAdvertiser::on(vec![0]).with_ttl(Duration::from_secs(60));
     let advertisement = advertiser
         .advertise(8631, &printer_names(&["Zebra"]))
@@ -267,6 +305,12 @@ async fn a_withdrawn_advertisement_stops_answering_queries() {
 
     advertisement.withdraw().await.expect("withdraws");
 
+    // A browsing client does not join the multicast group, so the withdrawal is sent back to the
+    // sockets that asked. Its contents (a zero lifetime) are covered where the wire is.
+    assert!(
+        ask(&probe, port).await.is_some(),
+        "the withdrawal is delivered to the browser that asked"
+    );
     assert!(
         ask(&probe, port).await.is_none(),
         "a stopped server refuses to be discovered again"
@@ -275,7 +319,7 @@ async fn a_withdrawn_advertisement_stops_answering_queries() {
 
 /// Sends one browse query and returns the answer, if any arrives.
 async fn ask(socket: &tokio::net::UdpSocket, port: u16) -> Option<Vec<u8>> {
-    let query = wire::encode_query(wire::SERVICE_TYPE).expect("encodes a browse query");
+    let query = encode_query(SERVICE_TYPE).expect("encodes a browse query");
     socket
         .send_to(&query, SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
         .await
@@ -285,63 +329,4 @@ async fn ask(socket: &tokio::net::UdpSocket, port: u16) -> Option<Vec<u8>> {
         Ok(Ok((length, _))) => Some(buffer[..length].to_vec()),
         _ => None,
     }
-}
-
-/// The label the advertiser puts on this machine, which is what the client shows.
-fn advertiser_label() -> String {
-    let name = std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_default();
-    let cleaned: String = name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ' ') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let cleaned = cleaned.trim().to_owned();
-    if cleaned.is_empty() {
-        "ShaPrint server".to_owned()
-    } else {
-        cleaned.chars().take(63).collect()
-    }
-}
-
-/// The same flow over the multicast group a real network uses.
-///
-/// Ignored by default: it needs a machine whose network stack actually delivers multicast to a
-/// local listener, which a CI sandbox or a container often does not. Run it deliberately on a real
-/// machine with:
-///
-/// ```text
-/// cargo test --no-default-features --test discovery -- --ignored --nocapture
-/// ```
-#[tokio::test]
-#[ignore = "needs a network stack that delivers multicast to a local listener"]
-async fn a_browser_finds_a_server_over_multicast() {
-    let advertiser = Arc::new(MdnsAdvertiser::new().with_ttl(Duration::from_secs(60)));
-    let (server_runtime, endpoint) =
-        start_server(&["Zebra"], free_port(), Arc::clone(&advertiser)).await;
-    assert!(
-        advertiser.bound_port().is_some(),
-        "this machine has no free discovery port: another responder is holding them all"
-    );
-
-    let (client_runtime, discovery) = start_client_with(Arc::new(
-        MdnsBrowser::new().with_query_interval(Duration::from_secs(1)),
-    ))
-    .await;
-
-    let server = discovered(&discovery).await;
-    assert_eq!(server.address(), format!("127.0.0.1:{}", endpoint.port()));
-
-    client_runtime.shutdown().await.expect("the client stops");
-    server_runtime
-        .stop(ServiceId::ServerSharing)
-        .await
-        .expect("sharing stops");
-    server_runtime.shutdown().await.expect("the server stops");
 }

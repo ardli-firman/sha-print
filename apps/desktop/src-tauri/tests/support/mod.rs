@@ -91,6 +91,14 @@ pub fn sharing_runtime_on(queues: &[&str], port: u16) -> (Arc<Sharing>, Arc<Ipps
     (sharing, endpoint)
 }
 
+/// A UDP port nothing is listening on, for a test that has to name a discovery port.
+pub fn free_udp_port() -> u16 {
+    std::net::UdpSocket::bind("127.0.0.1:0")
+        .and_then(|socket| socket.local_addr())
+        .map(|address| address.port())
+        .expect("a free UDP port")
+}
+
 /// A TCP port nothing is listening on, for a test that has to name one.
 pub fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")

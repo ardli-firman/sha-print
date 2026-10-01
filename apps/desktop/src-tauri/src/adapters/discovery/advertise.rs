@@ -1,9 +1,10 @@
-//! The server half of discovery: tell the local network which queues this server shares.
+//! The server half of discovery: tell the local network which printers this server shares.
 //!
-//! The advertisement is a DNS-SD service instance carrying one `queue` property per shared queue,
+//! The advertisement is a DNS-SD service instance carrying one `queue` property per shared printer,
 //! so a browsing client can show what a server shares before it trusts it. Answering is deliberate:
-//! a browser asks, this responder answers, and a stopped server simply stops answering — which is
-//! what makes "stopping sharing also stops discovery" true even when a goodbye is lost.
+//! a browser asks, this responder answers, and a stopped server stops answering — and tells the
+//! browsers that asked recently, because a browsing client does not join the multicast group and
+//! would otherwise keep a stopped server in its list until the advertisement aged out.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, RwLock};
@@ -15,8 +16,8 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::adapters::discovery::{
-    wire, DISCOVERY_PORTS, MAX_DATAGRAM, MDNS_GROUP, NAME_PROPERTY, PATH_PROPERTY, QUEUE_PROPERTY,
-    RESOURCE_PATH,
+    send_to_all, wire, DISCOVERY_PORTS, MAX_DATAGRAM, MDNS_GROUP, NAME_PROPERTY, PATH_PROPERTY,
+    QUEUE_PROPERTY, READ_BACKOFF, RESOURCE_PATH,
 };
 use crate::application::{Advertisement, ServerAdvertiser};
 use crate::domain::{AppError, PrinterName};
@@ -24,8 +25,8 @@ use crate::domain::{AppError, PrinterName};
 /// How long a browser may keep an advertisement it has already resolved.
 pub const ADVERTISED_TTL: Duration = Duration::from_secs(120);
 
-/// How many queues one advertisement may carry before it is trimmed to fit the network.
-pub const MAX_ADVERTISED_QUEUES: usize = 48;
+/// How many printers one advertisement may carry before it is trimmed to fit the network.
+pub const MAX_ADVERTISED_PRINTERS: usize = 48;
 
 /// Largest advertisement this advertiser puts on the network.
 ///
@@ -34,8 +35,8 @@ pub const MAX_ADVERTISED_QUEUES: usize = 48;
 /// fragment is dropped.
 pub const MAX_PACKET: usize = 1400;
 
-/// How long a failed read waits before reading again, so an unreachable peer cannot spin the loop.
-const READ_BACKOFF: Duration = Duration::from_millis(50);
+/// How many asking browsers a server remembers, so it can withdraw its advertisement directly.
+const MAX_REMEMBERED_QUERIERS: usize = 32;
 
 /// What one server currently advertises.
 #[derive(Debug, Clone)]
@@ -43,55 +44,51 @@ struct Advertised {
     label: String,
     target: String,
     port: u16,
-    queues: Vec<PrinterName>,
+    printers: Vec<PrinterName>,
 }
 
 impl Advertised {
-    /// The advertisement to send, trimmed to the queues that fit in one datagram.
+    /// The advertisement to send, trimmed to the printers that fit in one datagram.
     ///
-    /// A browser that cannot see the last few queues still lists the server, and the endpoint
+    /// A browser that cannot see the last few printers still lists the server, and the endpoint
     /// returns the full, authoritative list once the user approves it.
     fn encode(&self, ttl: Duration) -> Result<Vec<u8>, AppError> {
-        let mut queues = self.queues.clone();
-        queues.truncate(MAX_ADVERTISED_QUEUES);
+        let mut printers = self.printers.clone();
+        printers.truncate(MAX_ADVERTISED_PRINTERS);
         loop {
             let packet = wire::encode_announcement(
                 &self.label,
                 &self.target,
                 self.port,
-                &properties(&self.label, &queues),
+                &properties(&self.label, &printers),
                 ttl,
             )?;
-            if packet.len() <= MAX_PACKET || queues.is_empty() {
+            if packet.len() <= MAX_PACKET || printers.is_empty() {
                 return Ok(packet);
             }
-            queues.pop();
+            printers.pop();
         }
     }
 }
 
 /// The `TXT` properties a browser reads out of an advertisement.
-fn properties(label: &str, queues: &[PrinterName]) -> Vec<(String, String)> {
+fn properties(label: &str, printers: &[PrinterName]) -> Vec<(String, String)> {
     let mut properties = vec![
         (PATH_PROPERTY.to_owned(), RESOURCE_PATH.to_owned()),
         (NAME_PROPERTY.to_owned(), label.to_owned()),
     ];
     properties.extend(
-        queues
+        printers
             .iter()
-            .map(|queue| (QUEUE_PROPERTY.to_owned(), queue.as_str().to_owned())),
+            .map(|printer| (QUEUE_PROPERTY.to_owned(), printer.as_str().to_owned())),
     );
     properties
 }
 
-/// Advertises this server's shared queues over multicast DNS.
-///
-/// Multicast DNS messages go to the group every responder listens on (RFC 6762 §3).
+/// Advertises this server's shared printers over multicast DNS.
 pub struct MdnsAdvertiser {
     ports: Vec<u16>,
     ttl: Duration,
-    /// Where announcements and goodbyes are sent; `None` means the multicast group.
-    announce_to: Option<Vec<SocketAddr>>,
     bound_port: Mutex<Option<u16>>,
 }
 
@@ -107,7 +104,6 @@ impl MdnsAdvertiser {
         Self {
             ports: DISCOVERY_PORTS.to_vec(),
             ttl: ADVERTISED_TTL,
-            announce_to: None,
             bound_port: Mutex::new(None),
         }
     }
@@ -127,15 +123,6 @@ impl MdnsAdvertiser {
     #[must_use]
     pub fn with_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
-        self
-    }
-
-    /// Sends announcements and goodbyes to `targets` instead of the multicast group.
-    ///
-    /// Used by tests to observe the wire without depending on multicast support.
-    #[must_use]
-    pub fn announcing_to(mut self, targets: Vec<SocketAddr>) -> Self {
-        self.announce_to = Some(targets);
         self
     }
 
@@ -189,7 +176,7 @@ impl ServerAdvertiser for MdnsAdvertiser {
     async fn advertise(
         &self,
         port: u16,
-        queues: &[PrinterName],
+        printers: &[PrinterName],
     ) -> Result<Arc<dyn Advertisement>, AppError> {
         let socket = self.bind().await?;
         let label = server_label();
@@ -197,14 +184,16 @@ impl ServerAdvertiser for MdnsAdvertiser {
             target: format!("{label}.local."),
             label,
             port,
-            queues: queues.to_vec(),
+            printers: printers.to_vec(),
         }));
+        let queriers = Arc::new(Mutex::new(Vec::new()));
 
         let (stop, stopped) = watch::channel(false);
         let responder = tokio::spawn(
             Responder {
                 socket: Arc::clone(&socket),
                 advertised: Arc::clone(&advertised),
+                queriers: Arc::clone(&queriers),
                 bound: socket
                     .local_addr()
                     .map_err(|_| AppError::internal("cannot read the discovery socket address"))?
@@ -217,15 +206,15 @@ impl ServerAdvertiser for MdnsAdvertiser {
 
         let advertisement = MdnsAdvertisement {
             advertised,
+            queriers,
             socket,
-            announce_to: self.announce_to.clone(),
             ttl: self.ttl,
             stop,
             responder: Mutex::new(Some(responder)),
         };
         // Announcing is best effort: an advertisement that cannot be multicast still answers
         // whoever asks, so a network without multicast support does not lose discovery entirely.
-        if let Err(error) = advertisement.announce(self.ttl).await {
+        if let Err(error) = advertisement.announce(self.ttl, "announcement").await {
             log::warn!(
                 "cannot announce shared printers code={} message={}",
                 error.code_str(),
@@ -239,16 +228,17 @@ impl ServerAdvertiser for MdnsAdvertiser {
 /// One live advertisement and the task answering queries for it.
 struct MdnsAdvertisement {
     advertised: Arc<RwLock<Advertised>>,
+    /// The browsers that asked recently, so a withdrawal reaches them directly.
+    queriers: Arc<Mutex<Vec<SocketAddr>>>,
     socket: Arc<UdpSocket>,
-    announce_to: Option<Vec<SocketAddr>>,
     ttl: Duration,
     stop: watch::Sender<bool>,
     responder: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl MdnsAdvertisement {
-    /// Sends the current advertisement to every destination it has.
-    async fn announce(&self, ttl: Duration) -> Result<(), AppError> {
+    /// Sends the current advertisement to the group and to the browsers that asked recently.
+    async fn announce(&self, ttl: Duration, what: &str) -> Result<(), AppError> {
         let packet = {
             let advertised = self
                 .advertised
@@ -256,23 +246,11 @@ impl MdnsAdvertisement {
                 .map_err(|_| AppError::internal("the advertisement lock is poisoned"))?;
             advertised.encode(ttl)?
         };
-        let destinations = match &self.announce_to {
-            Some(targets) => targets.clone(),
-            None => vec![SocketAddr::from((MDNS_GROUP, self.bound_port()))],
-        };
-        let mut failure = None;
-        for destination in destinations {
-            if let Err(error) = self.socket.send_to(&packet, destination).await {
-                log::debug!("cannot send a discovery advertisement message={error}");
-                failure = Some(AppError::internal(
-                    "the discovery advertisement could not be sent on this network",
-                ));
-            }
+        let mut destinations = vec![SocketAddr::from((MDNS_GROUP, self.bound_port()))];
+        if let Ok(queriers) = self.queriers.lock() {
+            destinations.extend(queriers.iter().copied());
         }
-        match failure {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        send_to_all(&self.socket, &packet, &destinations, what).await
     }
 
     fn bound_port(&self) -> u16 {
@@ -285,20 +263,20 @@ impl MdnsAdvertisement {
 
 #[async_trait]
 impl Advertisement for MdnsAdvertisement {
-    async fn replace(&self, queues: &[PrinterName]) -> Result<(), AppError> {
+    async fn replace(&self, printers: &[PrinterName]) -> Result<(), AppError> {
         {
             let mut advertised = self
                 .advertised
                 .write()
                 .map_err(|_| AppError::internal("the advertisement lock is poisoned"))?;
-            advertised.queues = queues.to_vec();
+            advertised.printers = printers.to_vec();
         }
-        if queues.is_empty() {
+        if printers.is_empty() {
             // Nothing is shared any more, so the network is told to forget the advertisement
             // instead of letting it age out.
-            return self.announce(Duration::ZERO).await;
+            return self.announce(Duration::ZERO, "withdrawal").await;
         }
-        self.announce(self.ttl).await
+        self.announce(self.ttl, "announcement").await
     }
 
     async fn withdraw(&self) -> Result<(), AppError> {
@@ -307,9 +285,9 @@ impl Advertisement for MdnsAdvertisement {
                 .advertised
                 .write()
                 .map_err(|_| AppError::internal("the advertisement lock is poisoned"))?;
-            advertised.queues.clear();
+            advertised.printers.clear();
         }
-        let announcement = self.announce(Duration::ZERO).await;
+        let announcement = self.announce(Duration::ZERO, "withdrawal").await;
         let _ = self.stop.send_replace(true);
         let responder = self.responder.lock().ok().and_then(|mut task| task.take());
         if let Some(responder) = responder {
@@ -323,6 +301,7 @@ impl Advertisement for MdnsAdvertisement {
 struct Responder {
     socket: Arc<UdpSocket>,
     advertised: Arc<RwLock<Advertised>>,
+    queriers: Arc<Mutex<Vec<SocketAddr>>>,
     group: Ipv4Addr,
     bound: u16,
     /// The lifetime every answer carries, so a browser caches it for the same time the server means.
@@ -358,11 +337,12 @@ impl Responder {
         if asked.is_empty() {
             return;
         }
+        self.remember(from);
         let encoded = {
             let Ok(advertised) = self.advertised.read() else {
                 return;
             };
-            if advertised.queues.is_empty() {
+            if advertised.printers.is_empty() {
                 // Withdrawn: a stopped server refuses to be discovered again.
                 return;
             }
@@ -380,6 +360,15 @@ impl Responder {
         };
         if let Err(error) = self.socket.send_to(&reply, destination).await {
             log::debug!("cannot answer a discovery query message={error}");
+        }
+    }
+
+    /// Remembers a browser that asked, newest first and bounded.
+    fn remember(&self, from: SocketAddr) {
+        if let Ok(mut queriers) = self.queriers.lock() {
+            queriers.retain(|querier| *querier != from);
+            queriers.insert(0, from);
+            queriers.truncate(MAX_REMEMBERED_QUERIERS);
         }
     }
 }
@@ -438,12 +427,12 @@ mod tests {
             .collect()
     }
 
-    fn advertised(queues: Vec<PrinterName>) -> Advertised {
+    fn advertised(printers: Vec<PrinterName>) -> Advertised {
         Advertised {
             label: "DESKTOP-ABC".to_owned(),
             target: "DESKTOP-ABC.local.".to_owned(),
             port: 8631,
-            queues,
+            printers,
         }
     }
 
@@ -487,7 +476,7 @@ mod tests {
     #[test]
     fn a_withdrawn_advertisement_says_it_is_gone_and_carries_no_queues() {
         let mut advertised = advertised(names(&["Zebra"]));
-        advertised.queues.clear();
+        advertised.printers.clear();
 
         let packet = advertised
             .encode(Duration::ZERO)
@@ -502,7 +491,7 @@ mod tests {
 
     #[test]
     fn an_advertisement_too_large_for_the_network_carries_the_queues_that_fit() {
-        let queues: Vec<PrinterName> = (0..MAX_ADVERTISED_QUEUES)
+        let queues: Vec<PrinterName> = (0..MAX_ADVERTISED_PRINTERS)
             .map(|index| {
                 PrinterName::parse(&format!("Very long printer queue name number {index:02}"))
                     .expect("valid printer name")
@@ -517,7 +506,7 @@ mod tests {
         let carried = carried_queues(&packet);
         assert!(!carried.is_empty(), "the advertisement carries nothing");
         assert!(
-            carried.len() < MAX_ADVERTISED_QUEUES,
+            carried.len() < MAX_ADVERTISED_PRINTERS,
             "the advertisement was not trimmed"
         );
         // The queues that fit are the first ones, so the advertisement matches the selection order.

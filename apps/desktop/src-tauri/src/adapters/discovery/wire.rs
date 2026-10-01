@@ -39,13 +39,6 @@ pub const CLASS_IN: u16 = 1;
 /// (RFC 6762 §10.2).
 pub const UNICAST_OR_CACHE_FLUSH: u16 = 0x8000;
 
-/// Longest packet the announcement encoder produces.
-///
-/// Multicast DNS allows larger datagrams, but staying inside a typical 1500-byte path maximum
-/// transmission unit avoids IP fragmentation, which loses the whole advertisement when a single
-/// fragment is dropped.
-pub const MAX_PACKET: usize = 1400;
-
 /// How many compression pointers one name may follow before the packet is treated as malformed; a
 /// pointer loop would otherwise make the reader spin forever.
 const MAX_NAME_JUMPS: usize = 64;

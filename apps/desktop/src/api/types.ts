@@ -61,13 +61,14 @@ export interface ServerIdentity {
 
 /** A server the client can see on the local network, before any trust decision. */
 export interface NearbyServer {
-  /** Identifier of the advertisement this came from. */
-  instance: string;
   /** Label the server advertises for itself. */
   name: string;
-  /** Address to review and approve before any printer is listed. */
+  /**
+   * Address to review and approve before any printer is listed. It is also what tells two servers
+   * apart when they advertise the same label.
+   */
   address: string;
-  /** The queues the server says it shares. */
+  /** The printers the server says it shares. */
   printers: string[];
 }
 

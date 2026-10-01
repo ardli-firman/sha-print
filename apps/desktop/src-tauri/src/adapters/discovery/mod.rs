@@ -6,12 +6,20 @@
 
 mod advertise;
 mod browse;
-pub mod wire;
+mod wire;
 
 pub use advertise::{MdnsAdvertiser, ADVERTISED_TTL};
 pub use browse::MdnsBrowser;
+// The codec is only reachable through what a caller outside this module needs: a test that speaks
+// the wire, and nothing else.
+pub use wire::{encode_query, SERVICE_TYPE};
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
+use std::time::Duration;
+
+use tokio::net::UdpSocket;
+
+use crate::domain::AppError;
 
 /// The multicast group every multicast DNS responder listens on (RFC 6762 §3).
 pub const MDNS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
@@ -26,9 +34,38 @@ pub const DISCOVERY_PORTS: [u16; 2] = [5353, 5354];
 /// Largest datagram discovery reads or writes.
 pub const MAX_DATAGRAM: usize = 1500;
 
+/// How long a failed socket read waits before reading again, so a peer that cannot be reached
+/// cannot spin a loop.
+const READ_BACKOFF: Duration = Duration::from_millis(50);
+
 /// `TXT` keys ShaPrint puts in an advertisement, and reads back out of one.
 pub const PATH_PROPERTY: &str = "rp";
 pub const NAME_PROPERTY: &str = "name";
 pub const QUEUE_PROPERTY: &str = "queue";
 /// The resource path a browser connects to, shared with the IPPS endpoint.
 pub const RESOURCE_PATH: &str = "ipp/print";
+
+/// Sends one discovery packet to every destination.
+///
+/// A failed send is reported but never abandons the rest: the destinations are independent, and one
+/// unreachable peer must not stop a server from announcing itself to the others.
+async fn send_to_all(
+    socket: &UdpSocket,
+    packet: &[u8],
+    destinations: &[SocketAddr],
+    what: &str,
+) -> Result<(), AppError> {
+    let mut failure = None;
+    for destination in destinations {
+        if let Err(error) = socket.send_to(packet, *destination).await {
+            log::debug!("cannot send a discovery {what} target={destination} message={error}");
+            failure = Some(AppError::internal(format!(
+                "the discovery {what} could not be sent on this network"
+            )));
+        }
+    }
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}

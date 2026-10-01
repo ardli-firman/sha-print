@@ -13,7 +13,8 @@ use async_trait::async_trait;
 use tokio::net::UdpSocket;
 
 use crate::adapters::discovery::{
-    wire, DISCOVERY_PORTS, MAX_DATAGRAM, MDNS_GROUP, NAME_PROPERTY, QUEUE_PROPERTY,
+    send_to_all, wire, DISCOVERY_PORTS, MAX_DATAGRAM, MDNS_GROUP, NAME_PROPERTY, QUEUE_PROPERTY,
+    READ_BACKOFF,
 };
 use crate::application::{AdvertisementSink, Browse, DiscoveryBrowser, Shutdown};
 use crate::domain::{AppError, NearbyServer, PrinterName};
@@ -23,9 +24,6 @@ use crate::domain::{AppError, NearbyServer, PrinterName};
 /// An advertisement is refreshed by asking, so this interval is also how quickly a server that
 /// started after the client did becomes visible.
 const QUERY_INTERVAL: Duration = Duration::from_secs(15);
-
-/// How long a failed read waits before reading again, so a rejected packet cannot spin the loop.
-const READ_BACKOFF: Duration = Duration::from_millis(50);
 
 /// Browses the local network for servers that share printers.
 pub struct MdnsBrowser {
@@ -131,19 +129,7 @@ impl MdnsBrowse {
     /// Asks every target what it advertises.
     async fn query(&self) -> Result<(), AppError> {
         let packet = wire::encode_query(wire::SERVICE_TYPE)?;
-        let mut failure = None;
-        for target in &self.targets {
-            if let Err(error) = self.socket.send_to(&packet, target).await {
-                log::debug!("cannot send a discovery query target={target} message={error}");
-                failure = Some(AppError::internal(
-                    "the discovery query could not be sent on this network",
-                ));
-            }
-        }
-        match failure {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        send_to_all(&self.socket, &packet, &self.targets, "query").await
     }
 }
 
@@ -155,30 +141,43 @@ fn report(packet: &[u8], from: SocketAddr, sink: &Arc<dyn AdvertisementSink>) {
         return;
     };
     for service in wire::services(&message) {
+        let Some(address) = endpoint_address(&service, from) else {
+            continue;
+        };
+        // A zero lifetime is how a server says it stopped sharing (RFC 6762 §10.1).
         if service.ttl.is_zero() {
-            sink.withdrawn(&service.instance);
+            sink.withdrawn(&address);
             continue;
         }
-        if let Some(server) = nearby_server(&service, from) {
+        if let Some(server) = nearby_server(&service, &address) {
             sink.advertised(server, service.ttl);
         }
     }
 }
 
-/// One advertised instance, as the client will offer it to a user.
-fn nearby_server(service: &wire::Service, from: SocketAddr) -> Option<NearbyServer> {
+/// The address a user would review for this advertisement.
+///
+/// The answer's own source address is the one address this browser knows it can reach, so that is
+/// what the user reviews; the advertised port is where the endpoint listens. Without a port there
+/// is nothing to connect to, which is also what makes an unconfigured advertisement unusable.
+fn endpoint_address(service: &wire::Service, from: SocketAddr) -> Option<String> {
     if service.port == 0 {
         return None;
     }
+    Some(format!("{}:{}", from.ip(), service.port))
+}
+
+/// One advertised instance, as the client will offer it to a user.
+fn nearby_server(service: &wire::Service, address: &str) -> Option<NearbyServer> {
     let mut label = None;
-    let mut queues: Vec<PrinterName> = Vec::new();
+    let mut printers: Vec<PrinterName> = Vec::new();
     for (key, value) in &service.properties {
         match key.as_str() {
             NAME_PROPERTY if label.is_none() => label = Some(value.clone()),
             QUEUE_PROPERTY => {
                 if let Ok(name) = PrinterName::parse(value) {
-                    if !queues.contains(&name) {
-                        queues.push(name);
+                    if !printers.contains(&name) {
+                        printers.push(name);
                     }
                 }
             }
@@ -186,10 +185,7 @@ fn nearby_server(service: &wire::Service, from: SocketAddr) -> Option<NearbyServ
         }
     }
     let label = label.unwrap_or_else(|| instance_label(&service.instance));
-    // The answer's own source address is the one address this browser knows it can reach, so that
-    // is what the user reviews; the advertised port is where the endpoint listens.
-    let address = format!("{}:{}", from.ip(), service.port);
-    NearbyServer::new(&service.instance, &label, &address, queues).ok()
+    NearbyServer::new(&label, address, printers).ok()
 }
 
 /// The first label of an instance name, used when an advertisement carries no server label.
@@ -218,16 +214,56 @@ mod tests {
         value.parse().expect("a socket address")
     }
 
+    /// What the browser makes of one answer, the way `report` does.
+    fn discovered(service: &wire::Service, from: &str) -> Option<NearbyServer> {
+        let address = endpoint_address(service, source(from))?;
+        nearby_server(service, &address)
+    }
+
+    /// Records what a browser reported, standing in for the cache.
+    #[derive(Default)]
+    struct Recording {
+        advertised: Mutex<Vec<(String, Duration)>>,
+        withdrawn: Mutex<Vec<String>>,
+    }
+
+    impl Recording {
+        fn advertisements(&self) -> Vec<(String, Duration)> {
+            self.advertised
+                .lock()
+                .map(|v| v.clone())
+                .unwrap_or_default()
+        }
+
+        fn withdrawals(&self) -> Vec<String> {
+            self.withdrawn.lock().map(|v| v.clone()).unwrap_or_default()
+        }
+    }
+
+    impl AdvertisementSink for Recording {
+        fn advertised(&self, server: NearbyServer, lifetime: Duration) {
+            if let Ok(mut advertised) = self.advertised.lock() {
+                advertised.push((server.address().to_owned(), lifetime));
+            }
+        }
+
+        fn withdrawn(&self, address: &str) {
+            if let Ok(mut withdrawn) = self.withdrawn.lock() {
+                withdrawn.push(address.to_owned());
+            }
+        }
+    }
+
     #[test]
     fn an_answer_becomes_a_nearby_server_at_the_address_it_came_from() {
-        let server = nearby_server(
+        let server = discovered(
             &service(&[
                 ("rp", "ipp/print"),
                 ("name", "DESKTOP-ABC"),
                 ("queue", "Zebra"),
                 ("queue", "Canon"),
             ]),
-            source("192.0.2.10:5353"),
+            "192.0.2.10:5353",
         )
         .expect("a usable advertisement");
 
@@ -245,9 +281,11 @@ mod tests {
         );
     }
 
+    use std::sync::Mutex;
+
     #[test]
     fn an_answer_without_a_label_falls_back_to_the_instance_name() {
-        let server = nearby_server(&service(&[("rp", "ipp/print")]), source("192.0.2.10:5353"))
+        let server = discovered(&service(&[("rp", "ipp/print")]), "192.0.2.10:5353")
             .expect("a usable advertisement");
 
         assert_eq!(server.name(), "DESKTOP-ABC");
@@ -261,7 +299,7 @@ mod tests {
                 ("queue", "Zebra"),
                 ("queue", "Bad\u{7}Queue"),
             ]),
-            source("192.0.2.10:5353"),
+            "192.0.2.10:5353",
         )
         .expect("a usable advertisement");
 
@@ -283,7 +321,7 @@ mod tests {
                 ("queue", "Zebra"),
                 ("queue", "Zebra"),
             ]),
-            source("192.0.2.10:5353"),
+            "192.0.2.10:5353",
         )
         .expect("a usable advertisement");
 
@@ -295,6 +333,55 @@ mod tests {
         let mut service = service(&[("name", "DESKTOP-ABC"), ("queue", "Zebra")]);
         service.port = 0;
 
-        assert!(nearby_server(&service, source("192.0.2.10:5353")).is_none());
+        assert!(discovered(&service, "192.0.2.10:5353").is_none());
+    }
+
+    #[test]
+    fn a_goodbye_withdraws_the_address_the_answer_came_from() {
+        let properties = [("name", "DESKTOP-ABC"), ("queue", "Zebra")];
+        let goodbye = wire::encode_announcement(
+            "DESKTOP-ABC",
+            "DESKTOP-ABC.local.",
+            8631,
+            &properties
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect::<Vec<_>>(),
+            Duration::ZERO,
+        )
+        .expect("encodes a goodbye");
+        let recording = Arc::new(Recording::default());
+        let sink: Arc<dyn AdvertisementSink> = Arc::clone(&recording) as Arc<dyn AdvertisementSink>;
+
+        report(&goodbye, source("192.0.2.10:5353"), &sink);
+
+        assert_eq!(recording.withdrawals(), vec!["192.0.2.10:8631"]);
+        assert!(recording.advertisements().is_empty());
+    }
+
+    #[test]
+    fn a_live_answer_is_reported_for_the_address_it_came_from() {
+        let properties = [("name", "DESKTOP-ABC"), ("queue", "Zebra")];
+        let announcement = wire::encode_announcement(
+            "DESKTOP-ABC",
+            "DESKTOP-ABC.local.",
+            8631,
+            &properties
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect::<Vec<_>>(),
+            Duration::from_secs(120),
+        )
+        .expect("encodes an announcement");
+        let recording = Arc::new(Recording::default());
+        let sink: Arc<dyn AdvertisementSink> = Arc::clone(&recording) as Arc<dyn AdvertisementSink>;
+
+        report(&announcement, source("192.0.2.10:5353"), &sink);
+
+        assert_eq!(
+            recording.advertisements(),
+            vec![("192.0.2.10:8631".to_owned(), Duration::from_secs(120))]
+        );
+        assert!(recording.withdrawals().is_empty());
     }
 }

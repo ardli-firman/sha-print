@@ -62,10 +62,10 @@ impl RuntimeService for ServerSharingService {
     }
 
     async fn run(&self, context: ServiceContext) -> Result<(), AppError> {
-        let queues = self.sharing.selected()?;
+        let printers = self.sharing.selected()?;
         let advertisement = match self
             .advertiser
-            .advertise(self.endpoint.port(), queues.as_slice())
+            .advertise(self.endpoint.port(), printers.as_slice())
             .await
         {
             Ok(advertisement) => Some(advertisement),
@@ -90,12 +90,12 @@ impl RuntimeService for ServerSharingService {
             Some(advertisement) => loop {
                 tokio::select! {
                     result = &mut serving => break result,
-                    // A change to the shared queues takes effect while sharing runs, exactly as it
-                    // does for the endpoint itself (ADR 0003).
+                    // A change to the shared printers takes effect while sharing runs, exactly as
+                    // it does for the endpoint itself (ADR 0003).
                     changed = selection.changed() => match changed {
                         Ok(()) => {
-                            let queues = selection.borrow_and_update().clone();
-                            if let Err(error) = advertisement.replace(queues.as_slice()).await {
+                            let printers = selection.borrow_and_update().clone();
+                            if let Err(error) = advertisement.replace(printers.as_slice()).await {
                                 log::warn!(
                                     "cannot update the discovery advertisement code={} message={}",
                                     error.code_str(),
@@ -170,12 +170,12 @@ mod tests {
 
     #[async_trait]
     impl Advertisement for FakeAdvertisement {
-        async fn replace(&self, queues: &[PrinterName]) -> Result<(), AppError> {
+        async fn replace(&self, printers: &[PrinterName]) -> Result<(), AppError> {
             self.recorded
                 .replaced
                 .lock()
                 .map_err(|_| AppError::internal("the recording lock is poisoned"))?
-                .push(queues.to_vec());
+                .push(printers.to_vec());
             Ok(())
         }
 
@@ -216,7 +216,7 @@ mod tests {
         async fn advertise(
             &self,
             port: u16,
-            queues: &[PrinterName],
+            printers: &[PrinterName],
         ) -> Result<Arc<dyn Advertisement>, AppError> {
             if self.unavailable {
                 return Err(AppError::internal("no discovery socket could be opened"));
@@ -225,7 +225,7 @@ mod tests {
                 .opened
                 .lock()
                 .map_err(|_| AppError::internal("the recording lock is poisoned"))?
-                .push((port, queues.to_vec()));
+                .push((port, printers.to_vec()));
             Ok(Arc::new(FakeAdvertisement {
                 recorded: Arc::clone(&self.recorded),
             }))
@@ -238,7 +238,7 @@ mod tests {
         advertiser: Arc<dyn ServerAdvertiser>,
     ) -> (RuntimeCoordinator, Arc<Sharing>, Arc<IppsServer>) {
         let catalog = Arc::new(FakeCatalog(
-            queues.iter().map(|name| name_of(name)).collect(),
+            queues.iter().map(|queue| name(queue)).collect(),
         ));
         let sharing = Arc::new(Sharing::new(catalog));
         let endpoint = Arc::new(IppsServer::new(
@@ -253,10 +253,6 @@ mod tests {
             advertiser,
         ))]);
         (runtime, sharing, endpoint)
-    }
-
-    fn name_of(value: &str) -> PrinterName {
-        PrinterName::parse(value).expect("a valid printer name")
     }
 
     /// Waits until `condition` holds, or fails the test.

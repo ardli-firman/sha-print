@@ -32,11 +32,20 @@ human-readable `name`, and one `queue` entry per shared queue. The advertisement
 1400 bytes, so a server sharing more queues than fit in one datagram still appears, and the endpoint
 returns the full, authoritative list once the user approves it.
 
-Withdrawing is the same answer with a zero lifetime: a browser drops the server immediately instead
-of waiting for a cache entry to age out. The advertisement exists exactly as long as sharing does —
-it is opened when sharing starts, follows the shared-queue selection, and is withdrawn when sharing
-stops. A machine whose advertisement cannot be opened still shares printers, because being reachable
-by address is the product's job and being discoverable is an addition; the failure is logged.
+Withdrawing is the same answer with a zero lifetime. It has to be *delivered*: a browsing client
+never joins the multicast group (it asks from its own port and only hears the reply), so a goodbye
+sent only to the group would be heard by nobody, and a stopped server would sit in every client's
+list until its advertisement aged out. A responder therefore remembers the sockets that asked
+recently, and sends the withdrawal back to each of them as well as to the group. Those browsers drop
+the server at once; anyone who joins the group instead hears the standard goodbye. The list is
+bounded, and the copy sent to the group keeps the advertisement conformant.
+
+The advertisement exists exactly as long as sharing does — it is opened when sharing starts, follows
+the shared-printer selection, and is withdrawn when sharing stops. A browser also bounds how long it
+keeps any advertisement, so a server that vanishes without a goodbye (a crash, a pulled cable) leaves
+the list within seconds rather than for the lifetime it once claimed. A machine whose advertisement
+cannot be opened still shares printers, because being reachable by address is the product's job and
+being discoverable is an addition; the failure is logged.
 
 ## Ports
 
@@ -52,9 +61,11 @@ browser will not find ShaPrint servers.
 The client connects to the address the answer arrived *from*, with the port the advertisement names
 in its `SRV` record. That address is reachable by construction, which matters more than resolving the
 advertised `.local` host name: name resolution through the operating system's multicast DNS resolver
-is optional on Windows and needs `nss-mdns` on Linux. For the same reason the client does not need
-an `A` record to be correct, and a multi-homed server cannot advertise an address the client cannot
-use.
+is optional on Windows and needs `nss-mdns` on Linux. The advertisement therefore carries no address
+record at all, and the reader ignores record types it does not interpret rather than trusting them.
+The address is also what identifies a nearby server: the list is keyed by it, so two servers that
+advertise the same label are two candidates a user reviews separately, which matches how saved
+approvals are keyed.
 
 Discovery does not cross subnets. Manual address entry stays in the UI next to the discovered list,
 and is the only path that works when the server is elsewhere.
@@ -71,8 +82,8 @@ a second prompt, and no discovery work runs elevated.
 
 - Mature multicast DNS implementations probe for name conflicts, suppress known answers, and
   re-announce. This responder does none of those: it answers the queries it hears, which is enough
-  for a browser that asks periodically. Two servers claiming one instance label are distinguished on
-  the client by the address and port the answer came from, not by the label.
+  for a browser that asks periodically. Nothing depends on the instance label being unique, because
+  a client keys what it found by address.
 - IPv4 only. IPv6, dual-stack, and a pinned interface are deferred with the rest of the Linux phase.
 - A server that also runs a client sees its own advertisement and lists itself. That is accurate
   rather than harmful, and filtering it out would need a machine-identity comparison the MVP does

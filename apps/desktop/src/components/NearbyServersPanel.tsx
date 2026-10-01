@@ -41,7 +41,7 @@ export function NearbyServersPanel({ nearby, connections }: NearbyServersPanelPr
       ) : (
         <ul className="nearby-list">
           {servers.map((server) => (
-            <li key={server.instance} data-nearby={server.address}>
+            <li key={server.address}>
               <div className="panel-header">
                 <div>
                   <strong>{server.name}</strong>

@@ -48,10 +48,9 @@ const runtimeWith = (
 });
 
 const nearbyWith = (...names: string[]): NearbyServers => ({
-  servers: names.map((name) => ({
-    instance: `${name}._shaprint-ipps._tcp.local.`,
+  servers: names.map((name, index) => ({
     name,
-    address: "192.0.2.10:8631",
+    address: `192.0.2.${10 + index}:8631`,
     printers: ["Zebra"],
   })),
 });
