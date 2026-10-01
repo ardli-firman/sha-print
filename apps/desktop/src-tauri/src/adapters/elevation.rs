@@ -274,7 +274,10 @@ mod windows {
     /// How the helper process ended.
     enum HelperWait {
         Exited(u32),
-        TimedOut,
+        /// The helper overstayed its deadline; `terminated` says whether Windows ended it.
+        TimedOut {
+            terminated: bool,
+        },
         Unreported,
     }
 
@@ -333,10 +336,7 @@ mod windows {
                 super::classify_exit_code(code as i32),
                 format!("the setup helper exited with code {code}"),
             )),
-            HelperWait::TimedOut => Err(SetupFailure::new(
-                SetupFailureKind::TimedOut,
-                "the setup helper was still running after its deadline and was terminated",
-            )),
+            HelperWait::TimedOut { terminated } => Err(super::timed_out_failure(terminated)),
             HelperWait::Unreported => Err(SetupFailure::new(
                 SetupFailureKind::Other,
                 "the setup helper did not report a result",
@@ -363,8 +363,12 @@ mod windows {
         let waited = unsafe { WaitForSingleObject(process, HELPER_TIMEOUT_MILLIS) };
         if waited == WAIT_TIMEOUT {
             // Safety: `process` is a live handle to the helper we started.
-            unsafe { TerminateProcess(process, 1) };
-            return HelperWait::TimedOut;
+            //
+            // The app runs unelevated while the helper runs elevated, and Windows integrity control
+            // refuses write access to a higher-integrity process, so ending it can legitimately
+            // fail. Report what actually happened rather than claiming the helper was stopped.
+            let terminated = unsafe { TerminateProcess(process, 1) } != 0;
+            return HelperWait::TimedOut { terminated };
         }
         if waited != WAIT_OBJECT_0 {
             return HelperWait::Unreported;
@@ -508,6 +512,26 @@ mod windows {
 #[cfg(any(windows, test))]
 fn classify_exit_code(code: i32) -> SetupFailureKind {
     SetupFailureKind::from_exit_code(code).unwrap_or(SetupFailureKind::Other)
+}
+
+/// The failure to report when the helper overstayed its deadline.
+///
+/// Ending an elevated process from an unelevated one is not guaranteed, so the message says which
+/// of the two happened: a helper that could not be stopped may still finish the install it was
+/// asked for, and the user should not be told otherwise.
+#[cfg(any(windows, test))]
+fn timed_out_failure(terminated: bool) -> SetupFailure {
+    if terminated {
+        SetupFailure::new(
+            SetupFailureKind::TimedOut,
+            "the setup helper was still running after its deadline and was terminated",
+        )
+    } else {
+        SetupFailure::new(
+            SetupFailureKind::TimedOut,
+            "the setup helper was still running after its deadline and could not be terminated; it may still be running",
+        )
+    }
 }
 
 #[cfg(test)]
@@ -684,6 +708,22 @@ mod tests {
         // A crash or an unclassified code must still produce advice.
         assert_eq!(classify_exit_code(2), SetupFailureKind::Other);
         assert_eq!(classify_exit_code(-1073741819), SetupFailureKind::Other);
+    }
+
+    #[test]
+    fn a_helper_that_could_not_be_stopped_says_so() {
+        // Ending an elevated process from an unelevated one can fail; the message must not claim a
+        // termination that did not happen.
+        let terminated = timed_out_failure(true);
+        assert_eq!(terminated.kind(), SetupFailureKind::TimedOut);
+        assert!(terminated.detail().contains("and was terminated"));
+        assert!(!terminated.detail().contains("could not be terminated"));
+
+        let survived = timed_out_failure(false);
+        assert_eq!(survived.kind(), SetupFailureKind::TimedOut);
+        assert!(survived.detail().contains("could not be terminated"));
+        assert!(survived.detail().contains("may still be running"));
+        assert_ne!(terminated.detail(), survived.detail());
     }
 
     #[test]

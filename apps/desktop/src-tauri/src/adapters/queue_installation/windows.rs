@@ -120,11 +120,23 @@ impl QueueInstaller for WindowsQueueInstaller {
         if output.status.success() {
             return Ok(());
         }
-        Err(SetupFailure::new(
-            SetupFailureKind::Other,
-            format!("{PROGRAM} exited with {}", output.status),
+        Err(unreported_failure(
+            output.status,
+            &String::from_utf8_lossy(&output.stderr),
         ))
     }
+}
+
+/// The failure to report when the script produced no recognisable token.
+///
+/// PowerShell can die before it prints one — a syntactically fine script that hits an unexpected
+/// terminating error still leaves its own explanation on standard error, and dropping it would leave
+/// the caller with an exit code and nothing to diagnose.
+fn unreported_failure(status: impl std::fmt::Display, stderr: &str) -> SetupFailure {
+    SetupFailure::new(
+        SetupFailureKind::Other,
+        format!("{PROGRAM} exited with {status}: {}", detail(stderr)),
+    )
 }
 
 /// Reads the failure kind the script reported on standard output.
@@ -264,6 +276,21 @@ mod tests {
         assert_eq!(detail(" boom \n"), "boom");
         let long = detail(&"x".repeat(MAX_DETAIL * 2));
         assert_eq!(long.chars().count(), MAX_DETAIL);
+    }
+
+    #[test]
+    fn an_unclassified_exit_keeps_powershells_own_diagnostic() {
+        // Without a token the exit code alone says nothing; the stderr text is the only clue left.
+        let failure = unreported_failure(
+            "exit code: 1",
+            "  The term 'Add-Printer' is not recognized\n",
+        );
+
+        assert_eq!(failure.kind(), SetupFailureKind::Other);
+        assert!(failure.detail().contains("exit code: 1"));
+        assert!(failure
+            .detail()
+            .contains("The term 'Add-Printer' is not recognized"));
     }
 
     #[test]
