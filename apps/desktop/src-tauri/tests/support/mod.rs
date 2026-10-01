@@ -21,7 +21,9 @@ use tokio_rustls::TlsConnector;
 use shaprint_desktop::adapters::discovery::MdnsAdvertiser;
 use shaprint_desktop::adapters::ipps::NetworkChannel;
 use shaprint_desktop::adapters::{IppsServer, ServerIdentity, ServerSharingService};
-use shaprint_desktop::application::{LocalPrinterCatalog, PrintJob, PrintJobSubmitter, Sharing};
+use shaprint_desktop::application::{
+    LocalPrinterCatalog, PrintFailures, PrintJob, PrintJobSubmitter, Sharing,
+};
 use shaprint_desktop::domain::{AppError, PrinterName};
 
 /// A catalog over a fixed set of queues, standing in for the Windows spooler.
@@ -87,6 +89,7 @@ pub fn sharing_runtime_on(queues: &[&str], port: u16) -> (Arc<Sharing>, Arc<Ipps
         Arc::new(identity),
         Arc::new(NetworkChannel::in_memory()),
         Arc::new(UnavailableSubmitter),
+        Arc::new(PrintFailures::new()),
     ));
     (sharing, endpoint)
 }

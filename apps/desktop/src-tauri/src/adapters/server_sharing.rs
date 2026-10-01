@@ -134,7 +134,8 @@ mod tests {
     use crate::adapters::identity::ServerIdentity;
     use crate::adapters::ipps::NetworkChannel;
     use crate::application::{
-        Advertisement, LocalPrinterCatalog, PrintJob, PrintJobSubmitter, RuntimeCoordinator,
+        Advertisement, LocalPrinterCatalog, PrintFailures, PrintJob, PrintJobSubmitter,
+        RuntimeCoordinator,
     };
     use crate::domain::{PrinterName, ServiceState};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -271,6 +272,7 @@ mod tests {
             Arc::new(ServerIdentity::generate().expect("generates")),
             Arc::new(NetworkChannel::in_memory()),
             Arc::new(UnavailableSubmitter),
+            Arc::new(PrintFailures::new()),
         ));
         let runtime = RuntimeCoordinator::new(vec![Arc::new(ServerSharingService::new(
             Arc::clone(&sharing),
@@ -330,6 +332,7 @@ mod tests {
             identity,
             Arc::new(NetworkChannel::in_memory()),
             Arc::new(UnavailableSubmitter),
+            Arc::new(PrintFailures::new()),
         ));
         let (advertiser, _recorded) = FakeAdvertiser::available();
         (

@@ -11,8 +11,12 @@ pub mod discovery;
 pub mod elevation;
 pub mod identity;
 pub mod ipps;
+pub mod legacy;
 pub mod printers;
 mod server_sharing;
+pub mod startup;
+#[cfg(windows)]
+pub(crate) mod win_crypto;
 
 pub use client_proxy::{client_queue_uri, ClientProxyService, CLIENT_PROXY_DEFAULT_PORT};
 pub use elevation::SystemElevation;

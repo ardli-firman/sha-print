@@ -29,6 +29,12 @@ export const ERROR_CODES = [
   "invalid-state",
   "timeout",
   "unsupported",
+  "server-unavailable",
+  "server-untrusted",
+  "server-identity-changed",
+  "not-authorized",
+  "printer-not-shared",
+  "queue-unavailable",
   "internal",
 ] as const;
 
@@ -38,6 +44,23 @@ export type ErrorCode = (typeof ERROR_CODES)[number];
 export interface AppError {
   code: ErrorCode;
   message: string;
+}
+
+/** Which print path reported a failure. */
+export type PrintFailurePath = "client-forwarding" | "server-submission";
+
+/** A print attempt that failed, with the one action that resolves it. */
+export interface PrintFailure {
+  /** The path that failed: forwarding from this computer, or submitting to a server queue. */
+  path: PrintFailurePath;
+  /** Stable code for the condition, for example `server-unavailable`. */
+  code: ErrorCode;
+  /** What happened; never contains the Network Channel or document contents. */
+  message: string;
+  /** The next action for the user. */
+  recovery: string;
+  /** When the failure was observed, as milliseconds since the Unix epoch. */
+  observed_at_ms: number;
 }
 
 /** One local printer queue and whether the server shares it. */

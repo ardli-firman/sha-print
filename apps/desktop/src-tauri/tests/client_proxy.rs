@@ -3,6 +3,9 @@
 
 mod support;
 
+// `Command`, the two ports, and the tokio time helpers are only used by the Windows-only smoke
+// test below, so they are gated with it instead of warning on every other platform.
+#[cfg(windows)]
 use std::process::Command;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -17,17 +20,20 @@ use shaprint_desktop::adapters::{
     ServerIdentity,
 };
 use shaprint_desktop::application::{
-    DuplexMode, PrintJob, PrintJobSubmitter, RuntimeCoordinator, Sharing,
+    DuplexMode, PrintFailures, PrintJob, PrintJobSubmitter, RuntimeCoordinator, Sharing,
 };
-use shaprint_desktop::domain::{AppError, PrinterName, ServiceId};
+use shaprint_desktop::domain::{AppError, ErrorCode, JobPath, PrinterName, ServiceId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+#[cfg(windows)]
 use tokio::time::{timeout, Duration};
 
 use support::{get_printer_attributes, temporary_directory, FakeCatalog};
 
 const SERVER_QUEUE: &str = "Office Printer";
+#[cfg(windows)]
 const NATIVE_SMOKE_SERVER_PORT: u16 = 8631;
+#[cfg(windows)]
 const NATIVE_SMOKE_PROXY_PORT: u16 = 8632;
 
 fn channel_secret() -> String {
@@ -66,6 +72,7 @@ struct RunningPair {
     client: Arc<RuntimeCoordinator>,
     server: Arc<RuntimeCoordinator>,
     proxy: Arc<ClientProxyService>,
+    failures: Arc<PrintFailures>,
     server_address: String,
     submitter: Arc<FakeSubmitter>,
 }
@@ -99,6 +106,7 @@ impl RunningPair {
             Arc::new(ServerIdentity::generate().expect("creates server identity")),
             server_channel,
             submitter.clone(),
+            Arc::new(PrintFailures::new()),
         ));
         let server = Arc::new(RuntimeCoordinator::new(vec![Arc::new(
             support::sharing_service(sharing, endpoint.clone()),
@@ -132,9 +140,13 @@ impl RunningPair {
             .configure(&client_channel_value)
             .await
             .expect("configures client Network Channel");
+        // The proxy reports what it could not forward here, so a test can read the same surface the
+        // window shows (#39).
+        let failures = Arc::new(PrintFailures::new());
         let proxy = Arc::new(ClientProxyService::with_port(
             client_connections.clone(),
             client_channel.clone(),
+            Arc::clone(&failures),
             proxy_port,
         ));
         let client = Arc::new(RuntimeCoordinator::new(vec![proxy.clone()]));
@@ -146,6 +158,7 @@ impl RunningPair {
             client,
             server,
             proxy,
+            failures,
             server_address: format!("127.0.0.1:{}", server_address.port()),
             submitter,
         }
@@ -313,6 +326,8 @@ async fn print_job_from_a_native_queue_reaches_the_selected_server_printer() {
         );
         assert_eq!(submissions[0].1.settings().copies, Some(3));
     }
+    // A job that reached the queue is not a failure the user has to act on.
+    assert_eq!(pair.failures.latest(), None);
     pair.stop().await;
 }
 
@@ -333,6 +348,40 @@ async fn proxy_forwards_a_wrong_network_channel_as_an_authorization_failure() {
         .lock()
         .expect("reads submitted jobs")
         .is_empty());
+
+    let failure = pair.failures.latest().expect("reports the failure");
+    assert_eq!(failure.path(), JobPath::ClientForwarding);
+    assert_eq!(failure.code(), ErrorCode::NotAuthorized);
+    assert_eq!(failure.code().as_str(), "not-authorized");
+    assert_eq!(
+        failure.message(),
+        "The job for 'Office Printer' was rejected because the Network Channel is missing or incorrect."
+    );
+    assert!(failure.recovery().contains("Network Channel"));
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn a_print_job_whose_server_is_unreachable_is_reported_with_a_recovery_action() {
+    let pair = RunningPair::start(true).await;
+    pair.server
+        .stop(ServiceId::ServerSharing)
+        .await
+        .expect("stops the server IPPS endpoint");
+    let proxy_address = pair.proxy_address();
+    let uri = local_printer_uri(&proxy_address, &pair.server_address);
+
+    let (http_status, _response) =
+        submit_to_local_queue(&proxy_address, &uri, &document_bytes()).await;
+
+    assert_eq!(http_status, 200);
+    let failure = pair.failures.latest().expect("reports the failure");
+    assert_eq!(failure.path(), JobPath::ClientForwarding);
+    assert_eq!(failure.code(), ErrorCode::ServerUnavailable);
+    assert!(failure.message().contains(SERVER_QUEUE));
+    assert!(failure
+        .recovery()
+        .contains("Check that ShaPrint is running on the server"));
     pair.stop().await;
 }
 

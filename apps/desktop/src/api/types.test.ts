@@ -31,4 +31,17 @@ describe("IPC error mapping", () => {
     expect(isErrorCode(7)).toBe(false);
     expect(isErrorCode(null)).toBe(false);
   });
+
+  it("keeps the print-path codes a failure report can carry", () => {
+    for (const code of [
+      "server-unavailable",
+      "server-untrusted",
+      "server-identity-changed",
+      "not-authorized",
+      "printer-not-shared",
+      "queue-unavailable",
+    ] as const) {
+      expect(isErrorCode(code)).toBe(true);
+    }
+  });
 });

@@ -1,3 +1,4 @@
+import { printRecovery } from "../api/availability";
 import type { ServiceId, ServiceState, ServiceStatus } from "../api/types";
 
 /** User-facing name and purpose of each supervised service. */
@@ -44,6 +45,9 @@ interface ServiceStatusCardProps {
 export function ServiceStatusCard({ service, busy, onStart, onStop }: ServiceStatusCardProps) {
   const label = SERVICE_LABELS[service.id];
   const controls = CONTROLS[service.state];
+  // A print path that is not running is why a job may not proceed; say so and name the fix here,
+  // where the Start button already is.
+  const recovery = printRecovery(service);
 
   return (
     <section className="service" data-service={service.id} data-state={service.state}>
@@ -58,6 +62,13 @@ export function ServiceStatusCard({ service, busy, onStart, onStop }: ServiceSta
       </header>
 
       {service.detail ? <p className="service-detail">{service.detail}</p> : null}
+
+      {recovery ? (
+        <p className="service-recovery" role="status">
+          <span className="service-recovery-label">Printing affected</span>
+          {recovery}
+        </p>
+      ) : null}
 
       <div className="service-actions">
         <button type="button" onClick={onStart} disabled={busy || !controls.canStart}>

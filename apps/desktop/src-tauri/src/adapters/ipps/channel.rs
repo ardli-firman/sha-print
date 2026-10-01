@@ -1,5 +1,6 @@
 //! Durable Network Channel storage for server authorization and the local client proxy.
 
+use async_trait::async_trait;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -9,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use tokio::sync::Mutex;
 
+use crate::application::ChannelStore;
 use crate::domain::AppError;
 
 const VERIFIER_FILE: &str = "network-channel-verifier.json";
@@ -229,76 +231,18 @@ fn decode_secret(encoded: &str) -> Result<String, AppError> {
 
 #[cfg(windows)]
 fn protect_data(value: &[u8]) -> Result<Vec<u8>, AppError> {
-    use std::{ptr, slice};
-    use windows_sys::Win32::{
-        Foundation::LocalFree,
-        Security::Cryptography::{CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB},
-    };
-
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: value.len() as u32,
-        pbData: value.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    let protected = unsafe {
-        CryptProtectData(
-            &input,
-            ptr::null(),
-            ptr::null(),
-            ptr::null(),
-            ptr::null(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-    };
-    if protected == 0 {
-        return Err(AppError::internal(
-            "Windows could not protect the Network Channel for the local proxy.",
-        ));
-    }
-    let result = unsafe { slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
-    unsafe {
-        LocalFree(output.pbData.cast());
-    }
-    Ok(result)
+    crate::adapters::win_crypto::protect(value, None).map_err(|_| {
+        AppError::internal("Windows could not protect the Network Channel for the local proxy.")
+    })
 }
 
 #[cfg(windows)]
 fn unprotect_data(value: &[u8]) -> Result<Vec<u8>, AppError> {
-    use std::{ptr, slice};
-    use windows_sys::Win32::{
-        Foundation::LocalFree,
-        Security::Cryptography::{
-            CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
-        },
-    };
-
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: value.len() as u32,
-        pbData: value.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    let unprotected = unsafe {
-        CryptUnprotectData(
-            &input,
-            ptr::null_mut(),
-            ptr::null(),
-            ptr::null(),
-            ptr::null(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-    };
-    if unprotected == 0 {
-        return Err(AppError::internal(
+    crate::adapters::win_crypto::unprotect(value, None).map_err(|_| {
+        AppError::internal(
             "Windows could not open the protected Network Channel for the local proxy.",
-        ));
-    }
-    let result = unsafe { slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
-    unsafe {
-        LocalFree(output.pbData.cast());
-    }
-    Ok(result)
+        )
+    })
 }
 
 impl std::fmt::Debug for NetworkChannel {
@@ -307,5 +251,17 @@ impl std::fmt::Debug for NetworkChannel {
             .debug_struct("NetworkChannel")
             .field("configured", &self.is_configured())
             .finish()
+    }
+}
+
+/// The import from the previous ShaPrint app stores the channel exactly as the user would (#41).
+#[async_trait]
+impl ChannelStore for NetworkChannel {
+    fn is_configured(&self) -> bool {
+        NetworkChannel::is_configured(self)
+    }
+
+    async fn store(&self, channel: &str) -> Result<(), AppError> {
+        self.configure(channel).await.map(|_| ())
     }
 }

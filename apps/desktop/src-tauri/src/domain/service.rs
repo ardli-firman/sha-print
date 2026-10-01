@@ -1,6 +1,6 @@
 //! Service identity, lifecycle states, and the status snapshot the shell publishes to the UI.
 
-use crate::domain::{AppError, ErrorCode};
+use crate::domain::{sanitize_text, AppError, ErrorCode};
 
 /// Longest status detail the shell publishes; longer text is truncated.
 const DETAIL_LIMIT: usize = 120;
@@ -157,7 +157,7 @@ impl ServiceStatus {
     /// Replaces the detail, stripping control characters and truncating long text so a single
     /// misbehaving service cannot corrupt UI rendering or log lines.
     pub(crate) fn set_detail(&mut self, detail: &str) {
-        self.detail = sanitize_detail(detail);
+        self.detail = sanitize_text(detail, DETAIL_LIMIT);
     }
 }
 
@@ -178,28 +178,6 @@ impl RuntimeStatus {
 
     pub fn service(&self, id: ServiceId) -> Option<&ServiceStatus> {
         self.services.iter().find(|status| status.id == id)
-    }
-}
-
-fn sanitize_detail(detail: &str) -> String {
-    let mut cleaned = String::with_capacity(detail.len().min(DETAIL_LIMIT));
-    let mut truncated = false;
-    for character in detail.chars() {
-        if cleaned.len() + character.len_utf8() > DETAIL_LIMIT {
-            truncated = true;
-            break;
-        }
-        if character.is_control() {
-            cleaned.push(' ');
-        } else {
-            cleaned.push(character);
-        }
-    }
-    let cleaned = cleaned.trim();
-    if truncated {
-        format!("{cleaned}…")
-    } else {
-        cleaned.to_owned()
     }
 }
 

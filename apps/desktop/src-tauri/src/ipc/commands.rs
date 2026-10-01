@@ -15,10 +15,13 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::adapters::IppsServer;
-use crate::application::{RuntimeCoordinator, Setup, SetupOutcome, Sharing};
+use crate::application::{
+    LegacyImport, PrintFailures, RuntimeCoordinator, Setup, SetupOutcome, Sharing, Startup,
+};
 use crate::domain::{AppError, PrinterName, ServiceId, SetupAction};
 use crate::ipc::dto::{
-    AppErrorDto, LocalPrintersDto, RuntimeStatusDto, ServerIdentityDto, SetupOutcomeDto,
+    AppErrorDto, LegacyImportReportDto, LocalPrintersDto, PrintFailureDto, RuntimeStatusDto,
+    ServerIdentityDto, SetupOutcomeDto, StartupStatusDto,
 };
 
 /// Runtime state shared by every command.
@@ -33,6 +36,15 @@ pub type SharedEndpoint = Arc<IppsServer>;
 /// Setup actions that may need administrator permission.
 pub type SharedSetup = Arc<Setup>;
 
+/// The latest failed print attempt, as the window reports it.
+pub type SharedPrintFailures = Arc<PrintFailures>;
+
+/// Whether ShaPrint starts with Windows, and the one action that changes it.
+pub type SharedStartup = Arc<Startup>;
+
+/// Moving supported settings from the previous .NET ShaPrint application.
+pub type SharedLegacyImport = Arc<LegacyImport>;
+
 /// Returns the current status of every supervised service.
 #[tauri::command]
 pub async fn get_runtime_status(
@@ -40,6 +52,25 @@ pub async fn get_runtime_status(
 ) -> Result<RuntimeStatusDto, AppErrorDto> {
     log::info!("command=get_runtime_status");
     Ok(RuntimeStatusDto::from(&runtime.status()))
+}
+
+/// Returns the latest print failure, or `null` when none is outstanding.
+#[tauri::command]
+pub async fn get_print_failures(
+    failures: State<'_, SharedPrintFailures>,
+) -> Result<Option<PrintFailureDto>, AppErrorDto> {
+    log::info!("command=get_print_failures");
+    Ok(failures.latest().as_ref().map(PrintFailureDto::from))
+}
+
+/// Dismisses the latest print failure and returns the resulting surface.
+#[tauri::command]
+pub async fn dismiss_print_failure(
+    failures: State<'_, SharedPrintFailures>,
+) -> Result<Option<PrintFailureDto>, AppErrorDto> {
+    log::info!("command=dismiss_print_failure");
+    failures.clear();
+    Ok(failures.latest().as_ref().map(PrintFailureDto::from))
 }
 
 /// Starts one service and returns the resulting status.
@@ -62,6 +93,59 @@ pub async fn stop_service(
     apply(&runtime, &id, Action::Stop)
         .await
         .map_err(|error| AppErrorDto::from(&error))
+}
+
+/// Reports what the previous ShaPrint app left, and what this app took from it.
+///
+/// The last import this app ran wins; before any import this describes what one would do. No
+/// payload carries the Network Channel itself.
+#[tauri::command]
+pub async fn get_legacy_import_report(
+    legacy: State<'_, SharedLegacyImport>,
+) -> Result<LegacyImportReportDto, AppErrorDto> {
+    let legacy = Arc::clone(legacy.inner());
+    // Reading the previous app's files, and opening its protected channel, are synchronous Windows
+    // calls, so they stay off the async runtime.
+    let report = tauri::async_runtime::spawn_blocking(move || match legacy.report() {
+        Some(report) => Ok(report),
+        None => legacy.inspect(),
+    })
+    .await
+    .map_err(|error| {
+        AppErrorDto::from(&AppError::internal(format!(
+            "the previous app's settings could not be read: {error}"
+        )))
+    })?
+    .map_err(|error| AppErrorDto::from(&error))?;
+
+    log::info!(
+        "command=get_legacy_import_report found={} channel={}",
+        report.found,
+        report.channel.as_str()
+    );
+    Ok(LegacyImportReportDto::from(&report))
+}
+
+/// Runs the import again and returns what it did. Importing twice changes nothing.
+#[tauri::command]
+pub async fn import_legacy_settings(
+    legacy: State<'_, SharedLegacyImport>,
+) -> Result<LegacyImportReportDto, AppErrorDto> {
+    let legacy = Arc::clone(legacy.inner());
+    let report = legacy.apply().await.map_err(|error| {
+        log::warn!(
+            "command=import_legacy_settings code={} message={}",
+            error.code_str(),
+            error
+        );
+        AppErrorDto::from(&error)
+    })?;
+    log::info!(
+        "command=import_legacy_settings found={} channel={}",
+        report.found,
+        report.channel.as_str()
+    );
+    Ok(LegacyImportReportDto::from(&report))
 }
 
 /// Lists the local printer queues and which of them the server shares.
@@ -125,6 +209,60 @@ pub async fn get_server_identity(
         fingerprint: endpoint.fingerprint().to_string(),
         port: endpoint.port(),
     })
+}
+
+/// Reports whether ShaPrint starts with this user's Windows login.
+#[tauri::command]
+pub async fn get_startup_status(
+    startup: State<'_, SharedStartup>,
+) -> Result<StartupStatusDto, AppErrorDto> {
+    let startup = Arc::clone(startup.inner());
+    // Reading the registration is a synchronous Windows API, so it stays off the async runtime.
+    let status = tauri::async_runtime::spawn_blocking(move || startup.status())
+        .await
+        .map_err(|error| {
+            AppErrorDto::from(&AppError::internal(format!(
+                "the startup check did not finish: {error}"
+            )))
+        })?;
+    log::info!(
+        "command=get_startup_status supported={} enabled={}",
+        status.supported,
+        status.enabled
+    );
+    Ok(StartupStatusDto::from(&status))
+}
+
+/// Turns starting with Windows on or off and returns the resulting state.
+#[tauri::command]
+pub async fn set_startup_enabled(
+    enabled: bool,
+    startup: State<'_, SharedStartup>,
+) -> Result<StartupStatusDto, AppErrorDto> {
+    let startup = Arc::clone(startup.inner());
+    // The registration write is a synchronous Windows API, so it stays off the async runtime.
+    let outcome = tauri::async_runtime::spawn_blocking(move || startup.set_enabled(enabled))
+        .await
+        .map_err(|error| {
+            AppErrorDto::from(&AppError::internal(format!(
+                "the startup change did not finish: {error}"
+            )))
+        })?;
+
+    match outcome {
+        Ok(status) => {
+            log::info!("command=set_startup_enabled enabled={}", status.enabled);
+            Ok(StartupStatusDto::from(&status))
+        }
+        Err(error) => {
+            log::warn!(
+                "command=set_startup_enabled code={} message={}",
+                error.code_str(),
+                error
+            );
+            Err(AppErrorDto::from(&error))
+        }
+    }
 }
 
 /// Lets clients reach the sharing endpoint through the Windows firewall.

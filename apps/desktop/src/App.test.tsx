@@ -4,9 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import * as discovery from "./api/discovery";
 import * as ipc from "./api/ipc";
+import * as legacyApi from "./api/legacyImport";
+import type { LegacyImportReport } from "./api/legacyImport";
 import * as networkChannel from "./api/networkChannel";
+import * as printFailures from "./api/printFailures";
 import * as serverConnections from "./api/serverConnections";
-import type { LocalPrinters, NearbyServers, RuntimeStatus, ServerIdentity } from "./api/types";
+import * as startupApi from "./api/startup";
+import type {
+  LocalPrinters,
+  NearbyServers,
+  PrintFailure,
+  RuntimeStatus,
+  ServerIdentity,
+} from "./api/types";
 
 vi.mock("./api/ipc", () => ({
   RUNTIME_STATUS_EVENT: "runtime://status",
@@ -35,6 +45,25 @@ vi.mock("./api/discovery", () => ({
   NEARBY_SERVERS_EVENT: "discovery://servers",
   listNearbyServers: vi.fn(),
   onNearbyServers: vi.fn(),
+}));
+
+vi.mock("./api/printFailures", () => ({
+  PRINT_FAILURE_EVENT: "runtime://print-failure",
+  getPrintFailures: vi.fn(),
+  dismissPrintFailure: vi.fn(),
+  onPrintFailure: vi.fn(),
+}));
+
+vi.mock("./api/startup", () => ({
+  getStartupStatus: vi.fn(),
+  setStartupEnabled: vi.fn(),
+}));
+
+vi.mock("./api/legacyImport", () => ({
+  LEGACY_IMPORT_EVENT: "legacy://import",
+  getLegacyImportReport: vi.fn(),
+  importLegacySettings: vi.fn(),
+  onLegacyImport: vi.fn(),
 }));
 
 const runtimeWith = (
@@ -102,7 +131,54 @@ beforeEach(() => {
   vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(false);
   vi.mocked(discovery.listNearbyServers).mockResolvedValue({ servers: [] });
   vi.mocked(discovery.onNearbyServers).mockResolvedValue(() => {});
+  vi.mocked(printFailures.getPrintFailures).mockResolvedValue(null);
+  vi.mocked(printFailures.onPrintFailure).mockResolvedValue(() => {});
+  vi.mocked(startupApi.getStartupStatus).mockResolvedValue({
+    supported: true,
+    enabled: true,
+    command: '"C:\\Program Files\\ShaPrint\\shaprint-desktop.exe" --background',
+  });
+  vi.mocked(legacyApi.getLegacyImportReport).mockResolvedValue({
+    found: false,
+    channel: "absent",
+    channel_note:
+      "The previous ShaPrint app had no Network Channel of its own. Set one here before clients can print.",
+    settings: [],
+    queues_need_reselection: false,
+  });
+  vi.mocked(legacyApi.onLegacyImport).mockResolvedValue(() => {});
 });
+
+/** A computer that had the previous .NET app installed. */
+const LEGACY_REPORT: LegacyImportReport = {
+  found: true,
+  channel: "imported",
+  channel_note: "Your Network Channel was imported from the previous ShaPrint app.",
+  settings: [
+    {
+      key: "auto-update",
+      label: "Automatic updates",
+      reason: "This app does not update itself yet.",
+    },
+    {
+      key: "client-queues",
+      label: "Installed client printers",
+      reason:
+        "Printer queues are installed again from this app; the previous app's queues are not activated.",
+    },
+  ],
+  queues_need_reselection: true,
+};
+
+const FAILURE: PrintFailure = {
+  path: "server-submission",
+  code: "queue-unavailable",
+  message:
+    "The job for 'Office Printer' could not be submitted to the Windows printer queue.",
+  recovery:
+    "Check that the printer is switched on and reachable from this computer, then print again.",
+  observed_at_ms: Date.UTC(2026, 0, 2, 3, 4, 5),
+};
 
 describe("runtime status panel", () => {
   it("shows the live state of the proxy and sharing services", async () => {
@@ -179,6 +255,84 @@ describe("runtime status panel", () => {
 
     const hint = await screen.findByText(/runtime is not reachable/i);
     expect(hint).toBeTruthy();
+  });
+
+  it("names the recovery action while a print path is not doing its job", async () => {
+    let publish: ((status: RuntimeStatus) => void) | undefined;
+    vi.mocked(ipc.onRuntimeStatus).mockImplementation(async (handler) => {
+      publish = handler;
+      return () => {};
+    });
+    const { container } = render(<App />);
+
+    await waitFor(() => expect(publish).toBeDefined());
+
+    // The client proxy is the always-on print path: while it is stopped, its card says what to
+    // start. Server sharing is off by default, so a stopped sharing service is not reported.
+    publish?.(runtimeWith("stopped", "stopped"));
+    await waitFor(() =>
+      expect(serviceCard(container, "client-proxy").textContent).toContain("Printing affected"),
+    );
+    expect(serviceCard(container, "client-proxy").textContent).toContain("Start the client proxy");
+    expect(serviceCard(container, "server-sharing").textContent).not.toContain("Printing affected");
+
+    // A failure is worth reporting wherever it happens.
+    publish?.(runtimeWith("running", "failed"));
+    await waitFor(() =>
+      expect(serviceCard(container, "server-sharing").textContent).toContain("Printing affected"),
+    );
+    expect(serviceCard(container, "server-sharing").textContent).toContain("use Start to try again");
+    expect(serviceCard(container, "client-proxy").textContent).not.toContain("Printing affected");
+  });
+});
+
+describe("print problems panel", () => {
+  it("shows the stable code, the problem, and the next step", async () => {
+    vi.mocked(printFailures.getPrintFailures).mockResolvedValue(FAILURE);
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Print problems" });
+    expect(await within(panel).findByText(FAILURE.message)).toBeTruthy();
+    expect(within(panel).getByText("queue-unavailable")).toBeTruthy();
+    expect(within(panel).getByText(FAILURE.recovery)).toBeTruthy();
+    expect(within(panel).getByText("Submitting the job to the printer queue")).toBeTruthy();
+  });
+
+  it("follows the failures the shell publishes", async () => {
+    let publish: ((failure: PrintFailure | null) => void) | undefined;
+    vi.mocked(printFailures.onPrintFailure).mockImplementation(async (handler) => {
+      publish = handler;
+      return () => {};
+    });
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Print problems" });
+    await waitFor(() => expect(publish).toBeDefined());
+    publish?.({ ...FAILURE, path: "client-forwarding", code: "server-unavailable" });
+
+    expect(await within(panel).findByText("server-unavailable")).toBeTruthy();
+    expect(within(panel).getByText("Sending the job to the server")).toBeTruthy();
+  });
+
+  it("dismisses a failure and returns to the calm state", async () => {
+    vi.mocked(printFailures.getPrintFailures).mockResolvedValue(FAILURE);
+    vi.mocked(printFailures.dismissPrintFailure).mockResolvedValue(null);
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Print problems" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Dismiss" }));
+
+    await waitFor(() => expect(printFailures.dismissPrintFailure).toHaveBeenCalledTimes(1));
+    expect(await within(panel).findByText(/No print problems reported/i)).toBeTruthy();
+    expect(within(panel).queryByText(FAILURE.message)).toBeNull();
+  });
+
+  it("says nothing is wrong before a job fails", async () => {
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Print problems" });
+    expect(within(panel).getByText(/No print problems reported/i)).toBeTruthy();
+    expect(within(panel).queryByRole("button", { name: "Dismiss" })).toBeNull();
   });
 });
 
@@ -403,5 +557,116 @@ describe("nearby servers panel", () => {
     // The manual path is untouched by an empty discovery list.
     expect(screen.getByLabelText("Server address")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Inspect certificate" })).toBeTruthy();
+  });
+});
+
+describe("startup panel", () => {
+  it("reports that ShaPrint starts with the user's login and how to quit it", async () => {
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Startup" });
+    const toggle = (await within(panel).findByLabelText(
+      /Start ShaPrint when I sign in to Windows/,
+    )) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    expect(panel.textContent).toContain("shaprint-desktop.exe");
+    expect(panel.textContent).toContain("Quit ShaPrint");
+  });
+
+  it("turns login startup off without asking for administrator permission", async () => {
+    vi.mocked(startupApi.setStartupEnabled).mockResolvedValue({
+      supported: true,
+      enabled: false,
+      command: '"C:\\Program Files\\ShaPrint\\shaprint-desktop.exe" --background',
+    });
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Startup" });
+    const toggle = (await within(panel).findByLabelText(
+      /Start ShaPrint when I sign in to Windows/,
+    )) as HTMLInputElement;
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(startupApi.setStartupEnabled).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(toggle.checked).toBe(false));
+    // Enabling or disabling login startup never elevates.
+    expect(ipc.allowSharingAccess).not.toHaveBeenCalled();
+  });
+
+  it("says when this platform cannot register login startup", async () => {
+    vi.mocked(startupApi.getStartupStatus).mockResolvedValue({
+      supported: false,
+      enabled: false,
+      command: "",
+    });
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Startup" });
+    expect(
+      await within(panel).findByText(/Starting ShaPrint at login is available on Windows/i),
+    ).toBeTruthy();
+    expect(
+      within(panel).queryByLabelText(/Start ShaPrint when I sign in to Windows/),
+    ).toBeNull();
+  });
+});
+
+describe("previous app panel", () => {
+  it("reports the Network Channel it took and asks for the printers again", async () => {
+    vi.mocked(legacyApi.getLegacyImportReport).mockResolvedValue(LEGACY_REPORT);
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Previous ShaPrint app" });
+    expect(await within(panel).findByText(LEGACY_REPORT.channel_note)).toBeTruthy();
+    expect(within(panel).getByText(/Network Channel: Imported/)).toBeTruthy();
+    // The previous app's queues are never activated: the user selects them again here.
+    expect(within(panel).getByTestId("reselect-queues").textContent).toContain(
+      "Select your printers again",
+    );
+    expect(within(panel).getByText("Automatic updates")).toBeTruthy();
+    expect(within(panel).getByText(/does not update itself yet/)).toBeTruthy();
+  });
+
+  it("follows the import the shell finishes", async () => {
+    let publish: ((report: LegacyImportReport) => void) | undefined;
+    vi.mocked(legacyApi.onLegacyImport).mockImplementation(async (handler) => {
+      publish = handler;
+      return () => {};
+    });
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Previous ShaPrint app" });
+    await waitFor(() => expect(publish).toBeDefined());
+    publish?.(LEGACY_REPORT);
+
+    expect(await within(panel).findByText(LEGACY_REPORT.channel_note)).toBeTruthy();
+  });
+
+  it("says nothing was found when there was no previous app", async () => {
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Previous ShaPrint app" });
+    expect(
+      await within(panel).findByText(/No settings from a previous ShaPrint app were found/i),
+    ).toBeTruthy();
+    expect(within(panel).queryByTestId("reselect-queues")).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "Import again" })).toBeNull();
+  });
+
+  it("checks again without asking for administrator permission", async () => {
+    vi.mocked(legacyApi.getLegacyImportReport).mockResolvedValue({
+      ...LEGACY_REPORT,
+      channel: "importable",
+      channel_note: "The previous ShaPrint app's Network Channel is ready to be imported.",
+    });
+    vi.mocked(legacyApi.importLegacySettings).mockResolvedValue(LEGACY_REPORT);
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Previous ShaPrint app" });
+    fireEvent.click(await within(panel).findByRole("button", { name: "Import again" }));
+
+    await waitFor(() => expect(legacyApi.importLegacySettings).toHaveBeenCalledTimes(1));
+    expect(await within(panel).findByText(LEGACY_REPORT.channel_note)).toBeTruthy();
+    expect(ipc.allowSharingAccess).not.toHaveBeenCalled();
   });
 });

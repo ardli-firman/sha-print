@@ -17,8 +17,8 @@ use tokio::{
 
 use crate::{
     adapters::{client_connections::ClientConnections, ipps::protocol, ipps::NetworkChannel},
-    application::{RuntimeService, ServiceContext},
-    domain::{AppError, PrinterName, ServiceId},
+    application::{PrintFailures, RuntimeService, ServiceContext},
+    domain::{AppError, ErrorCode, PrintFailure, PrinterName, ServiceId},
 };
 
 /// Default loopback IPP port used by native client queues.
@@ -38,6 +38,7 @@ fn trace_issue34(message: &str) {
 pub struct ClientProxyService {
     connections: Arc<ClientConnections>,
     channel: Arc<NetworkChannel>,
+    failures: Arc<PrintFailures>,
     port: u16,
     bound: Mutex<Option<SocketAddr>>,
 }
@@ -52,19 +53,25 @@ impl std::fmt::Debug for ClientProxyService {
 }
 
 impl ClientProxyService {
-    pub fn new(connections: Arc<ClientConnections>, channel: Arc<NetworkChannel>) -> Self {
-        Self::with_port(connections, channel, CLIENT_PROXY_DEFAULT_PORT)
+    pub fn new(
+        connections: Arc<ClientConnections>,
+        channel: Arc<NetworkChannel>,
+        failures: Arc<PrintFailures>,
+    ) -> Self {
+        Self::with_port(connections, channel, failures, CLIENT_PROXY_DEFAULT_PORT)
     }
 
     /// Builds the loopback endpoint; port zero lets tests ask the OS for an unused port.
     pub fn with_port(
         connections: Arc<ClientConnections>,
         channel: Arc<NetworkChannel>,
+        failures: Arc<PrintFailures>,
         port: u16,
     ) -> Self {
         Self {
             connections,
             channel,
+            failures,
             port,
             bound: Mutex::new(None),
         }
@@ -125,6 +132,7 @@ impl RuntimeService for ClientProxyService {
                 accepted = listener.accept() => if let Ok((stream, _peer)) = accepted {
                     let client_connections = Arc::clone(&self.connections);
                     let channel = Arc::clone(&self.channel);
+                    let failures = Arc::clone(&self.failures);
                     let authority = local.to_string();
                     connections.spawn(async move {
                         if let Err(error) = serve_client(
@@ -132,6 +140,7 @@ impl RuntimeService for ClientProxyService {
                             &authority,
                             &client_connections,
                             &channel,
+                            &failures,
                         )
                         .await
                         {
@@ -156,6 +165,7 @@ async fn serve_client(
     authority: &str,
     connections: &ClientConnections,
     channel: &NetworkChannel,
+    failures: &PrintFailures,
 ) -> Result<(), AppError> {
     let (read, mut write) = tokio::io::split(stream);
     let mut reader = BufReader::new(read);
@@ -268,12 +278,18 @@ async fn serve_client(
     trace_issue34("route=accepted");
     let remote_uri = format!(
         "ipps://{server_address}/ipp/print/{}",
-        protocol::percent_encode(&printer_name)
+        protocol::percent_encode(printer_name.as_str())
     );
     let credential = if operation == protocol::OPERATION_PRINT_JOB {
         match channel.client_credential() {
             Some(secret) => Some(secret),
             None => {
+                // The installed queue did everything right; the client is simply not configured
+                // for this ShaPrint network yet.
+                failures.report(PrintFailure::client(
+                    ErrorCode::NotAuthorized,
+                    Some(&printer_name),
+                ));
                 write_ipp_error(&mut write, protocol::Status::NotAuthorized).await?;
                 return Ok(());
             }
@@ -286,13 +302,26 @@ async fn serve_client(
         .await;
     match forwarded {
         Ok(response) => {
-            if response.len() >= 4 {
-                trace_issue34(&format!(
-                    "response-status=0x{:04x}",
-                    u16::from_be_bytes([response[2], response[3]])
-                ));
-            } else {
-                trace_issue34("response=truncated");
+            let status = match response.get(2..4) {
+                Some(bytes) => {
+                    let status = u16::from_be_bytes([bytes[0], bytes[1]]);
+                    trace_issue34(&format!("response-status=0x{status:04x}"));
+                    Some(status)
+                }
+                None => {
+                    trace_issue34("response=truncated");
+                    None
+                }
+            };
+            if operation == protocol::OPERATION_PRINT_JOB {
+                // A query the driver makes while probing is not a print failure; a rejected job is.
+                let code = match status {
+                    Some(status) => forwarded_failure(status),
+                    None => Some(ErrorCode::QueueUnavailable),
+                };
+                if let Some(code) = code {
+                    failures.report(PrintFailure::client(code, Some(&printer_name)));
+                }
             }
             let response = if operation == protocol::OPERATION_GET_PRINTER_ATTRIBUTES {
                 match protocol::rewrite_printer_uri_supported(&response, &remote_uri, local_uri) {
@@ -311,14 +340,48 @@ async fn serve_client(
         }
         Err(error) => {
             trace_issue34(&format!("forward-error={}", error.code_str()));
-            let status = match error.code() {
-                crate::domain::ErrorCode::InvalidInput => protocol::Status::BadRequest,
-                crate::domain::ErrorCode::InvalidState => protocol::Status::NotAuthorized,
-                _ => protocol::Status::InternalError,
-            };
-            let response = protocol::response(request_id, version, status, &[]);
+            if operation == protocol::OPERATION_PRINT_JOB {
+                failures.report(PrintFailure::client(error.code(), Some(&printer_name)));
+            }
+            let response =
+                protocol::response(request_id, version, ipp_status_for(error.code()), &[]);
             write_http(&mut write, "200 OK", &response).await
         }
+    }
+}
+
+/// The failure a user should see for an IPP status the server returned for a print job, if any.
+fn forwarded_failure(status: u16) -> Option<ErrorCode> {
+    if status == protocol::Status::Ok.code() {
+        return None;
+    }
+    if status == protocol::Status::NotAuthorized.code() {
+        return Some(ErrorCode::NotAuthorized);
+    }
+    if status == protocol::Status::NotFound.code() {
+        return Some(ErrorCode::PrinterNotShared);
+    }
+    // Every `server-error-*` status shares the 0x05xx range (RFC 8011 §13.1); none of them reached
+    // the printer queue.
+    if (0x0500..=0x05ff).contains(&status) {
+        return Some(ErrorCode::QueueUnavailable);
+    }
+    Some(ErrorCode::InvalidInput)
+}
+
+/// The IPP status a local driver sees when forwarding failed.
+///
+/// The driver cannot explain these codes, so the reason a user reads travels through the failure
+/// record instead; this only picks the closest standard answer.
+fn ipp_status_for(code: ErrorCode) -> protocol::Status {
+    match code {
+        ErrorCode::InvalidInput => protocol::Status::BadRequest,
+        ErrorCode::NotAuthorized
+        | ErrorCode::InvalidState
+        | ErrorCode::ServerNotTrusted
+        | ErrorCode::ServerIdentityChanged => protocol::Status::NotAuthorized,
+        ErrorCode::PrinterNotShared => protocol::Status::NotFound,
+        _ => protocol::Status::InternalError,
     }
 }
 
@@ -405,7 +468,8 @@ async fn read_head<R: tokio::io::AsyncBufRead + Unpin>(
     })
 }
 
-fn route_uri(uri: &str, proxy_authority: &str) -> Result<(String, String), AppError> {
+/// Splits a local queue URI into the server it targets and the validated queue name.
+fn route_uri(uri: &str, proxy_authority: &str) -> Result<(String, PrinterName), AppError> {
     let prefix = format!("ipp://{proxy_authority}/ipp/print/");
     let route = uri.strip_prefix(&prefix).ok_or_else(|| {
         AppError::invalid_input("The printer queue does not point to this local proxy.")
@@ -422,7 +486,7 @@ fn route_uri(uri: &str, proxy_authority: &str) -> Result<(String, String), AppEr
     let address = ClientConnections::normalize_address(&server)?;
     let printer = protocol::percent_decode(printer);
     let name = PrinterName::parse(&printer)?;
-    Ok((address, name.as_str().to_owned()))
+    Ok((address, name))
 }
 
 async fn write_ipp_error<W: tokio::io::AsyncWrite + Unpin>(
@@ -484,5 +548,62 @@ mod tests {
         assert_eq!(head.content_type.as_deref(), Some("application/ipp"));
         assert_eq!(head.content_length, Some(10));
         assert!(!head.expects_continue);
+    }
+
+    #[test]
+    fn a_rejected_job_maps_to_the_condition_the_user_can_act_on() {
+        assert_eq!(forwarded_failure(protocol::Status::Ok.code()), None);
+        assert_eq!(
+            forwarded_failure(protocol::Status::NotAuthorized.code()),
+            Some(ErrorCode::NotAuthorized)
+        );
+        assert_eq!(
+            forwarded_failure(protocol::Status::NotFound.code()),
+            Some(ErrorCode::PrinterNotShared)
+        );
+        assert_eq!(
+            forwarded_failure(protocol::Status::NotAcceptingJobs.code()),
+            Some(ErrorCode::QueueUnavailable)
+        );
+        assert_eq!(
+            forwarded_failure(protocol::Status::InternalError.code()),
+            Some(ErrorCode::QueueUnavailable)
+        );
+        assert_eq!(
+            forwarded_failure(protocol::Status::DocumentFormatNotSupported.code()),
+            Some(ErrorCode::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn a_local_driver_gets_a_standard_status_when_forwarding_fails() {
+        assert_eq!(
+            ipp_status_for(ErrorCode::ServerUnavailable),
+            protocol::Status::InternalError
+        );
+        assert_eq!(
+            ipp_status_for(ErrorCode::ServerNotTrusted),
+            protocol::Status::NotAuthorized
+        );
+        assert_eq!(
+            ipp_status_for(ErrorCode::ServerIdentityChanged),
+            protocol::Status::NotAuthorized
+        );
+        assert_eq!(
+            ipp_status_for(ErrorCode::NotAuthorized),
+            protocol::Status::NotAuthorized
+        );
+        assert_eq!(
+            ipp_status_for(ErrorCode::PrinterNotShared),
+            protocol::Status::NotFound
+        );
+        assert_eq!(
+            ipp_status_for(ErrorCode::InvalidInput),
+            protocol::Status::BadRequest
+        );
+        assert_eq!(
+            ipp_status_for(ErrorCode::InvalidState),
+            protocol::Status::NotAuthorized
+        );
     }
 }

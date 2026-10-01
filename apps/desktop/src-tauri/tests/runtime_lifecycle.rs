@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use shaprint_desktop::adapters::ipps::NetworkChannel;
 use shaprint_desktop::adapters::{client_connections::ClientConnections, ClientProxyService};
-use shaprint_desktop::application::{RuntimeCoordinator, Sharing};
+use shaprint_desktop::application::{PrintFailures, RuntimeCoordinator, Sharing};
 use shaprint_desktop::domain::{ErrorCode, ServiceId, ServiceState};
 use shaprint_desktop::Shell;
 
@@ -22,7 +22,12 @@ fn coordinator(queues: &[&str]) -> (RuntimeCoordinator, Arc<Sharing>) {
     );
     let channel = Arc::new(NetworkChannel::in_memory());
     let runtime = RuntimeCoordinator::new(vec![
-        Arc::new(ClientProxyService::with_port(connections, channel, 0)),
+        Arc::new(ClientProxyService::with_port(
+            connections,
+            channel,
+            Arc::new(PrintFailures::new()),
+            0,
+        )),
         Arc::new(support::sharing_service(Arc::clone(&sharing), endpoint)),
     ]);
     (runtime, sharing)
