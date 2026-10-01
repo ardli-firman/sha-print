@@ -62,6 +62,10 @@ impl RuntimeService for ServerSharingService {
     }
 
     async fn run(&self, context: ServiceContext) -> Result<(), AppError> {
+        // Follow the selection before it is read and advertised: a change made while the
+        // advertisement is being opened is then still waiting for the loop below, instead of
+        // leaving the network with a list the server no longer shares.
+        let mut selection = self.sharing.subscribe();
         let printers = self.sharing.selected()?;
         let advertisement = match self
             .advertiser
@@ -84,7 +88,6 @@ impl RuntimeService for ServerSharingService {
 
         let directory: Arc<dyn SharedPrinterSource> = self.sharing.clone();
         let mut serving = Box::pin(self.endpoint.serve(directory, context.clone()));
-        let mut selection = self.sharing.subscribe();
 
         let outcome = match &advertisement {
             Some(advertisement) => loop {
@@ -185,29 +188,47 @@ mod tests {
         }
     }
 
-    /// An advertiser that records what it was asked to do, and can refuse to advertise at all.
+    /// Holds an advertisement open, so a test can act while sharing is still starting.
+    #[derive(Default)]
+    struct AdvertiseGate {
+        entered: tokio::sync::Notify,
+        released: tokio::sync::Notify,
+    }
+
+    /// An advertiser that records what it was asked to do, can refuse to advertise at all, and can
+    /// be held open by a test.
     struct FakeAdvertiser {
         recorded: Arc<Recorded>,
         unavailable: bool,
+        gate: Option<Arc<AdvertiseGate>>,
     }
 
     impl FakeAdvertiser {
         fn available() -> (Arc<Self>, Arc<Recorded>) {
+            Self::build(false, None)
+        }
+
+        fn unavailable() -> Arc<Self> {
+            Self::build(true, None).0
+        }
+
+        fn gated(gate: Arc<AdvertiseGate>) -> (Arc<Self>, Arc<Recorded>) {
+            Self::build(false, Some(gate))
+        }
+
+        fn build(
+            unavailable: bool,
+            gate: Option<Arc<AdvertiseGate>>,
+        ) -> (Arc<Self>, Arc<Recorded>) {
             let recorded = Arc::new(Recorded::default());
             (
                 Arc::new(Self {
                     recorded: Arc::clone(&recorded),
-                    unavailable: false,
+                    unavailable,
+                    gate,
                 }),
                 recorded,
             )
-        }
-
-        fn unavailable() -> Arc<Self> {
-            Arc::new(Self {
-                recorded: Arc::new(Recorded::default()),
-                unavailable: true,
-            })
         }
     }
 
@@ -226,6 +247,10 @@ mod tests {
                 .lock()
                 .map_err(|_| AppError::internal("the recording lock is poisoned"))?
                 .push((port, printers.to_vec()));
+            if let Some(gate) = &self.gate {
+                gate.entered.notify_one();
+                gate.released.notified().await;
+            }
             Ok(Arc::new(FakeAdvertisement {
                 recorded: Arc::clone(&self.recorded),
             }))
@@ -355,6 +380,39 @@ mod tests {
 
         assert_eq!(recorded.withdrawn(), 1);
         runtime.shutdown().await.expect("shutdown succeeds");
+    }
+
+    #[tokio::test]
+    async fn a_selection_change_made_while_sharing_starts_is_not_lost() {
+        let gate = Arc::new(AdvertiseGate::default());
+        let (advertiser, recorded) = FakeAdvertiser::gated(Arc::clone(&gate));
+        let (runtime, sharing, _endpoint) = coordinator(&["HP LaserJet", "Zebra"], advertiser);
+        sharing
+            .set_shared(vec![name("Zebra")])
+            .await
+            .expect("selects a queue");
+        let runtime = Arc::new(runtime);
+
+        let starting = tokio::spawn({
+            let runtime = Arc::clone(&runtime);
+            async move { runtime.start(ServiceId::ServerSharing).await }
+        });
+        gate.entered.notified().await;
+
+        // The user changes the selection while the advertisement is still being opened.
+        sharing
+            .set_shared(vec![name("HP LaserJet")])
+            .await
+            .expect("changes the selection");
+        gate.released.notify_one();
+
+        starting
+            .await
+            .expect("the start task joins")
+            .expect("sharing starts");
+        until(|| recorded.replaced().contains(&vec![name("HP LaserJet")])).await;
+
+        runtime.stop(ServiceId::ServerSharing).await.expect("stops");
     }
 
     #[tokio::test]

@@ -10,7 +10,6 @@
 //! reserved label types, and compression loops are rejected as `invalid-input` instead of being
 //! followed or panicking.
 
-use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use crate::domain::AppError;
@@ -21,7 +20,6 @@ use crate::domain::AppError;
 /// not offer every AirPrint printer on the network as a server to approve (ADR 0004).
 pub const SERVICE_TYPE: &str = "_shaprint-ipps._tcp.local.";
 
-pub const RECORD_TYPE_A: u16 = 1;
 pub const RECORD_TYPE_PTR: u16 = 12;
 pub const RECORD_TYPE_TXT: u16 = 16;
 pub const RECORD_TYPE_SRV: u16 = 33;
@@ -46,6 +44,8 @@ const MAX_NAME_JUMPS: usize = 64;
 const MAX_LABEL: usize = 63;
 /// Longest string a TXT record may carry.
 const MAX_TXT_STRING: usize = 255;
+/// Priority, weight, and port: the bytes a service record spends before its target name.
+const FIXED_SERVICE_LENGTH: usize = 6;
 
 /// One question a peer asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,8 +70,6 @@ pub enum RecordData {
     },
     /// A `TXT`: the instance's key/value properties, in wire order.
     Text(Vec<(String, String)>),
-    /// An `A`: one IPv4 address of the target.
-    Address(Ipv4Addr),
     /// A record type ShaPrint does not interpret.
     Other(Vec<u8>),
 }
@@ -119,9 +117,14 @@ impl Message {
         }
 
         // Every record has to be read even when it is not interesting: the sections follow one
-        // another in the packet, so stopping early would misplace the rest.
+        // another in the packet, so stopping early would misplace the rest. The counts arrive from
+        // the network, so they are summed as sizes: three maximal counts do not fit in a u16, and a
+        // packet must never be able to overflow the reader's arithmetic.
+        let total_records = usize::from(answer_count)
+            + usize::from(authority_count)
+            + usize::from(additional_count);
         let mut records = Vec::new();
-        for _ in 0..answer_count + authority_count + additional_count {
+        for _ in 0..total_records {
             let name = reader.name()?;
             let record_type = reader.u16()?;
             let class = reader.u16()?;
@@ -209,7 +212,7 @@ fn is_named(left: &str, right: &str) -> bool {
 
 /// Encodes a browse query for `service_type`, asking for the answer on this socket.
 pub fn encode_query(service_type: &str) -> Result<Vec<u8>, AppError> {
-    let mut packet = header(MESSAGE_FLAGS_QUERY, 0, 1);
+    let mut packet = header(MESSAGE_FLAGS_QUERY, 1, 0);
     push_name(&mut packet, service_type)?;
     packet.extend_from_slice(&RECORD_TYPE_PTR.to_be_bytes());
     packet.extend_from_slice(&(CLASS_IN | UNICAST_OR_CACHE_FLUSH).to_be_bytes());
@@ -230,7 +233,7 @@ pub fn encode_announcement(
     let instance = instance_name(label)?;
     let lifetime = record_lifetime(ttl)?;
 
-    let mut packet = header(MESSAGE_FLAGS_RESPONSE, 3, 0);
+    let mut packet = header(MESSAGE_FLAGS_RESPONSE, 0, 3);
     // PTR: the service type currently has this instance. A shared record, so no cache-flush bit.
     push_name(&mut packet, SERVICE_TYPE)?;
     packet.extend_from_slice(&RECORD_TYPE_PTR.to_be_bytes());
@@ -302,8 +305,11 @@ pub fn instance_name(label: &str) -> Result<String, AppError> {
     Ok(format!("{label}.{SERVICE_TYPE}"))
 }
 
-/// A message header carrying `answers` records and `questions` questions.
-fn header(flags: u16, answers: u16, questions: u16) -> Vec<u8> {
+/// A message header carrying `questions` questions and `answers` records.
+///
+/// The order follows the wire layout (RFC 1035 §4.1.1): both counters are `u16`, so a swapped
+/// argument would compile and only show up on the network.
+fn header(flags: u16, questions: u16, answers: u16) -> Vec<u8> {
     let mut packet = Vec::new();
     packet.extend_from_slice(&0u16.to_be_bytes()); // id: multicast DNS carries no id
     packet.extend_from_slice(&flags.to_be_bytes());
@@ -357,15 +363,23 @@ fn decode_data(
         RECORD_TYPE_PTR => {
             let mut reader = Reader::new(packet);
             reader.position = start;
-            Ok(RecordData::Pointer(reader.name()?))
+            let instance = reader.name()?;
+            expect_consumed(&reader, start, bytes)?;
+            Ok(RecordData::Pointer(instance))
         }
         RECORD_TYPE_SRV => {
+            if bytes.len() < FIXED_SERVICE_LENGTH {
+                return Err(malformed_with(
+                    "a service record is shorter than its fixed fields",
+                ));
+            }
             let mut reader = Reader::new(packet);
             reader.position = start;
             let priority = reader.u16()?;
             let weight = reader.u16()?;
             let port = reader.u16()?;
             let target = reader.name()?;
+            expect_consumed(&reader, start, bytes)?;
             Ok(RecordData::Service {
                 priority,
                 weight,
@@ -392,14 +406,21 @@ fn decode_data(
             }
             Ok(RecordData::Text(properties))
         }
-        RECORD_TYPE_A => {
-            let octets: [u8; 4] = bytes
-                .try_into()
-                .map_err(|_| malformed_with("an address record is not four bytes"))?;
-            Ok(RecordData::Address(Ipv4Addr::from(octets)))
-        }
+        // Everything else, including the address records a responder may publish, is carried but
+        // not interpreted: the client reviews the address an answer came from, never one it claims.
         _ => Ok(RecordData::Other(bytes.to_vec())),
     }
+}
+
+/// Checks that reading a record's data consumed exactly the length the record declared.
+///
+/// A record's length is authoritative (RFC 1035 §4.1.3). A reader that ignores it walks into the
+/// record that follows and reports a name that was never in this one.
+fn expect_consumed(reader: &Reader<'_>, start: usize, data: &[u8]) -> Result<(), AppError> {
+    if reader.position != start + data.len() {
+        return Err(malformed_with("a record's data does not match its length"));
+    }
+    Ok(())
 }
 
 fn malformed() -> AppError {
@@ -517,6 +538,26 @@ mod tests {
         0x70, 0x72, 0x69, 0x6E, 0x74, 0x0B, 0x71, 0x75, 0x65, 0x75, 0x65, 0x3D, 0x5A, 0x65, 0x62,
         0x72, 0x61, 0x10, 0x6E, 0x61, 0x6D, 0x65, 0x3D, 0x44, 0x45, 0x53, 0x4B, 0x54, 0x4F, 0x50,
         0x2D, 0x41, 0x42, 0x43,
+    ];
+
+    /// The same response plus one address record in the additional section, as a responder that
+    /// publishes its own address sends it.
+    ///
+    /// Hand-assembled like [`RESPONSE`], with the address record naming the service target through
+    /// a compression pointer and carrying 192.0.2.10.
+    const RESPONSE_WITH_ADDRESS: &[u8] = &[
+        0x00, 0x00, 0x84, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x0E, 0x5F, 0x73,
+        0x68, 0x61, 0x70, 0x72, 0x69, 0x6E, 0x74, 0x2D, 0x69, 0x70, 0x70, 0x73, 0x04, 0x5F, 0x74,
+        0x63, 0x70, 0x05, 0x6C, 0x6F, 0x63, 0x61, 0x6C, 0x00, 0x00, 0x0C, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x78, 0x00, 0x0E, 0x0B, 0x44, 0x45, 0x53, 0x4B, 0x54, 0x4F, 0x50, 0x2D, 0x41, 0x42,
+        0x43, 0xC0, 0x0C, 0xC0, 0x31, 0x00, 0x21, 0x80, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, 0x19,
+        0x00, 0x00, 0x00, 0x00, 0x21, 0xB7, 0x0B, 0x44, 0x45, 0x53, 0x4B, 0x54, 0x4F, 0x50, 0x2D,
+        0x41, 0x42, 0x43, 0x05, 0x6C, 0x6F, 0x63, 0x61, 0x6C, 0x00, 0xC0, 0x31, 0x00, 0x10, 0x80,
+        0x01, 0x00, 0x00, 0x00, 0x78, 0x00, 0x2A, 0x0C, 0x72, 0x70, 0x3D, 0x69, 0x70, 0x70, 0x2F,
+        0x70, 0x72, 0x69, 0x6E, 0x74, 0x0B, 0x71, 0x75, 0x65, 0x75, 0x65, 0x3D, 0x5A, 0x65, 0x62,
+        0x72, 0x61, 0x10, 0x6E, 0x61, 0x6D, 0x65, 0x3D, 0x44, 0x45, 0x53, 0x4B, 0x54, 0x4F, 0x50,
+        0x2D, 0x41, 0x42, 0x43, 0xC0, 0x51, 0x00, 0x01, 0x80, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00,
+        0x04, 0xC0, 0x00, 0x02, 0x0A,
     ];
 
     /// A record whose name points at itself; a reader must reject it instead of looping.
@@ -643,6 +684,73 @@ mod tests {
 
         let message = Message::parse(&packet).expect("parses");
         assert_eq!(services(&message)[0].ttl, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn an_address_record_is_carried_but_not_interpreted() {
+        let message = Message::parse(RESPONSE_WITH_ADDRESS).expect("parses");
+
+        assert_eq!(message.records.len(), 4);
+        assert_eq!(
+            message.records[3].data,
+            RecordData::Other(vec![192, 0, 2, 10]),
+            "an address record is skipped rather than decoded"
+        );
+        // The client reviews the address an answer came from, so a record ShaPrint does not
+        // interpret changes nothing about what it found.
+        assert_eq!(services(&message), vec![advertised()]);
+    }
+
+    #[test]
+    fn a_record_whose_data_disagrees_with_its_length_is_rejected() {
+        // A record's own length is authoritative, so a name that does not fill it is a malformed
+        // record rather than a longer name borrowed from the record that follows.
+        let mut short_pointer = RESPONSE.to_vec();
+        short_pointer[47] = 0x00;
+        short_pointer[48] = 0x04; // the pointer data is 14 bytes, not 4
+        assert_eq!(
+            Message::parse(&short_pointer)
+                .expect_err("a short pointer record is rejected")
+                .code(),
+            crate::domain::ErrorCode::InvalidInput
+        );
+
+        let mut short_service = RESPONSE.to_vec();
+        short_service[73] = 0x00;
+        short_service[74] = 0x04; // shorter than the fixed fields of a service record
+        assert_eq!(
+            Message::parse(&short_service)
+                .expect_err("a short service record is rejected")
+                .code(),
+            crate::domain::ErrorCode::InvalidInput
+        );
+
+        let mut long_service = RESPONSE.to_vec();
+        long_service[73] = 0x00;
+        long_service[74] = 0x1E; // longer than the name it holds
+        assert_eq!(
+            Message::parse(&long_service)
+                .expect_err("a long service record is rejected")
+                .code(),
+            crate::domain::ErrorCode::InvalidInput
+        );
+    }
+
+    #[test]
+    fn a_packet_that_claims_more_records_than_it_carries_is_rejected() {
+        // The section counts arrive from the network. Three maximal counts do not fit in the u16
+        // they were read as, and a reader that adds them as u16 panics before it reads one record.
+        let claiming = &[
+            0x00, 0x00, 0x84, 0x00, // id, flags: a response
+            0x00, 0x00, // no questions
+            0xFF, 0xFF, // 65535 answers
+            0xFF, 0xFF, // 65535 authority records
+            0x00, 0x01, // one additional record
+        ];
+
+        let error = Message::parse(claiming).expect_err("a packet with no records is rejected");
+
+        assert_eq!(error.code(), crate::domain::ErrorCode::InvalidInput);
     }
 
     #[test]

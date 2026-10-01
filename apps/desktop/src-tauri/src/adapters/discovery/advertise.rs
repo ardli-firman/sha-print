@@ -511,7 +511,6 @@ mod tests {
         );
         // The queues that fit are the first ones, so the advertisement matches the selection order.
         assert_eq!(carried[0], "Very long printer queue name number 00");
-        assert_eq!(carried.len(), carried.len());
         assert!(carried.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
