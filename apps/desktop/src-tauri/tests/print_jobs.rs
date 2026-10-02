@@ -620,7 +620,7 @@ async fn validate_job_with_incorrect_channel_is_rejected() {
 
     let (status, response) = server.client.post(&request).await.expect("reaches server");
     assert_eq!(status, 200);
-    assert_eq!(ipp_status(&response), 0x0401); // NotAuthorized
+    assert_eq!(ipp_status(&response), 0x0403); // NotAuthorized (RFC 8011 client-error-not-authorized)
     assert!(submitter.0.lock().expect("reads submissions").is_empty());
 
     server.runtime.shutdown().await.expect("shuts down runtime");
