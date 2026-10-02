@@ -12,6 +12,13 @@ pub enum DuplexMode {
     ShortEdge,
 }
 
+/// Print orientation a server can forward to a local queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrintOrientation {
+    Portrait,
+    Landscape,
+}
+
 /// Common print settings a server can forward to a local queue.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PrintSettings {
@@ -19,6 +26,7 @@ pub struct PrintSettings {
     pub color: Option<bool>,
     pub duplex: Option<DuplexMode>,
     pub copies: Option<u16>,
+    pub orientation: Option<PrintOrientation>,
 }
 
 /// Printer-ready `application/octet-stream` bytes and requested settings for a shared queue.

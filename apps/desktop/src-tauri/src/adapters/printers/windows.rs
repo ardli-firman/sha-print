@@ -182,6 +182,39 @@ mod tests {
 
         assert_ne!(job_id, 0);
     }
+
+    #[test]
+    fn dev_mode_mapping_applies_orientation_and_media_size() {
+        use crate::application::PrintOrientation;
+
+        let mut devmode = vec![0u8; 120];
+        let settings = crate::application::PrintSettings {
+            media: Some("na_legal_8.5x14in".to_string()),
+            orientation: Some(PrintOrientation::Landscape),
+            copies: Some(3),
+            color: Some(false),
+            duplex: Some(crate::application::DuplexMode::LongEdge),
+        };
+
+        apply_settings_to_dev_mode(&mut devmode, &settings).expect("applies settings");
+
+        let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+        // DM_ORIENTATION = 0x0000_0001
+        // DM_PAPERSIZE   = 0x0000_0002
+        // DM_COPIES      = 0x0000_0100
+        // DM_COLOR       = 0x0000_0800
+        // DM_DUPLEX      = 0x0000_1000
+        let expected_fields = 0x0000_0001 | 0x0000_0002 | 0x0000_0100 | 0x0000_0800 | 0x0000_1000;
+        assert_eq!(fields, expected_fields);
+
+        // dmOrientation at 76..78 (2 = DMORIENT_LANDSCAPE)
+        let orientation = i16::from_ne_bytes(devmode[76..78].try_into().unwrap());
+        assert_eq!(orientation, 2);
+
+        // dmPaperSize at 78..80 (5 = DMPAPER_LEGAL)
+        let paper = i16::from_ne_bytes(devmode[78..80].try_into().unwrap());
+        assert_eq!(paper, 5);
+    }
 }
 
 /// Submits printer-ready `application/octet-stream` bytes as RAW to the selected Windows queue.
@@ -364,6 +397,7 @@ fn prepare_dev_mode(
         && settings.color.is_none()
         && settings.duplex.is_none()
         && settings.copies.is_none()
+        && settings.orientation.is_none()
     {
         return Ok(None);
     }
@@ -403,11 +437,33 @@ fn prepare_dev_mode(
     if prepared != 1 || dev_mode.len() < 96 {
         return Err(spooler_error("cannot prepare Windows printer settings"));
     }
+    apply_settings_to_dev_mode(&mut dev_mode, settings)?;
+    Ok(Some(dev_mode))
+}
+
+fn apply_settings_to_dev_mode(
+    dev_mode: &mut [u8],
+    settings: &crate::application::PrintSettings,
+) -> Result<(), AppError> {
+    if dev_mode.len() < 96 {
+        return Err(AppError::internal(
+            "invalid Windows printer settings buffer",
+        ));
+    }
     let mut fields = u32::from_ne_bytes(
         dev_mode[72..76]
             .try_into()
             .map_err(|_| AppError::internal("invalid Windows printer settings"))?,
     );
+    if let Some(orientation) = settings.orientation {
+        let dm_orient = match orientation {
+            crate::application::PrintOrientation::Portrait => 1i16,
+            crate::application::PrintOrientation::Landscape => 2i16,
+        };
+        // DEVMODEW.dmOrientation is at byte 76; DM_ORIENTATION is 0x0000_0001
+        dev_mode[76..78].copy_from_slice(&dm_orient.to_ne_bytes());
+        fields |= 0x0000_0001;
+    }
     if let Some(media) = &settings.media {
         let paper = match media.as_str() {
             "na_letter_8.5x11in" => 1i16,
@@ -443,7 +499,7 @@ fn prepare_dev_mode(
         fields |= 0x0000_1000;
     }
     dev_mode[72..76].copy_from_slice(&fields.to_ne_bytes());
-    Ok(Some(dev_mode))
+    Ok(())
 }
 
 fn spooler_error(message: &str) -> AppError {

@@ -25,7 +25,7 @@ pub use legacy::{
 };
 pub use lifecycle::{close_action, CloseAction};
 pub use printers::{
-    DuplexMode, LocalPrinterCatalog, PrintJob, PrintJobSubmitter, PrintSettings,
+    DuplexMode, LocalPrinterCatalog, PrintJob, PrintJobSubmitter, PrintOrientation, PrintSettings,
     SharedPrinterSource,
 };
 pub use queue_installation::{

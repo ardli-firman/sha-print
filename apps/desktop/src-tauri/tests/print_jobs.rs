@@ -372,6 +372,7 @@ async fn authorized_print_job_reaches_the_selected_queue_with_document_and_setti
                 color: Some(true),
                 duplex: Some(DuplexMode::LongEdge),
                 copies: Some(2),
+                orientation: None,
             },
         );
     }
@@ -410,6 +411,51 @@ async fn short_edge_duplex_reaches_the_printer_adapter_unchanged() {
             .settings()
             .duplex,
         Some(DuplexMode::ShortEdge),
+    );
+}
+
+#[tokio::test]
+async fn landscape_orientation_and_legal_media_reach_the_printer_adapter_unchanged() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    let mut body = vec![2, 0, 0, 2, 0, 0, 0, 9, 1];
+    text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
+    text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
+    text_attribute(&mut body, 0x45, "printer-uri", OFFICE_PRINTER_URI);
+    text_attribute(
+        &mut body,
+        0x49,
+        "document-format",
+        "application/octet-stream",
+    );
+    text_attribute(&mut body, 0x41, "network-channel", &secret);
+    body.push(0x02);
+    text_attribute(&mut body, 0x44, "media", "na_legal_8.5x14in");
+    integer_attribute(&mut body, "orientation-requested", 4);
+    body.push(3);
+    body.extend(b"legal landscape document");
+
+    let response = send(&body, &shared, &channel, &submitter).await;
+
+    assert_eq!(ipp_status(&response), 0x0000);
+    let submissions = submitter.0.lock().expect("reads fake submissions");
+    assert_eq!(submissions.len(), 1);
+    assert_eq!(
+        submissions[0].1.settings().media.as_deref(),
+        Some("na_legal_8.5x14in")
+    );
+    assert_eq!(
+        submissions[0].1.settings().orientation,
+        Some(shaprint_desktop::application::PrintOrientation::Landscape)
     );
 }
 
