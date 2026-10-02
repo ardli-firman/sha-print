@@ -344,6 +344,54 @@ async fn print_job_from_a_native_queue_reaches_the_selected_server_printer() {
 }
 
 #[tokio::test]
+async fn print_job_with_monochrome_simplex_and_custom_copies_reaches_server_printer() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let uri = local_printer_uri(&proxy_address, &pair.server_address);
+    let document = document_bytes();
+
+    let mut body = vec![2, 0, 0, 2, 0, 0, 0, 43, 1];
+    text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
+    text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
+    text_attribute(&mut body, 0x45, "printer-uri", &uri);
+    text_attribute(
+        &mut body,
+        0x49,
+        "document-format",
+        "application/octet-stream",
+    );
+    text_attribute(&mut body, 0x44, "media", "iso_a4_210x297mm");
+    text_attribute(&mut body, 0x44, "print-color-mode", "monochrome");
+    text_attribute(&mut body, 0x44, "sides", "one-sided");
+    body.push(0x21);
+    body.extend(6u16.to_be_bytes());
+    body.extend(b"copies");
+    body.extend(4u16.to_be_bytes());
+    body.extend(4i32.to_be_bytes());
+    body.push(3);
+    body.extend(&document);
+
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, body).await;
+
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    {
+        let submissions = pair.submitter.jobs.lock().expect("reads submitted jobs");
+        assert_eq!(submissions.len(), 1);
+        assert_eq!(submissions[0].0, SERVER_QUEUE);
+        assert_eq!(submissions[0].1.document(), document);
+        assert_eq!(submissions[0].1.settings().color, Some(false));
+        assert_eq!(
+            submissions[0].1.settings().duplex,
+            Some(DuplexMode::Simplex)
+        );
+        assert_eq!(submissions[0].1.settings().copies, Some(4));
+    }
+    assert_eq!(pair.failures.latest(), None);
+    pair.stop().await;
+}
+
+#[tokio::test]
 async fn proxy_forwards_a_wrong_network_channel_as_an_authorization_failure() {
     let pair = RunningPair::start(false).await;
     let proxy_address = pair.proxy_address();

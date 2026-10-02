@@ -620,4 +620,89 @@ mod tests {
             Err(Status::AttributesOrValuesNotSupported)
         );
     }
+
+    fn push_integer(out: &mut Vec<u8>, tag: u8, name: &str, value: i32) {
+        out.push(tag);
+        out.extend((name.len() as u16).to_be_bytes());
+        out.extend(name.as_bytes());
+        out.extend(4u16.to_be_bytes());
+        out.extend(value.to_be_bytes());
+    }
+
+    fn job_request_with(text_attrs: &[(&str, &str)], int_attrs: &[(&str, u8, i32)]) -> Vec<u8> {
+        let mut out = vec![2, 0, 0, 2, 0, 0, 0, 1, 0x01];
+        push(&mut out, 0x47, "attributes-charset", "utf-8");
+        push(&mut out, 0x48, "attributes-natural-language", "en");
+        out.push(0x02);
+        for (name, val) in text_attrs {
+            push(&mut out, 0x44, name, val);
+        }
+        for (name, tag, val) in int_attrs {
+            push_integer(&mut out, *tag, name, *val);
+        }
+        out.push(0x03);
+        out
+    }
+
+    #[test]
+    fn job_settings_parses_color_modes() {
+        for (mode_str, expected) in [
+            ("color", Some(true)),
+            ("monochrome", Some(false)),
+            ("bi-level", Some(false)),
+        ] {
+            let bytes = job_request_with(&[("print-color-mode", mode_str)], &[]);
+            let req = Request::parse(&bytes).expect("valid request");
+            let settings = job_settings(&req).expect("valid settings");
+            assert_eq!(settings.color, expected, "mode: {mode_str}");
+        }
+
+        let bytes = job_request_with(&[("print-color-mode", "sepia")], &[]);
+        let req = Request::parse(&bytes).expect("valid request");
+        assert_eq!(
+            job_settings(&req),
+            Err(Status::AttributesOrValuesNotSupported)
+        );
+    }
+
+    #[test]
+    fn job_settings_parses_duplex_modes() {
+        for (sides_str, expected) in [
+            ("one-sided", Some(DuplexMode::Simplex)),
+            ("two-sided-long-edge", Some(DuplexMode::LongEdge)),
+            ("two-sided-short-edge", Some(DuplexMode::ShortEdge)),
+        ] {
+            let bytes = job_request_with(&[("sides", sides_str)], &[]);
+            let req = Request::parse(&bytes).expect("valid request");
+            let settings = job_settings(&req).expect("valid settings");
+            assert_eq!(settings.duplex, expected, "sides: {sides_str}");
+        }
+
+        let bytes = job_request_with(&[("sides", "two-sided-tumble")], &[]);
+        let req = Request::parse(&bytes).expect("valid request");
+        assert_eq!(
+            job_settings(&req),
+            Err(Status::AttributesOrValuesNotSupported)
+        );
+    }
+
+    #[test]
+    fn job_settings_parses_copies_and_rejects_out_of_range() {
+        for (count, expected) in [(1, Some(1)), (5, Some(5)), (999, Some(999))] {
+            let bytes = job_request_with(&[], &[("copies", 0x21, count)]);
+            let req = Request::parse(&bytes).expect("valid request");
+            let settings = job_settings(&req).expect("valid settings");
+            assert_eq!(settings.copies, expected, "copies: {count}");
+        }
+
+        for invalid in [0, 1000, -1] {
+            let bytes = job_request_with(&[], &[("copies", 0x21, invalid)]);
+            let req = Request::parse(&bytes).expect("valid request");
+            assert_eq!(
+                job_settings(&req),
+                Err(Status::AttributesOrValuesNotSupported),
+                "invalid copies: {invalid}"
+            );
+        }
+    }
 }

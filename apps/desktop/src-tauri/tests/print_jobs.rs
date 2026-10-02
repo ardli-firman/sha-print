@@ -118,6 +118,43 @@ fn print_job_with_format(
     body
 }
 
+fn print_job_with_options(
+    channel: Option<&str>,
+    printer: &str,
+    color_mode: Option<&str>,
+    sides: Option<&str>,
+    copies: Option<i32>,
+    document: &[u8],
+) -> Vec<u8> {
+    let mut body = vec![2, 0, 0, 2, 0, 0, 0, 9, 1];
+    text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
+    text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
+    text_attribute(&mut body, 0x45, "printer-uri", printer);
+    text_attribute(
+        &mut body,
+        0x49,
+        "document-format",
+        "application/octet-stream",
+    );
+    if let Some(channel) = channel {
+        text_attribute(&mut body, 0x41, "network-channel", channel);
+    }
+    body.push(0x02);
+    text_attribute(&mut body, 0x44, "media", "iso_a4_210x297mm");
+    if let Some(mode) = color_mode {
+        text_attribute(&mut body, 0x44, "print-color-mode", mode);
+    }
+    if let Some(s) = sides {
+        text_attribute(&mut body, 0x44, "sides", s);
+    }
+    if let Some(c) = copies {
+        integer_attribute(&mut body, "copies", c);
+    }
+    body.push(3);
+    body.extend(document);
+    body
+}
+
 fn validate_job(channel: Option<&str>, printer: &str) -> Vec<u8> {
     let mut body = vec![2, 0, 0, 4, 0, 0, 0, 9, 1];
     text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
@@ -457,6 +494,136 @@ async fn landscape_orientation_and_legal_media_reach_the_printer_adapter_unchang
         submissions[0].1.settings().orientation,
         Some(shaprint_desktop::application::PrintOrientation::Landscape)
     );
+}
+
+#[tokio::test]
+async fn monochrome_and_bilevel_reach_the_printer_adapter_as_non_color() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    for (color_mode, duplex_mode, copies) in [
+        ("monochrome", "one-sided", 5),
+        ("bi-level", "two-sided-long-edge", 1),
+    ] {
+        let req = print_job_with_options(
+            Some(&secret),
+            OFFICE_PRINTER_URI,
+            Some(color_mode),
+            Some(duplex_mode),
+            Some(copies),
+            b"document",
+        );
+        let response = send(&req, &shared, &channel, &submitter).await;
+        assert_eq!(ipp_status(&response), 0x0000, "color_mode: {color_mode}");
+    }
+
+    let submissions = submitter.0.lock().expect("reads submissions");
+    assert_eq!(submissions.len(), 2);
+    assert_eq!(submissions[0].1.settings().color, Some(false));
+    assert_eq!(
+        submissions[0].1.settings().duplex,
+        Some(DuplexMode::Simplex)
+    );
+    assert_eq!(submissions[0].1.settings().copies, Some(5));
+
+    assert_eq!(submissions[1].1.settings().color, Some(false));
+    assert_eq!(
+        submissions[1].1.settings().duplex,
+        Some(DuplexMode::LongEdge)
+    );
+    assert_eq!(submissions[1].1.settings().copies, Some(1));
+}
+
+#[tokio::test]
+async fn unsupported_color_mode_is_rejected_without_submitting_job() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    let req = print_job_with_options(
+        Some(&secret),
+        OFFICE_PRINTER_URI,
+        Some("sepia"),
+        Some("one-sided"),
+        Some(1),
+        b"document",
+    );
+    let response = send(&req, &shared, &channel, &submitter).await;
+
+    // AttributesOrValuesNotSupported = 0x040B
+    assert_eq!(ipp_status(&response), 0x040B);
+    assert!(submitter.0.lock().expect("reads submissions").is_empty());
+}
+
+#[tokio::test]
+async fn unsupported_duplex_mode_is_rejected_without_submitting_job() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    let req = print_job_with_options(
+        Some(&secret),
+        OFFICE_PRINTER_URI,
+        Some("color"),
+        Some("two-sided-tumble"),
+        Some(1),
+        b"document",
+    );
+    let response = send(&req, &shared, &channel, &submitter).await;
+
+    assert_eq!(ipp_status(&response), 0x040B);
+    assert!(submitter.0.lock().expect("reads submissions").is_empty());
+}
+
+#[tokio::test]
+async fn unsupported_copies_count_is_rejected_without_submitting_job() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    for invalid in [0, 1000] {
+        let req = print_job_with_options(
+            Some(&secret),
+            OFFICE_PRINTER_URI,
+            Some("color"),
+            Some("one-sided"),
+            Some(invalid),
+            b"document",
+        );
+        let response = send(&req, &shared, &channel, &submitter).await;
+
+        assert_eq!(ipp_status(&response), 0x040B, "copies: {invalid}");
+        assert!(submitter.0.lock().expect("reads submissions").is_empty());
+    }
 }
 
 #[tokio::test]
