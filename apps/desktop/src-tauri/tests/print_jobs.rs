@@ -97,6 +97,22 @@ fn print_job_with_format(
     body.extend(document);
     body
 }
+
+fn validate_job(channel: Option<&str>, printer: &str) -> Vec<u8> {
+    let mut body = vec![2, 0, 0, 4, 0, 0, 0, 9, 1];
+    text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
+    text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
+    text_attribute(&mut body, 0x45, "printer-uri", printer);
+    if let Some(channel) = channel {
+        text_attribute(&mut body, 0x41, "network-channel", channel);
+    }
+    body.push(0x02);
+    text_attribute(&mut body, 0x44, "media", "iso_a4_210x297mm");
+    text_attribute(&mut body, 0x44, "print-color-mode", "color");
+    text_attribute(&mut body, 0x44, "sides", "one-sided");
+    body.push(3);
+    body
+}
 #[tokio::test]
 async fn unsupported_document_format_is_rejected_before_queue_submission() {
     let shared = Shared(vec![
@@ -554,5 +570,58 @@ async fn stopping_sharing_refuses_new_jobs_before_the_printer_adapter() {
         .expect("stops sharing");
     assert!(server.client.post(&request).await.is_err());
     assert_eq!(submitter.0.lock().expect("reads submissions").len(), 1);
+    server.runtime.shutdown().await.expect("shuts down runtime");
+}
+
+#[tokio::test]
+async fn validate_job_with_correct_channel_succeeds_without_submitting_job() {
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+    let submitter = Arc::new(FakeSubmitter::default());
+    let server = LiveServer::start(Arc::clone(&channel), Arc::clone(&submitter)).await;
+    let address = server.endpoint.bound_address().expect("listens");
+    let printer_uri = format!(
+        "ipps://127.0.0.1:{}/ipp/print/Office%20Printer",
+        address.port()
+    );
+    let request = validate_job(Some(&secret), &printer_uri);
+
+    let (status, response) = server.client.post(&request).await.expect("reaches server");
+    assert_eq!(status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    assert!(
+        submitter.0.lock().expect("reads submissions").is_empty(),
+        "Validate-Job must not submit a print job"
+    );
+
+    server.runtime.shutdown().await.expect("shuts down runtime");
+}
+
+#[tokio::test]
+async fn validate_job_with_incorrect_channel_is_rejected() {
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+    let submitter = Arc::new(FakeSubmitter::default());
+    let server = LiveServer::start(Arc::clone(&channel), Arc::clone(&submitter)).await;
+    let address = server.endpoint.bound_address().expect("listens");
+    let printer_uri = format!(
+        "ipps://127.0.0.1:{}/ipp/print/Office%20Printer",
+        address.port()
+    );
+    let request = validate_job(Some("wrong-secret"), &printer_uri);
+
+    let (status, response) = server.client.post(&request).await.expect("reaches server");
+    assert_eq!(status, 200);
+    assert_eq!(ipp_status(&response), 0x0401); // NotAuthorized
+    assert!(submitter.0.lock().expect("reads submissions").is_empty());
+
     server.runtime.shutdown().await.expect("shuts down runtime");
 }

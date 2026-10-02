@@ -469,6 +469,10 @@ async fn print_through_installed_queue(queue: &str) {
     .await
     .expect("joins the Windows spooler smoke task")
     .expect("starts Windows PowerShell");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.is_empty() {
+        eprintln!("{stdout}");
+    }
     assert!(
         output.status.success(),
         "the installed queue did not accept a printed page: {}",
@@ -514,6 +518,15 @@ async fn windows_installs_a_native_queue_that_prints_through_the_proxy() {
         return;
     }
 
+    struct TraceEnvironment;
+    impl Drop for TraceEnvironment {
+        fn drop(&mut self) {
+            std::env::remove_var("SHAPRINT_ISSUE34_IPP_TRACE");
+        }
+    }
+    let _trace_environment = TraceEnvironment;
+    std::env::set_var("SHAPRINT_ISSUE34_IPP_TRACE", "1");
+
     const NATIVE_SERVER_PORT: u16 = 8631;
     const NATIVE_PROXY_PORT: u16 = 8632;
     let client = RunningClient::start_on_ports(true, NATIVE_SERVER_PORT, NATIVE_PROXY_PORT).await;
@@ -523,9 +536,30 @@ async fn windows_installs_a_native_queue_that_prints_through_the_proxy() {
     )
     .expect("valid request");
     let queue_name = request.queue_name().as_str().to_owned();
+    remove_queue(&queue_name).await;
 
-    installer
-        .install(&request)
+    struct QueueCleanup(String);
+    impl Drop for QueueCleanup {
+        fn drop(&mut self) {
+            let queue = self.0.clone();
+            let _ = std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Remove-Printer -Name $env:SHAPRINT_SMOKE_QUEUE -ErrorAction SilentlyContinue",
+                ])
+                .env("SHAPRINT_SMOKE_QUEUE", queue)
+                .output();
+        }
+    }
+    let _cleanup = QueueCleanup(queue_name.clone());
+
+    let request_to_install = request.clone();
+    let installer_to_run = Arc::clone(&installer);
+    tokio::task::spawn_blocking(move || installer_to_run.install(&request_to_install))
+        .await
+        .expect("joins installer task")
         .expect("installs the queue in the elevated session");
     // The queue is in the spooler, and Windows renders a page through it to the local proxy.
     print_through_installed_queue(&queue_name).await;

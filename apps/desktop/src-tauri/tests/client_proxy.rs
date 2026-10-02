@@ -191,6 +191,18 @@ fn print_job(printer_uri: &str, document: &[u8]) -> Vec<u8> {
     body
 }
 
+fn validate_job(printer_uri: &str) -> Vec<u8> {
+    let mut body = vec![2, 0, 0, 4, 0, 0, 0, 42, 1];
+    text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
+    text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
+    text_attribute(&mut body, 0x45, "printer-uri", printer_uri);
+    text_attribute(&mut body, 0x44, "media", "iso_a4_210x297mm");
+    text_attribute(&mut body, 0x44, "print-color-mode", "color");
+    text_attribute(&mut body, 0x44, "sides", "one-sided");
+    body.push(3);
+    body
+}
+
 fn text_attribute(body: &mut Vec<u8>, tag: u8, name: &str, value: &str) {
     body.push(tag);
     body.extend((name.len() as u16).to_be_bytes());
@@ -355,6 +367,21 @@ async fn proxy_replaces_a_network_channel_supplied_by_the_local_driver() {
     assert_eq!(http_status, 200);
     assert_eq!(ipp_status(&response), 0x0000);
     assert_eq!(pair.submitter.jobs.lock().expect("reads jobs").len(), 1);
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn proxy_forwards_validate_job_with_the_configured_network_channel() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let local_uri = local_printer_uri(&proxy_address, &pair.server_address);
+    let request = validate_job(&local_uri);
+
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, request).await;
+
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    assert!(pair.submitter.jobs.lock().expect("reads jobs").is_empty());
     pair.stop().await;
 }
 

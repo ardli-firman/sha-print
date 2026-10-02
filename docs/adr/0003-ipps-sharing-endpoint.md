@@ -5,8 +5,8 @@ status: accepted
 ---
 
 The Windows server exposes the printer queues the user selected through one Rust endpoint that
-speaks IPP over HTTP over TLS ("IPPS"). While sharing runs, it answers `Get-Printers` (0x0402) and
-`Get-Printer-Attributes` (0x000B), and accepts `Print-Job` (0x0002) only when:
+speaks IPP over HTTP over TLS ("IPPS"). While sharing runs, it answers `Get-Printers` (0x4002) and
+`Get-Printer-Attributes` (0x000B), and accepts `Print-Job` (0x0002) and `Validate-Job` (0x0004) only when:
 
 - a Network Channel is configured and the request's `network-channel` operation attribute matches;
 - the requested printer is in the current shared-queue selection; and

@@ -13,6 +13,7 @@ const SUPPORTED_VERSIONS: [(u8, u8); 3] = [IPP_VERSION_2_0, IPP_VERSION_1_1, (1,
 
 /// Operation ids the sharing endpoint answers.
 pub const OPERATION_PRINT_JOB: u16 = 0x0002;
+pub const OPERATION_VALIDATE_JOB: u16 = 0x0004;
 pub const OPERATION_GET_PRINTER_ATTRIBUTES: u16 = 0x000b;
 pub const OPERATION_GET_PRINTERS: u16 = 0x4002;
 /// `printer-state` for a queue that is idle and able to accept a job.
@@ -653,6 +654,7 @@ pub fn response(
         let operations = if printer.accepting_jobs {
             &[
                 i32::from(OPERATION_PRINT_JOB),
+                i32::from(OPERATION_VALIDATE_JOB),
                 i32::from(OPERATION_GET_PRINTER_ATTRIBUTES),
                 i32::from(OPERATION_GET_PRINTERS),
             ][..]
@@ -1034,6 +1036,7 @@ mod tests {
             operations,
             vec![
                 i32::from(OPERATION_PRINT_JOB).to_be_bytes().to_vec(),
+                i32::from(OPERATION_VALIDATE_JOB).to_be_bytes().to_vec(),
                 i32::from(OPERATION_GET_PRINTER_ATTRIBUTES)
                     .to_be_bytes()
                     .to_vec(),
