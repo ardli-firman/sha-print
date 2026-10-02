@@ -23,7 +23,7 @@ use tokio::time::timeout;
 use tokio_rustls::{rustls::ServerConfig, TlsAcceptor};
 
 use crate::adapters::identity::ServerIdentity;
-use crate::application::{PrintJobSubmitter, ServiceContext, SharedPrinterSource};
+use crate::application::{PrintFailures, PrintJobSubmitter, ServiceContext, SharedPrinterSource};
 use crate::domain::{AppError, CertificateFingerprint};
 
 /// Port the sharing endpoint listens on.
@@ -44,6 +44,7 @@ pub struct IppsServer {
     identity: Arc<ServerIdentity>,
     channel: Arc<NetworkChannel>,
     submitter: Arc<dyn PrintJobSubmitter>,
+    failures: Arc<PrintFailures>,
     bound: Mutex<Option<SocketAddr>>,
 }
 
@@ -54,12 +55,14 @@ impl IppsServer {
         identity: Arc<ServerIdentity>,
         channel: Arc<NetworkChannel>,
         submitter: Arc<dyn PrintJobSubmitter>,
+        failures: Arc<PrintFailures>,
     ) -> Self {
         Self {
             port,
             identity,
             channel,
             submitter,
+            failures,
             bound: Mutex::new(None),
         }
     }
@@ -117,6 +120,7 @@ impl IppsServer {
                             Arc::clone(&directory),
                             Arc::clone(&self.channel),
                             Arc::clone(&self.submitter),
+                            Arc::clone(&self.failures),
                             peer,
                         ));
                     }
@@ -157,6 +161,7 @@ async fn serve_client(
     directory: Arc<dyn SharedPrinterSource>,
     channel: Arc<NetworkChannel>,
     submitter: Arc<dyn PrintJobSubmitter>,
+    failures: Arc<PrintFailures>,
     peer: SocketAddr,
 ) {
     let acceptor = TlsAcceptor::from(tls);
@@ -178,6 +183,7 @@ async fn serve_client(
         directory.as_ref(),
         channel.as_ref(),
         submitter.as_ref(),
+        failures.as_ref(),
     )
     .await
     {
@@ -194,6 +200,7 @@ pub async fn answer_request_with_jobs<S>(
     directory: &dyn SharedPrinterSource,
     channel: &NetworkChannel,
     submitter: &dyn PrintJobSubmitter,
+    failures: &PrintFailures,
 ) -> Result<(), AppError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -234,7 +241,8 @@ where
             return respond(&mut write, "400 Bad Request", "text/plain", &[]).await;
         }
     };
-    let answer = endpoint::answer_job(body, authority, directory, channel, submitter).await;
+    let answer =
+        endpoint::answer_job(body, authority, directory, channel, submitter, failures).await;
     respond(&mut write, "200 OK", http::IPP_CONTENT_TYPE, &answer).await
 }
 
@@ -316,7 +324,9 @@ mod tests {
         let (server, mut client) = tokio::io::duplex(16 * 1024);
         let channel = NetworkChannel::in_memory();
         let submitter = UnavailableSubmitter;
-        let answering = answer_request_with_jobs(server, directory.as_ref(), &channel, &submitter);
+        let failures = PrintFailures::new();
+        let answering =
+            answer_request_with_jobs(server, directory.as_ref(), &channel, &submitter, &failures);
         let exchange = async move {
             client.write_all(request).await.expect("sends the request");
             let mut answer = Vec::new();

@@ -121,6 +121,89 @@ body {
   gap: 0.75rem;
 }
 
+.startup-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+}
+
+.startup-command {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.startup-command code {
+  overflow-wrap: anywhere;
+}
+
+.channel-outcome {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(15, 118, 110, 0.08);
+}
+
+.channel-outcome-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.channel-outcome-note {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.reselect {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #fbbf24;
+  border-radius: 8px;
+  background: rgba(251, 191, 36, 0.12);
+  font-size: 0.9rem;
+}
+
+.left-behind {
+  font-size: 0.85rem;
+}
+
+.left-behind summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.left-behind-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.left-behind-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  border-left: 2px solid var(--border);
+  padding-left: 0.6rem;
+}
+
+.left-behind-label {
+  font-weight: 600;
+}
+
+.left-behind-reason {
+  color: var(--muted);
+}
+
 .service-list {
   list-style: none;
   margin: 0;
@@ -162,6 +245,85 @@ body {
   font-size: 0.85rem;
   color: var(--muted);
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+.service-recovery {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #fbbf24;
+  border-radius: 8px;
+  background: rgba(251, 191, 36, 0.12);
+  font-size: 0.85rem;
+}
+
+.service-recovery-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #92400e;
+}
+
+.failure {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid #f87171;
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+}
+
+.failure-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.failure-path {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.failure-code,
+.failure-when {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.failure-code {
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(248, 113, 113, 0.18);
+  white-space: nowrap;
+}
+
+.failure-message,
+.failure-recovery,
+.failure-when {
+  margin: 0;
+}
+
+.failure-message {
+  font-size: 0.9rem;
+}
+
+.failure-recovery {
+  font-size: 0.85rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(15, 118, 110, 0.1);
+  border: 1px solid var(--border);
+}
+
+@media (prefers-color-scheme: dark) {
+  .service-recovery-label {
+    color: #fcd34d;
+  }
 }
 
 .badge {

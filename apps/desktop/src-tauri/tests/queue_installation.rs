@@ -17,8 +17,8 @@ use shaprint_desktop::adapters::{
     client_queue_uri, ClientProxyService, IppsServer, ServerIdentity,
 };
 use shaprint_desktop::application::{
-    ClientProxyState, ElevationBroker, PrintJob, PrintJobSubmitter, QueueInstallation,
-    QueueInstaller, RuntimeCoordinator, Setup, Sharing, TrustedServerPrinters,
+    ClientProxyState, ElevationBroker, PrintFailures, PrintJob, PrintJobSubmitter,
+    QueueInstallation, QueueInstaller, RuntimeCoordinator, Setup, Sharing, TrustedServerPrinters,
 };
 use shaprint_desktop::domain::{
     AppError, ClientQueueRequest, ErrorCode, PrinterName, ServiceId, SetupAction, SetupFailure,
@@ -180,6 +180,7 @@ impl RunningClient {
             Arc::new(ServerIdentity::generate().expect("creates a server identity")),
             server_channel,
             submitter.clone(),
+            Arc::new(PrintFailures::new()),
         ));
         // The shared helper advertises on an ephemeral discovery port, so this test never competes
         // for the machine's multicast DNS port.
@@ -218,6 +219,7 @@ impl RunningClient {
         let proxy = Arc::new(ClientProxyService::with_port(
             Arc::clone(&connections),
             client_channel,
+            Arc::new(PrintFailures::new()),
             proxy_port,
         ));
         let coordinator = Arc::new(RuntimeCoordinator::new(vec![proxy.clone()]));
@@ -377,7 +379,9 @@ async fn an_unapproved_server_installs_nothing() {
         .await
         .expect_err("refuses an unapproved server");
 
-    assert_eq!(error.code(), ErrorCode::InvalidState);
+    // #48 made this refusal specific: an unapproved server is reported as `server-untrusted`
+    // instead of the generic `invalid-state` the print path used before.
+    assert_eq!(error.code(), ErrorCode::ServerNotTrusted);
     assert!(broker.installed().is_empty());
     client.stop().await;
 }

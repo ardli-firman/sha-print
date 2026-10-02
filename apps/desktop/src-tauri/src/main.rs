@@ -5,6 +5,7 @@
 )]
 
 use shaprint_desktop::adapters::elevation::{parse_command_line, run_elevated, CommandLine};
+use shaprint_desktop::adapters::startup::launches_in_background;
 
 fn main() {
     let arguments: Vec<String> = std::env::args().collect();
@@ -29,7 +30,10 @@ fn main() {
             std::process::exit(2);
         }
         CommandLine::Run => {
-            if let Err(error) = shaprint_desktop::run() {
+            // A login launch starts the background services and waits in the tray; an interactive
+            // launch opens the window as usual (#40).
+            let background = launches_in_background(&arguments);
+            if let Err(error) = shaprint_desktop::run(background) {
                 log::error!(
                     "desktop shell exited code={} message={}",
                     error.code_str(),

@@ -4,7 +4,7 @@
 //! only to a queue in the current shared selection.
 
 use crate::application::SharedPrinterSource;
-use crate::domain::{ErrorCode, PrinterName};
+use crate::domain::{ErrorCode, PrintFailure, PrinterName};
 
 use super::protocol::{
     job_response, percent_decode, percent_encode, response, PrinterEntry, Request, Status,
@@ -13,7 +13,7 @@ use super::protocol::{
 };
 
 use crate::adapters::ipps::NetworkChannel;
-use crate::application::{DuplexMode, PrintJob, PrintJobSubmitter, PrintSettings};
+use crate::application::{DuplexMode, PrintFailures, PrintJob, PrintJobSubmitter, PrintSettings};
 
 #[cfg(test)]
 fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> Vec<u8> {
@@ -77,6 +77,7 @@ pub async fn answer_job(
     shared: &dyn SharedPrinterSource,
     channel: &NetworkChannel,
     submitter: &dyn PrintJobSubmitter,
+    failures: &PrintFailures,
 ) -> Vec<u8> {
     let request = match Request::parse(&bytes) {
         Ok(request) => request,
@@ -104,6 +105,9 @@ pub async fn answer_job(
         return response(request_id, version, Status::NotAuthorized, &[]);
     }
     if !submitter.is_available() {
+        // Reported only after authorization, so an anonymous caller cannot fill the server user's
+        // screen with failures it has no way to act on.
+        failures.report(PrintFailure::server(ErrorCode::QueueUnavailable, None));
         return response(request_id, version, Status::NotAcceptingJobs, &[]);
     }
     let shared_printers = shared.shared_printers();
@@ -158,8 +162,24 @@ pub async fn answer_job(
                 ErrorCode::Unsupported => Status::NotAcceptingJobs,
                 _ => Status::InternalError,
             };
+            failures.report(PrintFailure::server(
+                submission_failure(error.code()),
+                Some(&printer),
+            ));
             response(request_id, version, status, &[])
         }
+    }
+}
+
+/// The code a user should see when the spooler refused a job.
+///
+/// Settings the printer cannot accept are the user's to change; anything else means the queue
+/// itself is not usable from this server.
+fn submission_failure(code: ErrorCode) -> ErrorCode {
+    if code == ErrorCode::InvalidInput {
+        code
+    } else {
+        ErrorCode::QueueUnavailable
     }
 }
 

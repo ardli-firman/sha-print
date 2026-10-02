@@ -9,10 +9,10 @@ use async_trait::async_trait;
 use shaprint_desktop::adapters::ipps::{answer_request_with_jobs, IppsServer, NetworkChannel};
 use shaprint_desktop::adapters::ServerIdentity;
 use shaprint_desktop::application::{
-    DuplexMode, PrintJob, PrintJobSubmitter, PrintSettings, RuntimeCoordinator,
+    DuplexMode, PrintFailures, PrintJob, PrintJobSubmitter, PrintSettings, RuntimeCoordinator,
     SharedPrinterSource, Sharing,
 };
-use shaprint_desktop::domain::{AppError, PrinterName, ServiceId};
+use shaprint_desktop::domain::{AppError, ErrorCode, JobPath, PrinterName, ServiceId};
 use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
 
 const OFFICE_PRINTER_URI: &str = "ipps://server:8631/ipp/print/Office%20Printer";
@@ -36,6 +36,26 @@ impl PrintJobSubmitter for FakeSubmitter {
             .map_err(|_| AppError::internal("fake printer unavailable"))?
             .push((printer.as_str().to_owned(), job));
         Ok(17)
+    }
+}
+
+/// A spooler that refuses jobs, so both server submission failure paths are observable.
+struct RefusingSubmitter {
+    code: ErrorCode,
+    available: bool,
+}
+
+#[async_trait]
+impl PrintJobSubmitter for RefusingSubmitter {
+    fn is_available(&self) -> bool {
+        self.available
+    }
+
+    async fn submit(&self, _printer: &PrinterName, _job: PrintJob) -> Result<u32, AppError> {
+        Err(AppError::new(
+            self.code,
+            "the Windows spooler refused the job",
+        ))
     }
 }
 
@@ -181,8 +201,19 @@ async fn send(
     channel: &NetworkChannel,
     printer: &FakeSubmitter,
 ) -> Vec<u8> {
+    let failures = PrintFailures::new();
+    send_with_failures(body, shared, channel, printer, &failures).await
+}
+
+async fn send_with_failures(
+    body: &[u8],
+    shared: &Shared,
+    channel: &NetworkChannel,
+    printer: &dyn PrintJobSubmitter,
+    failures: &PrintFailures,
+) -> Vec<u8> {
     let (client, server) = duplex(16 * 1024);
-    let answering = answer_request_with_jobs(server, shared, channel, printer);
+    let answering = answer_request_with_jobs(server, shared, channel, printer, failures);
     let exchange = async move {
         let mut client = client;
         let head = format!("POST /ipp/print HTTP/1.1\r\nHost: server:8631\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n", body.len());
@@ -277,7 +308,13 @@ impl LiveServer {
             .await
             .expect("selects printer");
         let identity = Arc::new(ServerIdentity::generate().expect("generates identity"));
-        let endpoint = Arc::new(IppsServer::new(0, identity, channel, submitter));
+        let endpoint = Arc::new(IppsServer::new(
+            0,
+            identity,
+            channel,
+            submitter,
+            Arc::new(PrintFailures::new()),
+        ));
         let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
             Arc::clone(&sharing),
             Arc::clone(&endpoint),
@@ -571,6 +608,150 @@ async fn stopping_sharing_refuses_new_jobs_before_the_printer_adapter() {
     assert!(server.client.post(&request).await.is_err());
     assert_eq!(submitter.0.lock().expect("reads submissions").len(), 1);
     server.runtime.shutdown().await.expect("shuts down runtime");
+}
+
+#[tokio::test]
+async fn a_refused_queue_submission_is_reported_with_a_stable_code_and_no_channel_value() {
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid printer")
+    ]);
+    let failures = PrintFailures::new();
+    let submitter = RefusingSubmitter {
+        code: ErrorCode::Internal,
+        available: true,
+    };
+
+    let response = send_with_failures(
+        &print_job(Some(&secret), OFFICE_PRINTER_URI, "one-sided", b"document"),
+        &shared,
+        &channel,
+        &submitter,
+        &failures,
+    )
+    .await;
+
+    assert_eq!(ipp_status(&response), 0x0500);
+    let failure = failures.latest().expect("reports the failure");
+    assert_eq!(failure.path(), JobPath::ServerSubmission);
+    assert_eq!(failure.code(), ErrorCode::QueueUnavailable);
+    assert_eq!(failure.code().as_str(), "queue-unavailable");
+    assert_eq!(
+        failure.message(),
+        "The job for 'Office Printer' could not be submitted to the Windows printer queue."
+    );
+    assert!(failure.recovery().contains("printer"));
+
+    // Neither the Network Channel nor the document may reach the user-facing record.
+    assert!(!failure.message().contains(&secret));
+    assert!(!failure.recovery().contains(&secret));
+    assert!(!failure.message().contains("document"));
+}
+
+#[tokio::test]
+async fn printer_settings_the_queue_rejects_are_reported_as_the_users_to_change() {
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid printer")
+    ]);
+    let failures = PrintFailures::new();
+    let submitter = RefusingSubmitter {
+        code: ErrorCode::InvalidInput,
+        available: true,
+    };
+
+    let response = send_with_failures(
+        &print_job(Some(&secret), OFFICE_PRINTER_URI, "one-sided", b"document"),
+        &shared,
+        &channel,
+        &submitter,
+        &failures,
+    )
+    .await;
+
+    assert_eq!(ipp_status(&response), 0x040b);
+    let failure = failures.latest().expect("reports the failure");
+    assert_eq!(failure.code(), ErrorCode::InvalidInput);
+    assert!(failure.recovery().contains("media size"));
+}
+
+#[tokio::test]
+async fn a_server_with_no_working_spooler_reports_it_after_authorization() {
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid printer")
+    ]);
+    let failures = PrintFailures::new();
+    let submitter = RefusingSubmitter {
+        code: ErrorCode::Unsupported,
+        available: false,
+    };
+
+    let response = send_with_failures(
+        &print_job(Some(&secret), OFFICE_PRINTER_URI, "one-sided", b"document"),
+        &shared,
+        &channel,
+        &submitter,
+        &failures,
+    )
+    .await;
+
+    assert_eq!(ipp_status(&response), 0x0508);
+    let failure = failures.latest().expect("reports the failure");
+    assert_eq!(failure.path(), JobPath::ServerSubmission);
+    assert_eq!(failure.code(), ErrorCode::QueueUnavailable);
+    assert!(failure.recovery().contains("printer"));
+}
+
+#[tokio::test]
+async fn an_unauthorized_job_never_reaches_the_server_users_failure_report() {
+    let channel = Arc::new(NetworkChannel::in_memory());
+    channel
+        .configure(&channel_secret())
+        .await
+        .expect("configures channel");
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid printer")
+    ]);
+    let failures = PrintFailures::new();
+    let submitter = RefusingSubmitter {
+        code: ErrorCode::Internal,
+        available: true,
+    };
+
+    let response = send_with_failures(
+        &print_job(
+            Some("an-attackers-guess"),
+            OFFICE_PRINTER_URI,
+            "one-sided",
+            b"document",
+        ),
+        &shared,
+        &channel,
+        &submitter,
+        &failures,
+    )
+    .await;
+
+    assert_eq!(ipp_status(&response), 0x0403);
+    // Anyone can reach the endpoint, so a rejected channel must not be able to fill the server
+    // user's screen with failures they cannot act on.
+    assert_eq!(failures.latest(), None);
 }
 
 #[tokio::test]

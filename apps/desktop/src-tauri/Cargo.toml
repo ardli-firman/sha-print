@@ -25,6 +25,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 async-trait = "0.1"
+# The previous app wrote its protected Network Channel as base64 text; reading that value is the
+# only reason this app decodes base64 itself.
+base64 = "0.22"
 hex = "0.4"
 log = "0.4"
 # `ring` is the TLS backend for both rustls and rcgen on every platform we build, including the
@@ -35,7 +38,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tauri = { version = "2", features = [], optional = true }
+tauri = { version = "2", features = ["tray-icon"], optional = true }
 tauri-plugin-log = { version = "2", optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

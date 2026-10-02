@@ -19,18 +19,36 @@ pub enum ErrorCode {
     Timeout,
     /// The platform cannot perform the request; the message names what is missing.
     Unsupported,
+    /// The trusted server could not be reached.
+    ServerUnavailable,
+    /// The server has not been approved by certificate fingerprint yet.
+    ServerNotTrusted,
+    /// The server presented a certificate that differs from the approved fingerprint.
+    ServerIdentityChanged,
+    /// The Network Channel is missing, or the server rejected the supplied one.
+    NotAuthorized,
+    /// The server does not share the requested printer.
+    PrinterNotShared,
+    /// The server could not submit the job to its local printer queue.
+    QueueUnavailable,
     /// Unexpected failure; specifics belong in the message, never in the code.
     Internal,
 }
 
 impl ErrorCode {
     /// Every code the shell can report, in a fixed order.
-    pub const ALL: [ErrorCode; 6] = [
+    pub const ALL: [ErrorCode; 12] = [
         ErrorCode::InvalidInput,
         ErrorCode::UnknownService,
         ErrorCode::InvalidState,
         ErrorCode::Timeout,
         ErrorCode::Unsupported,
+        ErrorCode::ServerUnavailable,
+        ErrorCode::ServerNotTrusted,
+        ErrorCode::ServerIdentityChanged,
+        ErrorCode::NotAuthorized,
+        ErrorCode::PrinterNotShared,
+        ErrorCode::QueueUnavailable,
         ErrorCode::Internal,
     ];
 
@@ -42,6 +60,12 @@ impl ErrorCode {
             ErrorCode::InvalidState => "invalid-state",
             ErrorCode::Timeout => "timeout",
             ErrorCode::Unsupported => "unsupported",
+            ErrorCode::ServerUnavailable => "server-unavailable",
+            ErrorCode::ServerNotTrusted => "server-untrusted",
+            ErrorCode::ServerIdentityChanged => "server-identity-changed",
+            ErrorCode::NotAuthorized => "not-authorized",
+            ErrorCode::PrinterNotShared => "printer-not-shared",
+            ErrorCode::QueueUnavailable => "queue-unavailable",
             ErrorCode::Internal => "internal",
         }
     }
@@ -83,6 +107,30 @@ impl AppError {
         Self::new(ErrorCode::Unsupported, message)
     }
 
+    pub fn server_unavailable(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ServerUnavailable, message)
+    }
+
+    pub fn server_not_trusted(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ServerNotTrusted, message)
+    }
+
+    pub fn server_identity_changed(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ServerIdentityChanged, message)
+    }
+
+    pub fn not_authorized(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::NotAuthorized, message)
+    }
+
+    pub fn printer_not_shared(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::PrinterNotShared, message)
+    }
+
+    pub fn queue_unavailable(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::QueueUnavailable, message)
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, message)
     }
@@ -115,6 +163,12 @@ mod tests {
                 "invalid-state",
                 "timeout",
                 "unsupported",
+                "server-unavailable",
+                "server-untrusted",
+                "server-identity-changed",
+                "not-authorized",
+                "printer-not-shared",
+                "queue-unavailable",
                 "internal"
             ]
         );

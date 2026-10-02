@@ -28,7 +28,7 @@ use tokio_rustls::{
 
 use crate::{
     adapters::ipps::protocol::{self, OPERATION_GET_PRINTERS},
-    domain::{AppError, ErrorCode},
+    domain::AppError,
 };
 
 const DEFAULT_PORT: u16 = 8631;
@@ -233,10 +233,10 @@ impl ClientConnections {
 
     pub async fn printers(&self, input: &str) -> Result<ConnectionPrinters, AppError> {
         let address = ServerAddress::parse(input)?;
-        let pinned = self.store.lock().map_err(|_| AppError::internal("Saved server approvals are unavailable; restart the app and try again."))?.servers.get(&address.normalized).map(|r| r.fingerprint.clone()).ok_or_else(|| AppError::invalid_state("This server is not approved. Inspect its certificate fingerprint and explicitly approve it before listing shared printers."))?;
+        let pinned = self.store.lock().map_err(|_| AppError::internal("Saved server approvals are unavailable; restart the app and try again."))?.servers.get(&address.normalized).map(|r| r.fingerprint.clone()).ok_or_else(|| AppError::server_not_trusted("This server is not approved. Inspect its certificate fingerprint and explicitly approve it before listing shared printers."))?;
         let (stream, live) = connect(&address).await?;
         if live != pinned {
-            return Err(AppError::invalid_state(format!("The server certificate changed. Previously approved: {pinned}. Currently presented: {live}. Shared printers are blocked; inspect the current fingerprint and explicitly reapprove it only if you trust the change.")));
+            return Err(AppError::server_identity_changed(format!("The server certificate changed. Previously approved: {pinned}. Currently presented: {live}. Shared printers are blocked; inspect the current fingerprint and explicitly reapprove it only if you trust the change.")));
         }
         let names = query_printers(stream, &address).await?;
         Ok(ConnectionPrinters {
@@ -262,10 +262,10 @@ impl ClientConnections {
             .servers
             .get(&address.normalized)
             .map(|record| record.fingerprint.clone())
-            .ok_or_else(|| AppError::invalid_state("This server is not approved. Inspect its certificate fingerprint and explicitly approve it before printing."))?;
+            .ok_or_else(|| AppError::server_not_trusted("This server is not approved. Inspect its certificate fingerprint and explicitly approve it before printing."))?;
         let (mut tls, live) = connect(&address).await?;
         if live != pinned {
-            return Err(AppError::invalid_state("The server certificate changed. Printing is blocked until you inspect the current fingerprint and explicitly reapprove the server."));
+            return Err(AppError::server_identity_changed("The server certificate changed. Printing is blocked until you inspect the current fingerprint and explicitly reapprove the server."));
         }
 
         let request =
@@ -287,8 +287,8 @@ impl ClientConnections {
             Ok::<_, std::io::Error>(response)
         })
         .await
-        .map_err(|_| AppError::timeout("The print server did not finish the job in time."))?
-        .map_err(|_| AppError::internal("Could not complete the secure print request. Check that the server is online and sharing the selected printer."))?;
+        .map_err(|_| AppError::server_unavailable("The print server did not finish the job in time. Check that it is online and sharing the selected printer."))?
+        .map_err(|_| AppError::server_unavailable("Could not complete the secure print request. Check that the server is online and sharing the selected printer."))?;
         let boundary = response
             .windows(4)
             .position(|window| window == b"\r\n\r\n")
@@ -357,7 +357,7 @@ async fn observe_fingerprint(address: &ServerAddress) -> Result<String, AppError
 async fn connect(
     address: &ServerAddress,
 ) -> Result<(tokio_rustls::client::TlsStream<TcpStream>, String), AppError> {
-    let tcp = timeout(Duration::from_secs(8), TcpStream::connect(address.socket())).await.map_err(|_| AppError::timeout("The server did not respond. Check its address, network route, firewall, and that IPPS sharing is running."))?.map_err(|_| AppError::new(ErrorCode::Internal, "Could not reach the server. Check its address, network route, firewall, and that IPPS sharing is running."))?;
+    let tcp = timeout(Duration::from_secs(8), TcpStream::connect(address.socket())).await.map_err(|_| AppError::server_unavailable("The server did not respond. Check its address, network route, firewall, and that IPPS sharing is running."))?.map_err(|_| AppError::server_unavailable("Could not reach the server. Check its address, network route, firewall, and that IPPS sharing is running."))?;
     let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
     let config = ClientConfig::builder_with_provider(Arc::clone(&provider))
         .with_safe_default_protocol_versions()
@@ -366,7 +366,7 @@ async fn connect(
         .with_custom_certificate_verifier(ArcVerifier::new(provider))
         .with_no_client_auth();
     let name = ServerName::try_from(address.host.clone()).map_err(|_| invalid_address())?;
-    let tls = timeout(Duration::from_secs(8), TlsConnector::from(std::sync::Arc::new(config)).connect(name, tcp)).await.map_err(|_| AppError::timeout("The secure connection timed out. Check the server address and that IPPS sharing is running."))?.map_err(|_| AppError::new(ErrorCode::Internal, "The server could not complete a secure IPPS connection. Check that it is an IPPS server and retry."))?;
+    let tls = timeout(Duration::from_secs(8), TlsConnector::from(std::sync::Arc::new(config)).connect(name, tcp)).await.map_err(|_| AppError::server_unavailable("The secure connection timed out. Check the server address and that IPPS sharing is running."))?.map_err(|_| AppError::server_unavailable("The server could not complete a secure IPPS connection. Check that it is an IPPS server and retry."))?;
     let cert = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).ok_or_else(|| AppError::internal("The server did not present a certificate. Confirm the address points to an IPPS server."))?;
     let fingerprint = fingerprint(cert);
     Ok((tls, fingerprint))
