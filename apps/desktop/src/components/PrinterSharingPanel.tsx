@@ -6,7 +6,8 @@ interface PrinterSharingPanelProps {
 
 /**
  * The server side of sharing: which local queues other ShaPrint users may print to, the
- * certificate identity they approve, and the one action that needs administrator permission.
+ * certificate identity they approve, and the one server-side action that needs administrator
+ * permission. Installing a client queue is the other action that prompts, in the panel below.
  *
  * Sharing itself is started and stopped on the Server sharing service card, so a change here only
  * decides what a running server exposes.
@@ -92,8 +93,9 @@ export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
             </button>
           </div>
           <p className="hint">
-            Only this step asks Windows for administrator permission: it opens the port for other
-            computers. Selecting printers and starting or stopping sharing do not.
+            This step asks Windows for administrator permission once: it opens the port for other
+            computers. Selecting printers and starting or stopping sharing do not. Installing a
+            client queue, in the panel below, is the only other step that prompts.
           </p>
         </div>
       ) : null}

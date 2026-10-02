@@ -9,6 +9,7 @@ use crate::domain::{ErrorCode, PrinterName};
 use super::protocol::{
     job_response, percent_decode, percent_encode, response, PrinterEntry, Request, Status,
     IPP_VERSION_1_1, OPERATION_GET_PRINTERS, OPERATION_GET_PRINTER_ATTRIBUTES, OPERATION_PRINT_JOB,
+    OPERATION_VALIDATE_JOB,
 };
 
 use crate::adapters::ipps::NetworkChannel;
@@ -86,7 +87,8 @@ pub async fn answer_job(
     if !request.version_is_supported() {
         return response(request_id, version, Status::VersionNotSupported, &[]);
     }
-    if request.operation() != OPERATION_PRINT_JOB {
+    let operation = request.operation();
+    if operation != OPERATION_PRINT_JOB && operation != OPERATION_VALIDATE_JOB {
         return answer_with_job_status(
             &bytes,
             host,
@@ -113,20 +115,18 @@ pub async fn answer_job(
         return response(request_id, version, Status::NotFound, &[]);
     };
 
-    let Some(document_format) = request.value("document-format") else {
-        return response(request_id, version, Status::BadRequest, &[]);
-    };
-    if !matches!(
-        document_format.to_ascii_lowercase().as_str(),
-        "application/octet-stream"
-            | "image/pwg-raster"
-            | "application/pdf"
-            | "application/pclm"
-            | "application/oxps"
-    ) {
-        return response(request_id, version, Status::DocumentFormatNotSupported, &[]);
-    }
-    if request.document().is_empty() {
+    if let Some(document_format) = request.value("document-format") {
+        if !matches!(
+            document_format.to_ascii_lowercase().as_str(),
+            "application/octet-stream"
+                | "image/pwg-raster"
+                | "application/pdf"
+                | "application/pclm"
+                | "application/oxps"
+        ) {
+            return response(request_id, version, Status::DocumentFormatNotSupported, &[]);
+        }
+    } else if operation == OPERATION_PRINT_JOB {
         return response(request_id, version, Status::BadRequest, &[]);
     }
 
@@ -134,6 +134,15 @@ pub async fn answer_job(
         Ok(settings) => settings,
         Err(status) => return response(request_id, version, status, &[]),
     };
+
+    if operation == OPERATION_VALIDATE_JOB {
+        return response(request_id, version, Status::Ok, &[]);
+    }
+
+    if request.document().is_empty() {
+        return response(request_id, version, Status::BadRequest, &[]);
+    }
+
     let document_start = request.document_start();
     drop(request);
     let job = PrintJob::from_ipp_body(bytes, document_start, settings);

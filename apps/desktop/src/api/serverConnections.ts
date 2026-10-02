@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { ClientQueue } from "./types";
+
 export interface ServerConnectionReview {
   address: string;
   current_fingerprint: string;
@@ -16,4 +18,8 @@ export function approveServerConnection(address: string, fingerprint: string): P
 }
 export function listServerConnectionPrinters(address: string): Promise<ServerConnectionPrinters> {
   return invoke("list_server_connection_printers", { address });
+}
+/** Installs the native Windows queue for a printer the trusted server shares. */
+export function installPrinterQueue(serverAddress: string, printerName: string): Promise<ClientQueue> {
+  return invoke("install_printer_queue", { serverAddress, printerName });
 }

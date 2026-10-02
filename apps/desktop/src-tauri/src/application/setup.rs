@@ -1,9 +1,9 @@
 //! The setup use case: request administrator permission exactly where the domain says it is
-//! required, and nothing else.
+//! required, and turn the helper's classified failure into a message the user can act on.
 
 use std::sync::Arc;
 
-use crate::domain::{AppError, SetupAction};
+use crate::domain::{AppError, ClientQueueRequest, SetupAction, SetupFailure};
 
 /// Runs a configuration action with administrator rights.
 ///
@@ -11,7 +11,13 @@ use crate::domain::{AppError, SetupAction};
 /// report that they cannot (ADR 0001 keeps Linux a later phase).
 pub trait ElevationBroker: Send + Sync + 'static {
     /// Performs `action` elevated. Callers check [`SetupAction::requires_elevation`] first.
-    fn elevate(&self, action: SetupAction) -> Result<(), AppError>;
+    fn elevate(&self, action: SetupAction) -> Result<(), SetupFailure>;
+
+    /// Installs (or repairs) the native Windows queue for `request` elevated.
+    ///
+    /// Queue installation always changes machine-wide spooler state, so it is its own operation
+    /// rather than a parameterless action: the helper needs the queue name and its destination.
+    fn install_queue(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure>;
 }
 
 /// What the shell did for a configuration action.
@@ -41,39 +47,112 @@ impl Setup {
         }
 
         log::info!("requesting elevation action={}", action.as_str());
-        self.broker.elevate(action)?;
+        self.broker.elevate(action).map_err(|failure| {
+            log::warn!(
+                "elevated action failed action={} reason={}",
+                action.as_str(),
+                failure.kind().id()
+            );
+            failure.for_action(action)
+        })?;
         Ok(SetupOutcome::Elevated)
+    }
+
+    /// Installs (or repairs) the native Windows queue for `request`.
+    ///
+    /// A spooler queue is machine-wide state, so [`SetupAction::InstallPrinter`] is classified as
+    /// requiring elevation and this call always prompts.
+    pub fn install_queue(&self, request: &ClientQueueRequest) -> Result<(), AppError> {
+        log::info!(
+            "requesting elevation action={}",
+            SetupAction::InstallPrinter.as_str()
+        );
+        self.broker.install_queue(request).map_err(|failure| {
+            log::warn!(
+                "queue install failed queue={} reason={}",
+                request.queue_name(),
+                failure.kind().id()
+            );
+            failure.for_queue_install(request)
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{ClientQueueName, ErrorCode, PrinterName, SetupFailureKind};
     use std::sync::Mutex;
 
-    /// Records the actions it was asked to elevate.
+    /// Records what it was asked to elevate.
     #[derive(Default)]
     struct RecordingBroker {
         elevated: Mutex<Vec<SetupAction>>,
+        installed: Mutex<Vec<ClientQueueRequest>>,
+        outcome: Mutex<Option<SetupFailureKind>>,
     }
 
     impl RecordingBroker {
+        fn with_failure(kind: SetupFailureKind) -> Self {
+            Self {
+                outcome: Mutex::new(Some(kind)),
+                ..Self::default()
+            }
+        }
+
         fn elevated(&self) -> Vec<SetupAction> {
             self.elevated
                 .lock()
                 .map(|actions| actions.clone())
                 .unwrap_or_default()
         }
+
+        fn installed(&self) -> Vec<ClientQueueRequest> {
+            self.installed
+                .lock()
+                .map(|requests| requests.clone())
+                .unwrap_or_default()
+        }
+
+        fn refusal(&self) -> Option<SetupFailure> {
+            self.outcome
+                .lock()
+                .ok()
+                .and_then(|kind| *kind)
+                .map(|kind| SetupFailure::new(kind, "recorded failure"))
+        }
     }
 
     impl ElevationBroker for RecordingBroker {
-        fn elevate(&self, action: SetupAction) -> Result<(), AppError> {
+        fn elevate(&self, action: SetupAction) -> Result<(), SetupFailure> {
+            if let Some(failure) = self.refusal() {
+                return Err(failure);
+            }
             self.elevated
                 .lock()
-                .map_err(|_| AppError::internal("broker lock is poisoned"))?
+                .map_err(|_| SetupFailure::new(SetupFailureKind::Other, "broker lock is poisoned"))?
                 .push(action);
             Ok(())
         }
+
+        fn install_queue(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+            if let Some(failure) = self.refusal() {
+                return Err(failure);
+            }
+            self.installed
+                .lock()
+                .map_err(|_| SetupFailure::new(SetupFailureKind::Other, "broker lock is poisoned"))?
+                .push(request.clone());
+            Ok(())
+        }
+    }
+
+    fn queue_request() -> ClientQueueRequest {
+        ClientQueueRequest::new(
+            "10.0.0.5:8631",
+            PrinterName::parse("Office Printer").expect("valid printer name"),
+        )
+        .expect("valid request")
     }
 
     #[test]
@@ -92,6 +171,7 @@ mod tests {
         }
 
         assert!(broker.elevated().is_empty());
+        assert!(broker.installed().is_empty());
     }
 
     #[test]
@@ -109,22 +189,46 @@ mod tests {
     }
 
     #[test]
+    fn installing_a_queue_asks_for_administrator_permission_with_the_request() {
+        let broker = Arc::new(RecordingBroker::default());
+        let setup = Setup::new(Arc::clone(&broker) as Arc<dyn ElevationBroker>);
+
+        let request = queue_request();
+        setup.install_queue(&request).expect("installs elevated");
+
+        assert_eq!(broker.installed(), vec![request]);
+        // Installing a queue is its own elevated operation, not a parameterless action.
+        assert!(broker.elevated().is_empty());
+    }
+
+    #[test]
     fn a_refused_prompt_is_reported_to_the_caller() {
-        struct RefusingBroker;
-
-        impl ElevationBroker for RefusingBroker {
-            fn elevate(&self, _action: SetupAction) -> Result<(), AppError> {
-                Err(AppError::unsupported(
-                    "administrator permission was not granted",
-                ))
-            }
-        }
-
-        let setup = Setup::new(Arc::new(RefusingBroker));
+        let setup = Setup::new(Arc::new(RecordingBroker::with_failure(
+            SetupFailureKind::PermissionDenied,
+        )));
         let error = setup
             .request(SetupAction::AllowInboundSharing)
             .expect_err("refused");
 
-        assert_eq!(error.code(), crate::domain::ErrorCode::Unsupported);
+        assert_eq!(error.code(), ErrorCode::Unsupported);
+        assert!(error.message().contains("administrator permission"));
+        // The raw helper text never reaches the user.
+        assert!(!error.message().contains("recorded failure"));
+    }
+
+    #[test]
+    fn a_failed_install_names_the_queue_and_the_advice() {
+        let setup = Setup::new(Arc::new(RecordingBroker::with_failure(
+            SetupFailureKind::SpoolerUnavailable,
+        )));
+        let error = setup.install_queue(&queue_request()).expect_err("refused");
+
+        assert_eq!(error.code(), ErrorCode::InvalidState);
+        assert!(error.message().contains(
+            ClientQueueName::parse("Office Printer (ShaPrint 10.0.0.5-8631)")
+                .expect("valid queue name")
+                .as_str()
+        ));
+        assert!(error.message().contains("Print Spooler"));
     }
 }

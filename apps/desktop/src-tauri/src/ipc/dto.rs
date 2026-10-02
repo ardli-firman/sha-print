@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::application::LocalPrinter;
+use crate::application::{ClientQueue, LocalPrinter};
 use crate::domain::{AppError, RuntimeStatus, ServiceStatus};
 
 /// Event the shell emits whenever runtime status changes.
@@ -116,6 +116,30 @@ pub struct SetupOutcomeDto {
     pub elevated: bool,
 }
 
+/// A native Windows queue the shell installed for a shared printer, and where it sends its jobs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientQueueDto {
+    /// Queue name as it appears in Windows print dialogs.
+    pub queue_name: String,
+    /// Canonical `host:port` of the server that shares the printer.
+    pub server_address: String,
+    /// Printer queue name on that server.
+    pub printer_name: String,
+    /// IPP URI the installed queue routes through; it points at the local proxy.
+    pub uri: String,
+}
+
+impl From<&ClientQueue> for ClientQueueDto {
+    fn from(queue: &ClientQueue) -> Self {
+        Self {
+            queue_name: queue.name().as_str().to_owned(),
+            server_address: queue.request().server_address().to_owned(),
+            printer_name: queue.request().printer().as_str().to_owned(),
+            uri: queue.uri().to_owned(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +242,29 @@ mod tests {
     fn setup_outcome_payload_shape_is_stable() {
         let payload = serde_json::to_value(SetupOutcomeDto { elevated: true }).expect("serializes");
         assert_eq!(payload, serde_json::json!({ "elevated": true }));
+    }
+
+    #[test]
+    fn client_queue_payload_shape_is_stable() {
+        let request = crate::domain::ClientQueueRequest::new(
+            "10.0.0.5:8631",
+            PrinterName::parse("Office Printer").expect("valid name"),
+        )
+        .expect("valid request");
+        let queue = ClientQueue::new(
+            request,
+            "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Printer".to_owned(),
+        );
+
+        let payload = serde_json::to_value(ClientQueueDto::from(&queue)).expect("serializes");
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "queue_name": "Office Printer (ShaPrint 10.0.0.5-8631)",
+                "server_address": "10.0.0.5:8631",
+                "printer_name": "Office Printer",
+                "uri": "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Printer"
+            })
+        );
     }
 }
