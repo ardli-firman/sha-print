@@ -352,7 +352,10 @@ async fn serve_client(
 
 /// The failure a user should see for an IPP status the server returned for a print job, if any.
 fn forwarded_failure(status: u16) -> Option<ErrorCode> {
-    if status == protocol::Status::Ok.code() {
+    // Every `successful` status shares the 0x00xx range (RFC 8011 Appendix B.1), and each of them
+    // means the job was accepted: 0x0001 and 0x0002 report substituted or conflicting attributes,
+    // not a failed print.
+    if (0x0000..=0x00ff).contains(&status) {
         return None;
     }
     if status == protocol::Status::NotAuthorized.code() {
@@ -361,8 +364,8 @@ fn forwarded_failure(status: u16) -> Option<ErrorCode> {
     if status == protocol::Status::NotFound.code() {
         return Some(ErrorCode::PrinterNotShared);
     }
-    // Every `server-error-*` status shares the 0x05xx range (RFC 8011 §13.1); none of them reached
-    // the printer queue.
+    // Every `server-error-*` status shares the 0x05xx range (RFC 8011 Appendix B.1); none of them
+    // reached the printer queue.
     if (0x0500..=0x05ff).contains(&status) {
         return Some(ErrorCode::QueueUnavailable);
     }
@@ -548,6 +551,16 @@ mod tests {
         assert_eq!(head.content_type.as_deref(), Some("application/ipp"));
         assert_eq!(head.content_length, Some(10));
         assert!(!head.expects_continue);
+    }
+
+    #[test]
+    fn a_job_printed_with_substituted_attributes_is_not_a_failure() {
+        // RFC 8011 Appendix B.1: the whole 0x00xx range is the `successful` class, and a printer
+        // that substituted or ignored attributes (0x0001, 0x0002) still printed the job. Reporting
+        // those would put a red failure panel in front of a user whose print succeeded.
+        assert_eq!(forwarded_failure(0x0001), None);
+        assert_eq!(forwarded_failure(0x0002), None);
+        assert_eq!(forwarded_failure(0x00ff), None);
     }
 
     #[test]
