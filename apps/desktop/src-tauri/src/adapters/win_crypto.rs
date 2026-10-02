@@ -82,10 +82,31 @@ fn blob(bytes: &[u8]) -> CRYPT_INTEGER_BLOB {
 }
 
 /// Copies the result out of the buffer Windows allocated and releases it.
+///
+/// Windows allocates this buffer on success, so an absent one is not expected; `from_raw_parts`
+/// still requires a non-null, aligned pointer even for a zero length, so a null buffer is answered
+/// as no output rather than being relied on never to happen.
 fn take_output(output: CRYPT_INTEGER_BLOB) -> Vec<u8> {
-    let bytes = unsafe { slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
-    unsafe {
-        LocalFree(output.pbData.cast());
+    let bytes = if output.pbData.is_null() || output.cbData == 0 {
+        Vec::new()
+    } else {
+        unsafe { slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec()
+    };
+    // The buffer is only ours to release when Windows handed one back.
+    if !output.pbData.is_null() {
+        unsafe {
+            LocalFree(output.pbData.cast());
+        }
     }
     bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_absent_buffer_is_reported_as_no_output() {
+        assert!(take_output(CRYPT_INTEGER_BLOB::default()).is_empty());
+    }
 }
