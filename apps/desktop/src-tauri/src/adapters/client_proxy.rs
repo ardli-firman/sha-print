@@ -393,12 +393,7 @@ async fn read_chunked_body<R: tokio::io::AsyncBufRead + Unpin>(
             break;
         }
 
-        if chunk_size > MAX_BODY_BYTES
-            || body
-                .len()
-                .checked_add(chunk_size)
-                .map_or(true, |total| total > MAX_BODY_BYTES)
-        {
+        if chunk_size > MAX_BODY_BYTES.saturating_sub(body.len()) {
             return Err(AppError::invalid_input(
                 "Chunked body exceeds MAX_BODY_BYTES.",
             ));
