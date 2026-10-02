@@ -215,6 +215,69 @@ mod tests {
         let paper = i16::from_ne_bytes(devmode[78..80].try_into().unwrap());
         assert_eq!(paper, 5);
     }
+
+    #[test]
+    fn dev_mode_mapping_applies_color_modes() {
+        for (color, expected_dm) in [(true, 2i16), (false, 1i16)] {
+            let mut devmode = vec![0u8; 120];
+            let settings = crate::application::PrintSettings {
+                color: Some(color),
+                ..Default::default()
+            };
+            apply_settings_to_dev_mode(&mut devmode, &settings).expect("applies settings");
+            let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+            assert_eq!(fields, 0x0000_0800);
+            let dm_color = i16::from_ne_bytes(devmode[92..94].try_into().unwrap());
+            assert_eq!(dm_color, expected_dm, "color: {color}");
+        }
+    }
+
+    #[test]
+    fn dev_mode_mapping_applies_duplex_modes() {
+        use crate::application::DuplexMode;
+        for (duplex, expected_dm) in [
+            (DuplexMode::Simplex, 1i16),
+            (DuplexMode::LongEdge, 2i16),
+            (DuplexMode::ShortEdge, 3i16),
+        ] {
+            let mut devmode = vec![0u8; 120];
+            let settings = crate::application::PrintSettings {
+                duplex: Some(duplex),
+                ..Default::default()
+            };
+            apply_settings_to_dev_mode(&mut devmode, &settings).expect("applies settings");
+            let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+            assert_eq!(fields, 0x0000_1000);
+            let dm_duplex = i16::from_ne_bytes(devmode[94..96].try_into().unwrap());
+            assert_eq!(dm_duplex, expected_dm, "duplex: {duplex:?}");
+        }
+    }
+
+    #[test]
+    fn dev_mode_mapping_applies_copies_and_rejects_out_of_range() {
+        let mut devmode = vec![0u8; 120];
+        let settings = crate::application::PrintSettings {
+            copies: Some(7),
+            ..Default::default()
+        };
+        apply_settings_to_dev_mode(&mut devmode, &settings).expect("applies settings");
+        let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+        assert_eq!(fields, 0x0000_0100);
+        let dm_copies = i16::from_ne_bytes(devmode[86..88].try_into().unwrap());
+        assert_eq!(dm_copies, 7);
+
+        for invalid in [0, 1000] {
+            let mut devmode = vec![0u8; 120];
+            let settings = crate::application::PrintSettings {
+                copies: Some(invalid),
+                ..Default::default()
+            };
+            assert!(
+                apply_settings_to_dev_mode(&mut devmode, &settings).is_err(),
+                "should reject copies: {invalid}"
+            );
+        }
+    }
 }
 
 /// Submits printer-ready `application/octet-stream` bytes as RAW to the selected Windows queue.
@@ -482,6 +545,11 @@ fn apply_settings_to_dev_mode(
         fields |= 0x0000_0002;
     }
     if let Some(copies) = settings.copies {
+        if !(1..=999).contains(&copies) {
+            return Err(AppError::invalid_input(
+                "the requested copy count is outside the supported range",
+            ));
+        }
         dev_mode[86..88].copy_from_slice(&(copies as i16).to_ne_bytes());
         fields |= 0x0000_0100;
     }

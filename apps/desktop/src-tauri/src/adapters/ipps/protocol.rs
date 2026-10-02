@@ -587,17 +587,22 @@ pub fn response(
             ],
         );
         write_text(&mut out, tag::KEYWORD, "sides-default", "one-sided");
-        write_texts(&mut out, tag::KEYWORD, "sides-supported", &["one-sided"]);
+        write_texts(
+            &mut out,
+            tag::KEYWORD,
+            "sides-supported",
+            &["one-sided", "two-sided-long-edge", "two-sided-short-edge"],
+        );
         write_text(&mut out, tag::KEYWORD, "print-color-mode-default", "color");
         write_texts(
             &mut out,
             tag::KEYWORD,
             "print-color-mode-supported",
-            &["color", "monochrome"],
+            &["color", "monochrome", "bi-level"],
         );
         write_boolean(&mut out, "color-supported", true);
         write_integers(&mut out, tag::INTEGER, "copies-default", &[1]);
-        write_range_of_integers(&mut out, "copies-supported", 1, 9999);
+        write_range_of_integers(&mut out, "copies-supported", 1, 999);
         write_integers(&mut out, tag::ENUM, "orientation-requested-default", &[3]);
         write_integers(
             &mut out,
@@ -936,6 +941,53 @@ mod tests {
         let ready = texts(&attributes, "media-ready");
         assert!(!ready.is_empty());
         assert!(ready.contains(&"iso_a4_210x297mm".to_string()));
+    }
+
+    fn integer_range(attributes: &[Decoded], name: &str) -> Option<(i32, i32)> {
+        let attr = attributes.iter().find(|a| a.name == name)?;
+        let val = attr.values.first()?;
+        if val.len() == 8 {
+            let lower = i32::from_be_bytes(val[0..4].try_into().ok()?);
+            let upper = i32::from_be_bytes(val[4..8].try_into().ok()?);
+            Some((lower, upper))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn printer_attributes_advertise_color_duplex_and_copies() {
+        let bytes = response(
+            12,
+            IPP_VERSION_2_0,
+            Status::Ok,
+            &[PrinterEntry {
+                name: "LaserJet".to_owned(),
+                uri: "ipps://server:8631/ipp/print/LaserJet".to_owned(),
+                accepting_jobs: true,
+            }],
+        );
+        let attributes = decode(&bytes);
+        assert_eq!(
+            text(&attributes, "sides-default"),
+            Some("one-sided".to_owned())
+        );
+        assert_eq!(
+            texts(&attributes, "sides-supported"),
+            vec!["one-sided", "two-sided-long-edge", "two-sided-short-edge",]
+        );
+        assert_eq!(
+            text(&attributes, "print-color-mode-default"),
+            Some("color".to_owned())
+        );
+        assert_eq!(
+            texts(&attributes, "print-color-mode-supported"),
+            vec!["color", "monochrome", "bi-level"]
+        );
+        assert_eq!(
+            integer_range(&attributes, "copies-supported"),
+            Some((1, 999))
+        );
     }
 
     #[test]
