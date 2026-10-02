@@ -129,7 +129,8 @@ impl RuntimeService for ClientProxyService {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 Some(_) = connections.join_next(), if !connections.is_empty() => {}
-                accepted = listener.accept() => if let Ok((stream, _peer)) = accepted {
+                accepted = listener.accept() => if let Ok((stream, peer)) = accepted {
+                    trace_issue34(&format!("accepted-peer={peer}"));
                     let client_connections = Arc::clone(&self.connections);
                     let channel = Arc::clone(&self.channel);
                     let failures = Arc::clone(&self.failures);
@@ -144,10 +145,11 @@ impl RuntimeService for ClientProxyService {
                         )
                         .await
                         {
-                            trace_issue34(&format!("request-error={}", error.code_str()));
+                            trace_issue34(&format!("request-error={}: {}", error.code_str(), error.message()));
                             log::warn!(
-                                "local proxy request failed code={}",
-                                error.code_str()
+                                "local proxy request failed code={}: {}",
+                                error.code_str(),
+                                error.message()
                             );
                         }
                     });
@@ -193,14 +195,6 @@ async fn serve_client(
         write_http(&mut write, "400 Bad Request", &[]).await?;
         return Ok(());
     }
-    let Some(length) = head.content_length else {
-        write_http(&mut write, "411 Length Required", &[]).await?;
-        return Ok(());
-    };
-    if length > MAX_BODY_BYTES {
-        write_http(&mut write, "413 Payload Too Large", &[]).await?;
-        return Ok(());
-    }
     if head.expects_continue {
         trace_issue34("sending 100-continue");
         write
@@ -213,14 +207,33 @@ async fn serve_client(
             AppError::internal("Could not flush HTTP continue to the local printer.")
         })?;
     }
-    trace_issue34(&format!("reading-body length={length}"));
-    let mut body = vec![0; length];
-    timeout(REQUEST_TIMEOUT, reader.read_exact(&mut body))
-        .await
-        .map_err(|_| AppError::timeout("The local printer did not finish sending the document."))?
-        .map_err(|_| {
-            AppError::invalid_input("The local printer sent an incomplete IPP request.")
-        })?;
+    let body = if head.is_chunked {
+        trace_issue34("reading-chunked-body");
+        timeout(REQUEST_TIMEOUT, read_chunked_body(&mut reader))
+            .await
+            .map_err(|_| {
+                AppError::timeout("The local printer did not finish sending the document.")
+            })??
+    } else if let Some(length) = head.content_length {
+        if length > MAX_BODY_BYTES {
+            write_http(&mut write, "413 Payload Too Large", &[]).await?;
+            return Ok(());
+        }
+        trace_issue34(&format!("reading-body length={length}"));
+        let mut buf = vec![0; length];
+        timeout(REQUEST_TIMEOUT, reader.read_exact(&mut buf))
+            .await
+            .map_err(|_| {
+                AppError::timeout("The local printer did not finish sending the document.")
+            })?
+            .map_err(|_| {
+                AppError::invalid_input("The local printer sent an incomplete IPP request.")
+            })?;
+        buf
+    } else {
+        write_http(&mut write, "411 Length Required", &[]).await?;
+        return Ok(());
+    };
 
     let request = match protocol::Request::parse(&body) {
         Ok(request) => request,
@@ -250,6 +263,7 @@ async fn serve_client(
     if !matches!(
         operation,
         protocol::OPERATION_PRINT_JOB
+            | protocol::OPERATION_VALIDATE_JOB
             | protocol::OPERATION_GET_PRINTER_ATTRIBUTES
             | protocol::OPERATION_GET_PRINTERS
     ) {
@@ -280,7 +294,9 @@ async fn serve_client(
         "ipps://{server_address}/ipp/print/{}",
         protocol::percent_encode(printer_name.as_str())
     );
-    let credential = if operation == protocol::OPERATION_PRINT_JOB {
+    let credential = if operation == protocol::OPERATION_PRINT_JOB
+        || operation == protocol::OPERATION_VALIDATE_JOB
+    {
         match channel.client_credential() {
             Some(secret) => Some(secret),
             None => {
@@ -393,7 +409,81 @@ struct RequestHead {
     path: String,
     content_type: Option<String>,
     content_length: Option<usize>,
+    is_chunked: bool,
     expects_continue: bool,
+}
+
+async fn read_chunked_body<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> Result<Vec<u8>, AppError> {
+    let mut body = Vec::new();
+    loop {
+        let mut line = Vec::new();
+        let count = reader
+            .take(1024)
+            .read_until(b'\n', &mut line)
+            .await
+            .map_err(|_| {
+                AppError::invalid_input("The local printer sent an unreadable chunk size.")
+            })?;
+        if count == 0 {
+            return Err(AppError::invalid_input(
+                "Connection closed while reading chunk size.",
+            ));
+        }
+        let size_str = std::str::from_utf8(&line)
+            .map_err(|_| AppError::invalid_input("Chunk size header not valid UTF-8."))?
+            .trim();
+        let chunk_size_hex = size_str.split(';').next().unwrap_or("").trim();
+        let chunk_size = usize::from_str_radix(chunk_size_hex, 16).map_err(|_| {
+            AppError::invalid_input(format!("Invalid chunk size: {chunk_size_hex}"))
+        })?;
+
+        if chunk_size == 0 {
+            // Read trailing headers until empty line
+            loop {
+                let mut trailer = Vec::new();
+                let trailer_count = reader
+                    .take(MAX_HEAD_BYTES as u64)
+                    .read_until(b'\n', &mut trailer)
+                    .await
+                    .map_err(|_| {
+                        AppError::invalid_input(
+                            "The local printer sent an unreadable chunk trailer.",
+                        )
+                    })?;
+                if trailer_count == 0 || trailer == b"\r\n" || trailer == b"\n" {
+                    break;
+                }
+            }
+            break;
+        }
+
+        if chunk_size > MAX_BODY_BYTES.saturating_sub(body.len()) {
+            return Err(AppError::invalid_input(
+                "Chunked body exceeds MAX_BODY_BYTES.",
+            ));
+        }
+
+        let start = body.len();
+        body.resize(start + chunk_size, 0);
+        reader
+            .read_exact(&mut body[start..])
+            .await
+            .map_err(|_| AppError::invalid_input("Incomplete chunk data from local printer."))?;
+
+        // Consume the trailing CRLF after each chunk data
+        let mut delim = Vec::new();
+        reader
+            .take(4)
+            .read_until(b'\n', &mut delim)
+            .await
+            .map_err(|_| AppError::invalid_input("Missing delimiter after chunk data."))?;
+        if delim != b"\r\n" && delim != b"\n" {
+            return Err(AppError::invalid_input("Malformed chunk delimiter."));
+        }
+    }
+    Ok(body)
 }
 
 async fn read_head<R: tokio::io::AsyncBufRead + Unpin>(
@@ -438,7 +528,7 @@ async fn read_head<R: tokio::io::AsyncBufRead + Unpin>(
     }
     let mut content_type = None;
     let mut content_length = None;
-    let mut has_transfer_encoding = false;
+    let mut is_chunked = false;
     let mut expects_continue = false;
     for line in iter {
         if line.is_empty() {
@@ -452,21 +542,24 @@ async fn read_head<R: tokio::io::AsyncBufRead + Unpin>(
         } else if name.eq_ignore_ascii_case("content-length") {
             content_length = value.trim().parse::<usize>().ok();
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            has_transfer_encoding = true;
+            let encodings: Vec<&str> = value.split(',').map(|s| s.trim()).collect();
+            if encodings.iter().any(|&e| e.eq_ignore_ascii_case("chunked")) {
+                is_chunked = true;
+            } else {
+                return Err(AppError::invalid_input(
+                    "The local printer used an unsupported HTTP transfer encoding",
+                ));
+            }
         } else if name.eq_ignore_ascii_case("expect") {
             expects_continue = value.trim().eq_ignore_ascii_case("100-continue");
         }
-    }
-    if has_transfer_encoding {
-        return Err(AppError::invalid_input(
-            "The local printer used an unsupported HTTP transfer encoding.",
-        ));
     }
     Ok(RequestHead {
         method,
         path,
         content_type,
         content_length,
+        is_chunked,
         expects_continue,
     })
 }
@@ -551,6 +644,32 @@ mod tests {
         assert_eq!(head.content_type.as_deref(), Some("application/ipp"));
         assert_eq!(head.content_length, Some(10));
         assert!(!head.expects_continue);
+        assert!(!head.is_chunked);
+
+        let chunked = b"POST /ipp/print HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/ipp\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let mut reader = Cursor::new(&chunked[..]);
+        let head = read_head(&mut reader).await.expect("parses chunked head");
+        assert_eq!(head.method, "POST");
+        assert_eq!(head.path, "/ipp/print");
+        assert!(head.is_chunked);
+        assert_eq!(head.content_length, None);
+    }
+
+    #[tokio::test]
+    async fn read_chunked_body_reads_chunks_and_trailer() {
+        let chunked_data = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        let mut reader = Cursor::new(&chunked_data[..]);
+        let body = read_chunked_body(&mut reader)
+            .await
+            .expect("reads chunked body");
+        assert_eq!(body, b"hello world");
+
+        let chunked_with_trailer = b"4\r\ntest\r\n0\r\nX-Trailer: value\r\n\r\n";
+        let mut reader = Cursor::new(&chunked_with_trailer[..]);
+        let body = read_chunked_body(&mut reader)
+            .await
+            .expect("reads with trailer");
+        assert_eq!(body, b"test");
     }
 
     #[test]

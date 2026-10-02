@@ -3,13 +3,32 @@
 //! ADR 0001: the desktop app runs as the logged-in user and a small helper with a narrow operation
 //! surface handles the configuration that needs administrator rights. The helper is this same
 //! executable started again with [`SETUP_FLAG`]; the app requests it through a UAC prompt and waits
-//! for the result.
+//! for the result (ADR 0005).
+//!
+//! The helper reports a classified failure through its exit code ([`SetupFailureKind::exit_code`])
+//! and keeps Windows' own text on standard error. Only the classification crosses the process
+//! boundary, so the app can always say what the user should do next.
 
 use crate::application::ElevationBroker;
-use crate::domain::{AppError, SetupAction};
+use crate::domain::{ClientQueueRequest, PrinterName, SetupAction, SetupFailure, SetupFailureKind};
 
 /// Command line flag that turns the executable into the elevated helper.
 pub const SETUP_FLAG: &str = "--setup";
+
+/// Command line option carrying the trusted server an install request targets.
+pub const SERVER_OPTION: &str = "--server";
+
+/// Command line option carrying the shared printer an install request targets.
+pub const PRINTER_OPTION: &str = "--printer";
+
+/// What the helper was asked to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HelperRequest {
+    /// A configuration action that needs no further input.
+    Action(SetupAction),
+    /// Install (or repair) the native Windows queue for one shared printer.
+    InstallClientQueue(ClientQueueRequest),
+}
 
 /// What a command line means for the executable.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,7 +36,7 @@ pub enum CommandLine {
     /// Start the desktop app.
     Run,
     /// Perform one configuration action with administrator rights, then exit.
-    Setup(SetupAction),
+    Setup(HelperRequest),
     /// A malformed helper request; the app reports it instead of starting normally.
     Invalid(String),
 }
@@ -28,19 +47,107 @@ pub fn parse_command_line<S: AsRef<str>>(arguments: &[S]) -> CommandLine {
     loop {
         match arguments.next() {
             None => return CommandLine::Run,
-            Some(SETUP_FLAG) => {
-                let Some(value) = arguments.next() else {
-                    return CommandLine::Invalid(SETUP_FLAG.to_owned());
-                };
-                return match SetupAction::parse(value) {
-                    Some(action) => CommandLine::Setup(action),
-                    None => CommandLine::Invalid(value.to_owned()),
-                };
-            }
+            Some(SETUP_FLAG) => return parse_setup(&mut arguments),
             // Ignore anything the platform passes that is not ours.
             Some(_) => {}
         }
     }
+}
+
+/// Reads the action and any data that follows [`SETUP_FLAG`].
+fn parse_setup(arguments: &mut dyn Iterator<Item = &str>) -> CommandLine {
+    let Some(action) = arguments.next() else {
+        return CommandLine::Invalid(SETUP_FLAG.to_owned());
+    };
+    match SetupAction::parse(action) {
+        // Installing a queue is the one action that carries data, so it is parsed separately.
+        Some(SetupAction::InstallPrinter) => parse_install(arguments),
+        Some(action) => CommandLine::Setup(HelperRequest::Action(action)),
+        None => CommandLine::Invalid(action.to_owned()),
+    }
+}
+
+/// Reads `--server` and `--printer`, both required exactly once.
+///
+/// An unrecognised option is an error rather than something to ignore: a typo must not silently
+/// install a queue for the wrong server or printer.
+fn parse_install(arguments: &mut dyn Iterator<Item = &str>) -> CommandLine {
+    let mut server: Option<&str> = None;
+    let mut printer: Option<&str> = None;
+    while let Some(option) = arguments.next() {
+        let target = match option {
+            SERVER_OPTION => &mut server,
+            PRINTER_OPTION => &mut printer,
+            other => return CommandLine::Invalid(other.to_owned()),
+        };
+        let Some(value) = arguments.next() else {
+            return CommandLine::Invalid(option.to_owned());
+        };
+        if target.is_some() {
+            return CommandLine::Invalid(option.to_owned());
+        }
+        *target = Some(value);
+    }
+
+    let (Some(server), Some(printer)) = (server, printer) else {
+        return CommandLine::Invalid(SetupAction::InstallPrinter.as_str().to_owned());
+    };
+    // The helper re-validates everything it was handed: it must not install a queue for an address
+    // or printer the app would have refused.
+    match PrinterName::parse(printer).and_then(|printer| ClientQueueRequest::new(server, printer)) {
+        Ok(request) => CommandLine::Setup(HelperRequest::InstallClientQueue(request)),
+        Err(error) => CommandLine::Invalid(error.message().to_owned()),
+    }
+}
+
+/// The parameters the app passes when it starts the helper for `request`.
+pub fn helper_parameters(request: &HelperRequest) -> String {
+    match request {
+        HelperRequest::Action(action) => format!("{SETUP_FLAG} {}", action.as_str()),
+        HelperRequest::InstallClientQueue(request) => format!(
+            "{SETUP_FLAG} {} {SERVER_OPTION} {} {PRINTER_OPTION} {}",
+            SetupAction::InstallPrinter.as_str(),
+            quote_argument(request.server_address()),
+            quote_argument(request.printer().as_str())
+        ),
+    }
+}
+
+/// Quotes one argument the way the Windows command line parser expects.
+///
+/// A printer queue name may contain spaces and quotes, and `lpParameters` is a single string, so
+/// quoting is what keeps the helper's options apart.
+fn quote_argument(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    let mut backslashes = 0usize;
+    for character in value.chars() {
+        match character {
+            '\\' => {
+                backslashes += 1;
+                quoted.push('\\');
+            }
+            '"' => {
+                // Backslashes before a quote must be doubled so they do not escape it.
+                for _ in 0..backslashes {
+                    quoted.push('\\');
+                }
+                backslashes = 0;
+                quoted.push('\\');
+                quoted.push('"');
+            }
+            other => {
+                backslashes = 0;
+                quoted.push(other);
+            }
+        }
+    }
+    // Trailing backslashes would escape the closing quote, so they are doubled too.
+    for _ in 0..backslashes {
+        quoted.push('\\');
+    }
+    quoted.push('"');
+    quoted
 }
 
 /// Requests administrator permission and runs the action elevated.
@@ -54,26 +161,51 @@ impl SystemElevation {
 }
 
 impl ElevationBroker for SystemElevation {
-    fn elevate(&self, action: SetupAction) -> Result<(), AppError> {
+    fn elevate(&self, action: SetupAction) -> Result<(), SetupFailure> {
         if !action.requires_elevation() {
             // Defensive: the use case filters these out, and running a routine action here would
             // prompt the user for nothing.
-            return Err(AppError::invalid_input(format!(
-                "{} does not need administrator permission",
-                action.as_str()
-            )));
+            return Err(SetupFailure::new(
+                SetupFailureKind::InvalidRequest,
+                format!("{} does not need administrator permission", action.as_str()),
+            ));
         }
-        elevate(action)
+        if action == SetupAction::InstallPrinter {
+            // Queue installation needs the printer it targets; it has its own operation.
+            return Err(SetupFailure::new(
+                SetupFailureKind::InvalidRequest,
+                format!(
+                    "{} needs the shared printer it targets; use the queue installation operation",
+                    action.as_str()
+                ),
+            ));
+        }
+        start_helper(&HelperRequest::Action(action))
+    }
+
+    fn install_queue(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+        start_helper(&HelperRequest::InstallClientQueue(request.clone()))
     }
 }
 
-/// Performs one configuration action from an elevated process of this same executable.
-pub fn run_elevated(action: SetupAction) -> Result<(), AppError> {
+/// Performs one request from inside an elevated process of this same executable.
+pub fn run_elevated(request: HelperRequest) -> Result<(), SetupFailure> {
+    match request {
+        HelperRequest::Action(action) => run_action(action),
+        // Non-Windows builds report `unsupported` from their own adapter.
+        HelperRequest::InstallClientQueue(request) => {
+            crate::adapters::queue_installation::platform_installer().install(&request)
+        }
+    }
+}
+
+/// Performs one parameterless action from inside the elevated helper.
+fn run_action(action: SetupAction) -> Result<(), SetupFailure> {
     if !action.requires_elevation() {
-        return Err(AppError::invalid_input(format!(
-            "{} does not need administrator permission",
-            action.as_str()
-        )));
+        return Err(SetupFailure::new(
+            SetupFailureKind::InvalidRequest,
+            format!("{} does not need administrator permission", action.as_str()),
+        ));
     }
 
     #[cfg(windows)]
@@ -82,24 +214,30 @@ pub fn run_elevated(action: SetupAction) -> Result<(), AppError> {
     }
     #[cfg(not(windows))]
     {
-        Err(AppError::unsupported(format!(
-            "{} needs administrator permission, which is only supported on Windows",
-            action.as_str()
-        )))
+        Err(SetupFailure::new(
+            SetupFailureKind::Unsupported,
+            format!(
+                "{} needs administrator permission, which is only supported on Windows",
+                action.as_str()
+            ),
+        ))
     }
 }
 
 #[cfg(not(windows))]
-fn elevate(action: SetupAction) -> Result<(), AppError> {
-    Err(AppError::unsupported(format!(
-        "{} needs administrator permission, which is only supported on Windows",
-        action.as_str()
-    )))
+fn start_helper(request: &HelperRequest) -> Result<(), SetupFailure> {
+    Err(SetupFailure::new(
+        SetupFailureKind::Unsupported,
+        format!(
+            "{} needs administrator permission, which is only supported on Windows",
+            helper_parameters(request)
+        ),
+    ))
 }
 
 #[cfg(windows)]
-fn elevate(action: SetupAction) -> Result<(), AppError> {
-    windows::elevate(action)
+fn start_helper(request: &HelperRequest) -> Result<(), SetupFailure> {
+    windows::start_helper(request)
 }
 
 #[cfg(windows)]
@@ -109,9 +247,11 @@ mod windows {
     use std::os::windows::process::CommandExt;
     use std::path::Path;
 
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
     use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, WaitForSingleObject, INFINITE,
+        GetExitCodeProcess, TerminateProcess, WaitForSingleObject,
     };
     use windows_sys::Win32::UI::Shell::{
         ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS,
@@ -119,22 +259,39 @@ mod windows {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-    use super::SETUP_FLAG;
+    use super::{helper_parameters, HelperRequest};
     use crate::adapters::discovery::DISCOVERY_PORTS;
     use crate::adapters::ipps::DEFAULT_PORT;
-    use crate::domain::{AppError, SetupAction};
+    use crate::domain::{SetupAction, SetupFailure, SetupFailureKind};
 
     /// Windows error raised when the user declines the UAC prompt.
     const ERROR_CANCELLED: u32 = 1223;
 
+    /// How long the app waits for the helper before it gives up and terminates it. Installing a
+    /// queue talks to the spooler, which can be slow, but it must never hang the app forever.
+    const HELPER_TIMEOUT_MILLIS: u32 = 120_000;
+
+    /// How the helper process ended.
+    enum HelperWait {
+        Exited(u32),
+        /// The helper overstayed its deadline; `terminated` says whether Windows ended it.
+        TimedOut {
+            terminated: bool,
+        },
+        Unreported,
+    }
+
     /// Re-runs this executable elevated and waits for the helper to finish.
-    pub(super) fn elevate(action: SetupAction) -> Result<(), AppError> {
+    pub(super) fn start_helper(request: &HelperRequest) -> Result<(), SetupFailure> {
         let executable = std::env::current_exe().map_err(|error| {
-            AppError::internal(format!("cannot locate this application: {error}"))
+            SetupFailure::new(
+                SetupFailureKind::Other,
+                format!("cannot locate this application: {error}"),
+            )
         })?;
         let verb = wide("runas");
         let file = wide_path(&executable);
-        let parameters = wide(&format!("{SETUP_FLAG} {}", action.as_str()));
+        let parameters = wide(&helper_parameters(request));
 
         // Safety: the strings stay alive for the duration of the call, and `info` is a plain
         // output structure the shell fills in.
@@ -153,61 +310,90 @@ mod windows {
             // Safety: no pointers are involved.
             let code = unsafe { GetLastError() };
             if code == ERROR_CANCELLED {
-                return Err(AppError::unsupported(
-                    "administrator permission was not granted",
+                return Err(SetupFailure::new(
+                    SetupFailureKind::PermissionDenied,
+                    "the UAC prompt was dismissed",
                 ));
             }
-            return Err(AppError::internal(format!(
-                "cannot start the setup helper (Windows error {code})"
-            )));
+            return Err(SetupFailure::new(
+                SetupFailureKind::Other,
+                format!("cannot start the setup helper (Windows error {code})"),
+            ));
         }
 
-        let exit_code = wait_for(info.hProcess);
+        let waited = wait_for(info.hProcess);
         // Safety: the shell handed us the process handle and we are done with it.
         if !info.hProcess.is_null() {
             unsafe { CloseHandle(info.hProcess) };
         }
 
-        match exit_code {
-            Some(0) => {
-                log::info!("setup helper finished action={}", action.as_str());
+        match waited {
+            HelperWait::Exited(0) => {
+                log::info!("setup helper finished action={}", verb_summary(request));
                 Ok(())
             }
-            Some(code) => Err(AppError::internal(format!(
-                "the setup helper failed with exit code {code}"
-            ))),
-            None => Err(AppError::internal(
+            HelperWait::Exited(code) => Err(SetupFailure::new(
+                super::classify_exit_code(code as i32),
+                format!("the setup helper exited with code {code}"),
+            )),
+            HelperWait::TimedOut { terminated } => Err(super::timed_out_failure(terminated)),
+            HelperWait::Unreported => Err(SetupFailure::new(
+                SetupFailureKind::Other,
                 "the setup helper did not report a result",
             )),
         }
     }
 
-    /// Waits for the helper and returns its exit code.
-    fn wait_for(process: HANDLE) -> Option<u32> {
+    /// What the helper was asked to do, for the log line only.
+    fn verb_summary(request: &HelperRequest) -> String {
+        match request {
+            HelperRequest::Action(action) => action.as_str().to_owned(),
+            HelperRequest::InstallClientQueue(request) => {
+                format!("install-printer queue={}", request.queue_name())
+            }
+        }
+    }
+
+    /// Waits for the helper, terminating it if it overstays its deadline.
+    fn wait_for(process: HANDLE) -> HelperWait {
         if process.is_null() {
-            return None;
+            return HelperWait::Unreported;
         }
         // Safety: `process` is a live process handle owned by the caller.
-        if unsafe { WaitForSingleObject(process, INFINITE) } != WAIT_OBJECT_0 {
-            return None;
+        let waited = unsafe { WaitForSingleObject(process, HELPER_TIMEOUT_MILLIS) };
+        if waited == WAIT_TIMEOUT {
+            // Safety: `process` is a live handle to the helper we started.
+            //
+            // The app runs unelevated while the helper runs elevated, and Windows integrity control
+            // refuses write access to a higher-integrity process, so ending it can legitimately
+            // fail. Report what actually happened rather than claiming the helper was stopped.
+            let terminated = unsafe { TerminateProcess(process, 1) } != 0;
+            return HelperWait::TimedOut { terminated };
+        }
+        if waited != WAIT_OBJECT_0 {
+            return HelperWait::Unreported;
         }
         let mut exit_code = u32::MAX;
         // Safety: `process` is signalled and `exit_code` is writable.
         if unsafe { GetExitCodeProcess(process, &mut exit_code) } == 0 {
-            return None;
+            return HelperWait::Unreported;
         }
-        Some(exit_code)
+        HelperWait::Exited(exit_code)
     }
 
     /// Carries out the action inside the elevated process.
-    pub(super) fn perform(action: SetupAction) -> Result<(), AppError> {
+    pub(super) fn perform(action: SetupAction) -> Result<(), SetupFailure> {
         match action {
             SetupAction::AllowInboundSharing => allow_inbound_sharing(),
-            // The caller filters these out before the process is started.
-            _ => Err(AppError::invalid_input(format!(
-                "{} does not need administrator permission",
-                action.as_str()
-            ))),
+            // The caller routes these two to their own operations.
+            SetupAction::InstallPrinter => Err(SetupFailure::new(
+                SetupFailureKind::InvalidRequest,
+                "install-printer needs the shared printer it targets",
+            )),
+            _ => Err(SetupFailure::new(
+                SetupFailureKind::InvalidRequest,
+                format!("{} does not need administrator permission", action.as_str()),
+            )),
         }
     }
 
@@ -218,7 +404,7 @@ mod windows {
     ///
     /// Every rule is removed first: re-running setup must repair a rule that changed, and `netsh`
     /// refuses to create a duplicate name.
-    fn allow_inbound_sharing() -> Result<(), AppError> {
+    fn allow_inbound_sharing() -> Result<(), SetupFailure> {
         let endpoint_rule = format!("ShaPrint ({DEFAULT_PORT})");
         let discovery_rules: Vec<(String, String)> = DISCOVERY_PORTS
             .iter()
@@ -282,7 +468,7 @@ mod windows {
         );
     }
 
-    fn run(program: &str, arguments: &[&str]) -> Result<(), AppError> {
+    fn run(program: &str, arguments: &[&str]) -> Result<(), SetupFailure> {
         // The parent is a GUI process with no console: without this flag Windows would flash a
         // console window for every configuration command.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -291,15 +477,23 @@ mod windows {
             .args(arguments)
             .creation_flags(CREATE_NO_WINDOW)
             .output()
-            .map_err(|error| AppError::internal(format!("cannot run {program}: {error}")))?;
+            .map_err(|error| {
+                SetupFailure::new(
+                    SetupFailureKind::Unsupported,
+                    format!("cannot run {program}: {error}"),
+                )
+            })?;
         if output.status.success() {
-            Ok(())
-        } else {
-            Err(AppError::internal(format!(
-                "{program} exited with {}",
-                output.status
-            )))
+            return Ok(());
         }
+        Err(SetupFailure::new(
+            SetupFailureKind::Other,
+            format!(
+                "{program} exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ))
     }
 
     fn wide(text: &str) -> Vec<u16> {
@@ -314,9 +508,48 @@ mod windows {
     }
 }
 
+/// Turns the helper's exit code back into the reason the user is told about.
+#[cfg(any(windows, test))]
+fn classify_exit_code(code: i32) -> SetupFailureKind {
+    SetupFailureKind::from_exit_code(code).unwrap_or(SetupFailureKind::Other)
+}
+
+/// The failure to report when the helper overstayed its deadline.
+///
+/// Ending an elevated process from an unelevated one is not guaranteed, so the message says which
+/// of the two happened: a helper that could not be stopped may still finish the install it was
+/// asked for, and the user should not be told otherwise.
+#[cfg(any(windows, test))]
+fn timed_out_failure(terminated: bool) -> SetupFailure {
+    if terminated {
+        SetupFailure::new(
+            SetupFailureKind::TimedOut,
+            "the setup helper was still running after its deadline and was terminated",
+        )
+    } else {
+        SetupFailure::new(
+            SetupFailureKind::TimedOut,
+            "the setup helper was still running after its deadline and could not be terminated; it may still be running",
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::ErrorCode;
+
+    fn queue_request(printer: &str) -> ClientQueueRequest {
+        ClientQueueRequest::new(
+            "10.0.0.5:8631",
+            PrinterName::parse(printer).expect("valid printer name"),
+        )
+        .expect("valid request")
+    }
+
+    fn arguments(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     #[test]
     fn a_command_line_without_the_flag_starts_the_app() {
@@ -331,7 +564,7 @@ mod tests {
     fn the_setup_flag_selects_the_helper_action() {
         assert_eq!(
             parse_command_line(&["shaprint.exe", SETUP_FLAG, "allow-inbound-sharing"]),
-            CommandLine::Setup(SetupAction::AllowInboundSharing)
+            CommandLine::Setup(HelperRequest::Action(SetupAction::AllowInboundSharing))
         );
     }
 
@@ -342,19 +575,199 @@ mod tests {
             CommandLine::Invalid(SETUP_FLAG.to_owned())
         );
         assert_eq!(
+            parse_command_line(&["shaprint.exe", SETUP_FLAG, "install-scanner"]),
+            CommandLine::Invalid("install-scanner".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_install_request_needs_both_the_server_and_the_printer() {
+        assert_eq!(
             parse_command_line(&["shaprint.exe", SETUP_FLAG, "install-printer"]),
+            CommandLine::Invalid("install-printer".to_owned())
+        );
+        assert_eq!(
+            parse_command_line(&arguments(&[
+                "shaprint.exe",
+                SETUP_FLAG,
+                "install-printer",
+                SERVER_OPTION,
+                "10.0.0.5:8631",
+            ])),
             CommandLine::Invalid("install-printer".to_owned())
         );
     }
 
     #[test]
-    fn the_helper_refuses_routine_actions() {
-        let error = run_elevated(SetupAction::StartSharing).expect_err("refused");
-        assert_eq!(error.code(), crate::domain::ErrorCode::InvalidInput);
+    fn the_helper_installs_only_what_it_can_validate() {
+        assert_eq!(
+            parse_command_line(&arguments(&[
+                "shaprint.exe",
+                SETUP_FLAG,
+                "install-printer",
+                SERVER_OPTION,
+                "http://10.0.0.5",
+                PRINTER_OPTION,
+                "Office Printer",
+            ])),
+            CommandLine::Invalid(
+                "the server address is not a host or host:port; review the server connection again"
+                    .to_owned()
+            )
+        );
+    }
 
-        let error = SystemElevation::new()
+    #[test]
+    fn a_helper_request_round_trips_through_its_parameters() {
+        let request = queue_request("Office Printer");
+        let encoded = helper_parameters(&HelperRequest::InstallClientQueue(request.clone()));
+        let decoded = parse_command_line(&arguments(&[
+            "shaprint.exe",
+            SETUP_FLAG,
+            "install-printer",
+            SERVER_OPTION,
+            request.server_address(),
+            PRINTER_OPTION,
+            request.printer().as_str(),
+        ]));
+        assert_eq!(
+            decoded,
+            CommandLine::Setup(HelperRequest::InstallClientQueue(request))
+        );
+        assert!(encoded.contains(SERVER_OPTION));
+        assert!(encoded.contains(PRINTER_OPTION));
+    }
+
+    #[test]
+    fn a_duplicate_or_unknown_option_is_refused() {
+        for extra in [
+            vec![
+                "shaprint.exe",
+                SETUP_FLAG,
+                "install-printer",
+                SERVER_OPTION,
+                "10.0.0.5:8631",
+                SERVER_OPTION,
+                "10.0.0.6:8631",
+                PRINTER_OPTION,
+                "Office Printer",
+            ],
+            vec![
+                "shaprint.exe",
+                SETUP_FLAG,
+                "install-printer",
+                "--serer",
+                "10.0.0.5:8631",
+                PRINTER_OPTION,
+                "Office Printer",
+            ],
+            vec![
+                "shaprint.exe",
+                SETUP_FLAG,
+                "install-printer",
+                SERVER_OPTION,
+                "10.0.0.5:8631",
+                PRINTER_OPTION,
+                "Office Printer",
+                "junk",
+            ],
+            vec![
+                "shaprint.exe",
+                SETUP_FLAG,
+                "install-printer",
+                SERVER_OPTION,
+                "10.0.0.5:8631",
+                PRINTER_OPTION,
+            ],
+        ] {
+            assert!(
+                matches!(
+                    parse_command_line(&arguments(&extra)),
+                    CommandLine::Invalid(_)
+                ),
+                "accepted {extra:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn arguments_are_quoted_the_way_the_windows_parser_expects() {
+        assert_eq!(quote_argument("Office Printer"), "\"Office Printer\"");
+        assert_eq!(quote_argument("plain"), "\"plain\"");
+        assert_eq!(quote_argument("say \"hi\""), "\"say \\\"hi\\\"\"");
+        // Trailing backslashes are doubled so they cannot escape the closing quote.
+        assert_eq!(quote_argument("back\\slash\\"), "\"back\\slash\\\\\"");
+        assert_eq!(quote_argument("a\\\"b"), "\"a\\\\\\\"b\"");
+    }
+
+    #[test]
+    fn the_helper_reports_every_classified_exit_code_and_defaults_the_rest() {
+        for kind in SetupFailureKind::ALL {
+            assert_eq!(classify_exit_code(kind.exit_code()), kind);
+        }
+        // A crash or an unclassified code must still produce advice.
+        assert_eq!(classify_exit_code(2), SetupFailureKind::Other);
+        assert_eq!(classify_exit_code(-1073741819), SetupFailureKind::Other);
+    }
+
+    #[test]
+    fn a_helper_that_could_not_be_stopped_says_so() {
+        // Ending an elevated process from an unelevated one can fail; the message must not claim a
+        // termination that did not happen.
+        let terminated = timed_out_failure(true);
+        assert_eq!(terminated.kind(), SetupFailureKind::TimedOut);
+        assert!(terminated.detail().contains("and was terminated"));
+        assert!(!terminated.detail().contains("could not be terminated"));
+
+        let survived = timed_out_failure(false);
+        assert_eq!(survived.kind(), SetupFailureKind::TimedOut);
+        assert!(survived.detail().contains("could not be terminated"));
+        assert!(survived.detail().contains("may still be running"));
+        assert_ne!(terminated.detail(), survived.detail());
+    }
+
+    #[test]
+    fn the_helper_refuses_routine_actions() {
+        let failure =
+            run_elevated(HelperRequest::Action(SetupAction::StartSharing)).expect_err("refused");
+        assert_eq!(failure.kind(), SetupFailureKind::InvalidRequest);
+
+        let failure = SystemElevation::new()
             .elevate(SetupAction::StopSharing)
             .expect_err("refused");
-        assert_eq!(error.code(), crate::domain::ErrorCode::InvalidInput);
+        assert_eq!(failure.kind(), SetupFailureKind::InvalidRequest);
+    }
+
+    #[test]
+    fn the_helper_refuses_a_queue_install_without_its_printer() {
+        let failure = SystemElevation::new()
+            .elevate(SetupAction::InstallPrinter)
+            .expect_err("refused");
+        assert_eq!(failure.kind(), SetupFailureKind::InvalidRequest);
+        assert!(failure.detail().contains("queue installation"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_platform_that_cannot_elevate_reports_unsupported() {
+        let failure = SystemElevation::new()
+            .elevate(SetupAction::AllowInboundSharing)
+            .expect_err("unsupported");
+        assert_eq!(failure.kind(), SetupFailureKind::Unsupported);
+
+        let failure = SystemElevation::new()
+            .install_queue(&queue_request("Office Printer"))
+            .expect_err("unsupported");
+        assert_eq!(failure.kind(), SetupFailureKind::Unsupported);
+
+        let failure = run_elevated(HelperRequest::InstallClientQueue(queue_request("Office")))
+            .expect_err("unsupported");
+        assert_eq!(failure.kind(), SetupFailureKind::Unsupported);
+    }
+
+    #[test]
+    fn a_rejected_request_reports_the_stable_error_code() {
+        let failure = SetupFailure::new(SetupFailureKind::InvalidRequest, "refused");
+        assert_eq!(failure.kind().error_code(), ErrorCode::InvalidInput);
     }
 }

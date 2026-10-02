@@ -124,7 +124,7 @@ fn read_channel(path: &Path) -> LegacyChannel {
 /// The previous app also *wrote* its well-known placeholder whenever the user left the field blank
 /// (`WelcomeViewModel.SaveChannel`), and it treated that value as a weak channel itself. Carrying it
 /// forward would hand this app a shared placeholder presented as a real secret, so it counts as an
-/// absence of configuration and the user is asked for a channel instead (ADR 0006).
+/// absence of configuration and the user is asked for a channel instead (ADR 0007).
 fn classify_legacy_channel(plaintext: &str) -> LegacyChannel {
     let channel = plaintext.trim();
     if channel.is_empty() || channel == LEGACY_PLACEHOLDER_CHANNEL {

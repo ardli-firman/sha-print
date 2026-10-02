@@ -41,16 +41,17 @@ use adapters::{
 #[cfg(feature = "desktop")]
 use application::{close_action, CloseAction};
 use application::{
-    ChannelStore, Discovery, DiscoveryBrowser, DiscoveryService, LegacyImport,
-    LegacySettingsSource, PrintFailures, PrintJobSubmitter, RuntimeCoordinator, ServerAdvertiser,
-    Setup, Sharing, Startup, StartupRegistration,
+    ChannelStore, ClientProxyState, Discovery, DiscoveryBrowser, DiscoveryService, LegacyImport,
+    LegacySettingsSource, PrintFailures, PrintJobSubmitter, QueueInstallation, RuntimeCoordinator,
+    ServerAdvertiser, Setup, Sharing, Startup, StartupRegistration, TrustedServerPrinters,
 };
 use domain::AppError;
 
 /// The state the desktop shell manages, built once at startup.
 ///
 /// Commands read the piece they need — the supervised runtimes, the sharing configuration, the
-/// IPPS endpoint, or the setup actions — so each one states its own dependencies.
+/// IPPS endpoint, the setup actions, or the client queue installer — so each one states its own
+/// dependencies.
 pub struct Shell {
     runtime: Arc<RuntimeCoordinator>,
     sharing: Arc<Sharing>,
@@ -62,6 +63,7 @@ pub struct Shell {
     network_channel: Arc<NetworkChannel>,
     discovery: Arc<Discovery>,
     print_failures: Arc<PrintFailures>,
+    queue_installation: Arc<QueueInstallation>,
 }
 
 impl Shell {
@@ -111,6 +113,16 @@ impl Shell {
             Arc::new(DiscoveryService::new(Arc::clone(&discovery), browser)),
         ]));
 
+        // Installing a client queue reuses the client trust store for its precondition and the same
+        // elevation path as the firewall rule, so a queue is only ever created for an approved
+        // server while the proxy that carries its jobs is running (ADR 0005).
+        let queue_installation = Arc::new(QueueInstallation::new(
+            Arc::clone(&setup),
+            Arc::clone(&client_connections) as Arc<dyn TrustedServerPrinters>,
+            adapters::queue_installation::platform_installer(),
+            Arc::clone(&runtime) as Arc<dyn ClientProxyState>,
+        ));
+
         Ok(Self {
             runtime,
             sharing,
@@ -122,6 +134,7 @@ impl Shell {
             network_channel,
             discovery,
             print_failures,
+            queue_installation,
         })
     }
 
@@ -163,6 +176,10 @@ impl Shell {
 
     pub fn print_failures(&self) -> Arc<PrintFailures> {
         Arc::clone(&self.print_failures)
+    }
+
+    pub fn queue_installation(&self) -> Arc<QueueInstallation> {
+        Arc::clone(&self.queue_installation)
     }
 }
 
@@ -253,6 +270,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ipc::client_connections::inspect_server_connection,
             ipc::client_connections::approve_server_connection,
             ipc::client_connections::list_server_connection_printers,
+            ipc::commands::install_printer_queue,
             ipc::server_settings::configure_network_channel,
             ipc::server_settings::get_network_channel_status,
             ipc::discovery::list_nearby_servers,
@@ -281,6 +299,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
             app.manage(shell.print_failures());
             app.manage(shell.startup());
             app.manage(shell.legacy_import());
+            app.manage(shell.queue_installation());
 
             // The tray is what makes the app reachable after its window is closed, so its
             // availability decides what closing the window means.

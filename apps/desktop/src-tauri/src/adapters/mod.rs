@@ -13,6 +13,7 @@ pub mod identity;
 pub mod ipps;
 pub mod legacy;
 pub mod printers;
+pub mod queue_installation;
 mod server_sharing;
 pub mod startup;
 #[cfg(windows)]
