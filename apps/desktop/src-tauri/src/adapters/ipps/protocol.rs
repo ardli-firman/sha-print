@@ -566,7 +566,25 @@ pub fn response(
             &mut out,
             tag::KEYWORD,
             "media-supported",
-            &["iso_a4_210x297mm", "na_letter_8.5x11in"],
+            &[
+                "iso_a4_210x297mm",
+                "na_letter_8.5x11in",
+                "na_legal_8.5x14in",
+                "iso_a3_297x420mm",
+                "iso_a5_148x210mm",
+            ],
+        );
+        write_texts(
+            &mut out,
+            tag::KEYWORD,
+            "media-ready",
+            &[
+                "iso_a4_210x297mm",
+                "na_letter_8.5x11in",
+                "na_legal_8.5x14in",
+                "iso_a3_297x420mm",
+                "iso_a5_148x210mm",
+            ],
         );
         write_text(&mut out, tag::KEYWORD, "sides-default", "one-sided");
         write_texts(&mut out, tag::KEYWORD, "sides-supported", &["one-sided"]);
@@ -871,6 +889,53 @@ mod tests {
             .find(|attribute| attribute.name == name)
             .and_then(|attribute| attribute.values.first())
             .map(|value| String::from_utf8_lossy(value).into_owned())
+    }
+
+    fn texts(attributes: &[Decoded], name: &str) -> Vec<String> {
+        attributes
+            .iter()
+            .find(|attribute| attribute.name == name)
+            .map(|attribute| {
+                attribute
+                    .values
+                    .iter()
+                    .map(|value| String::from_utf8_lossy(value).into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn printer_attributes_advertise_all_supported_media_sizes_and_ready_media() {
+        let bytes = response(
+            11,
+            IPP_VERSION_2_0,
+            Status::Ok,
+            &[PrinterEntry {
+                name: "LaserJet".to_owned(),
+                uri: "ipps://server:8631/ipp/print/LaserJet".to_owned(),
+                accepting_jobs: true,
+            }],
+        );
+        let attributes = decode(&bytes);
+        assert_eq!(
+            text(&attributes, "media-default"),
+            Some("iso_a4_210x297mm".to_owned())
+        );
+        let supported = texts(&attributes, "media-supported");
+        assert_eq!(
+            supported,
+            vec![
+                "iso_a4_210x297mm",
+                "na_letter_8.5x11in",
+                "na_legal_8.5x14in",
+                "iso_a3_297x420mm",
+                "iso_a5_148x210mm",
+            ]
+        );
+        let ready = texts(&attributes, "media-ready");
+        assert!(!ready.is_empty());
+        assert!(ready.contains(&"iso_a4_210x297mm".to_string()));
     }
 
     #[test]

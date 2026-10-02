@@ -13,7 +13,9 @@ use super::protocol::{
 };
 
 use crate::adapters::ipps::NetworkChannel;
-use crate::application::{DuplexMode, PrintFailures, PrintJob, PrintJobSubmitter, PrintSettings};
+use crate::application::{
+    DuplexMode, PrintFailures, PrintJob, PrintJobSubmitter, PrintOrientation, PrintSettings,
+};
 
 #[cfg(test)]
 fn answer(request: &[u8], host: &str, shared: &dyn SharedPrinterSource) -> Vec<u8> {
@@ -203,11 +205,18 @@ fn job_settings(request: &Request<'_>) -> Result<PrintSettings, Status> {
         Some(_) => return Err(Status::AttributesOrValuesNotSupported),
         None => None,
     };
+    let orientation = match request.integer("orientation-requested") {
+        Some(3) => Some(PrintOrientation::Portrait),
+        Some(4) => Some(PrintOrientation::Landscape),
+        Some(_) => return Err(Status::AttributesOrValuesNotSupported),
+        None => None,
+    };
     Ok(PrintSettings {
         media,
         color,
         duplex,
         copies,
+        orientation,
     })
 }
 
@@ -555,5 +564,60 @@ mod tests {
         );
 
         assert_eq!(status(&answer), 0x0000);
+    }
+
+    #[test]
+    fn job_settings_parses_orientation_requested() {
+        use crate::application::PrintOrientation;
+
+        let mut out = vec![2, 0, 0, 2, 0, 0, 0, 1, 0x01];
+        push(&mut out, 0x47, "attributes-charset", "utf-8");
+        push(&mut out, 0x48, "attributes-natural-language", "en");
+        out.push(0x02);
+        // Add orientation-requested: enum tag 0x23, value 3 (Portrait)
+        out.push(0x23);
+        out.extend((b"orientation-requested".len() as u16).to_be_bytes());
+        out.extend(b"orientation-requested");
+        out.extend(4u16.to_be_bytes());
+        out.extend(3i32.to_be_bytes());
+        out.push(0x03);
+
+        let req = Request::parse(&out).expect("valid request");
+        let settings = job_settings(&req).expect("valid settings");
+        assert_eq!(settings.orientation, Some(PrintOrientation::Portrait));
+
+        // Test landscape (4)
+        let mut out = vec![2, 0, 0, 2, 0, 0, 0, 1, 0x01];
+        push(&mut out, 0x47, "attributes-charset", "utf-8");
+        push(&mut out, 0x48, "attributes-natural-language", "en");
+        out.push(0x02);
+        out.push(0x23);
+        out.extend((b"orientation-requested".len() as u16).to_be_bytes());
+        out.extend(b"orientation-requested");
+        out.extend(4u16.to_be_bytes());
+        out.extend(4i32.to_be_bytes());
+        out.push(0x03);
+
+        let req = Request::parse(&out).expect("valid request");
+        let settings = job_settings(&req).expect("valid settings");
+        assert_eq!(settings.orientation, Some(PrintOrientation::Landscape));
+
+        // Test unsupported orientation (e.g. 5)
+        let mut out = vec![2, 0, 0, 2, 0, 0, 0, 1, 0x01];
+        push(&mut out, 0x47, "attributes-charset", "utf-8");
+        push(&mut out, 0x48, "attributes-natural-language", "en");
+        out.push(0x02);
+        out.push(0x23);
+        out.extend((b"orientation-requested".len() as u16).to_be_bytes());
+        out.extend(b"orientation-requested");
+        out.extend(4u16.to_be_bytes());
+        out.extend(5i32.to_be_bytes());
+        out.push(0x03);
+
+        let req = Request::parse(&out).expect("valid request");
+        assert_eq!(
+            job_settings(&req),
+            Err(Status::AttributesOrValuesNotSupported)
+        );
     }
 }
