@@ -1,25 +1,28 @@
 import { Network, Printer, Settings2, ShieldAlert, Wrench } from "lucide-react";
 import { useState } from "react";
 
-import { AddPrinterDialog } from "@/components/AddPrinterDialog";
-import { LegacyImportPanel } from "@/components/LegacyImportPanel";
-import { NearbyServersPanel } from "@/components/NearbyServersPanel";
-import { NetworkChannelPanel } from "@/components/NetworkChannelPanel";
-import { PrintFailuresPanel } from "@/components/PrintFailuresPanel";
-import { PrinterSharingPanel } from "@/components/PrinterSharingPanel";
-import { RuntimeStatusPanel } from "@/components/RuntimeStatusPanel";
-import { ServerConnectionsPanel } from "@/components/ServerConnectionsPanel";
-import { StartupPanel } from "@/components/StartupPanel";
-import { SystemDiagnosticsDialog } from "@/components/SystemDiagnosticsDialog";
 import { Button } from "@/components/ui/button";
-import { useLegacyImport } from "@/hooks/useLegacyImport";
-import { useNearbyServers } from "@/hooks/useNearbyServers";
-import { useNetworkChannel } from "@/hooks/useNetworkChannel";
-import { usePrintFailures } from "@/hooks/usePrintFailures";
-import { usePrinterSharing } from "@/hooks/usePrinterSharing";
-import { useRuntimeStatus } from "@/hooks/useRuntimeStatus";
-import { useServerConnections } from "@/hooks/useServerConnections";
-import { useStartup } from "@/hooks/useStartup";
+import {
+  AddPrinterDialog,
+  NearbyServersPanel,
+  ServerConnectionsPanel,
+  useNearbyServers,
+  useServerConnections,
+} from "@/features/client-connection";
+import { NetworkChannelPanel, useNetworkChannel } from "@/features/network-channel";
+import { PrintFailuresPanel, usePrintFailures } from "@/features/print-failures";
+import { PrinterSharingPanel, usePrinterSharing } from "@/features/printer-sharing";
+import {
+  RuntimeStatusPanel,
+  SystemDiagnosticsDialog,
+  useRuntimeStatus,
+} from "@/features/runtime-status";
+import {
+  LegacyImportPanel,
+  StartupPanel,
+  useLegacyImport,
+  useStartup,
+} from "@/features/settings";
 import "./App.css";
 
 const NAV_ITEMS = [
