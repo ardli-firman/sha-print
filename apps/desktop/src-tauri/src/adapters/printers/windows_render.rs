@@ -6,6 +6,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::Storage::Xps::{AbortDoc, EndDoc, EndPage, StartDocW, StartPage, DOCINFOW};
 
+use super::page_settings::settings_for_page;
 use super::raster::{pwg_pages, RasterPage};
 use super::windows::{prepare_dev_mode, spooler_error, ClosePrinter, OpenPrinterW};
 use crate::application::PrintJob;
@@ -23,8 +24,12 @@ impl Drop for DeviceContext {
 
 pub(super) fn submit_windows_job(printer: &str, job: &PrintJob) -> Result<u32, AppError> {
     // Decode all pages before touching the queue, so malformed later pages print nothing.
-    for page in pwg_pages(job.document())? {
-        page?;
+    let mut resolved_settings = job.settings().clone();
+    for (index, page) in pwg_pages(job.document())?.enumerate() {
+        let page = page?;
+        if index == 0 {
+            resolved_settings = settings_for_page(job.settings(), &page);
+        }
     }
     let printer_wide: Vec<u16> = printer.encode_utf16().chain(Some(0)).collect();
     let mut handle = std::ptr::null_mut();
@@ -32,7 +37,7 @@ pub(super) fn submit_windows_job(printer: &str, job: &PrintJob) -> Result<u32, A
     if unsafe { OpenPrinterW(printer_wide.as_ptr(), &mut handle, std::ptr::null()) } == 0 {
         return Err(spooler_error("cannot open the selected Windows printer"));
     }
-    let dev_mode = prepare_dev_mode(handle, printer_wide.as_ptr(), job.settings());
+    let dev_mode = prepare_dev_mode(handle, printer_wide.as_ptr(), &resolved_settings);
     // SAFETY: handle was returned by OpenPrinterW and is no longer needed.
     unsafe {
         ClosePrinter(handle);

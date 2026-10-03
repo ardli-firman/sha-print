@@ -131,6 +131,13 @@ the original queue with one printed through the installed ShaPrint client queue;
 normally, without raster headers or encoded data on extra pages. A successful spooler job alone
 does not prove correct physical output.
 
+For paper alignment, compare the same document in the same application through the original
+queue and the ShaPrint queue, requesting A4 with F4 paper loaded. The content should start at the
+same top position and the unused length should remain below it. Also exercise a server queue whose
+default is a custom F4 form: the A4 job must replace that default for this print job. The adapter
+clears inherited custom-size fields and asks the installed driver to validate the requested settings;
+omitted job-level media and orientation are resolved from the first raster page's physical size.
+
 For the native client queue, close any running ShaPrint instance (the test binds ports 8631 and 8632)
 and run it from an **elevated** prompt:
 

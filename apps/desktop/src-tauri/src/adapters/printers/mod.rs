@@ -2,6 +2,10 @@
 //!
 //! Windows adapters use the spooler; other platforms report unsupported in this Windows MVP.
 
+#[cfg(any(windows, test))]
+mod dev_mode;
+#[cfg(any(windows, test))]
+mod page_settings;
 pub mod raster;
 
 #[cfg(not(windows))]
