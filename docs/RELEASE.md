@@ -1,34 +1,22 @@
-﻿# ShaPrint Release Strategy
+# ShaPrint Release Strategy
 
-> **Status:** Development is **active** again. This repository is no longer
-> frozen — new releases, bug fixes, and pull requests are welcome.
-> (Repository was unarchived 2026-08-03 after a maintenance-freeze period
-> that ended at v2.0.0-community.)
+> **Status:** Active development has transitioned to **ShaPrint v3.0.0** (Tauri + Rust + React).
+> The legacy C# WPF application is maintained on the `legacy/wpf-lts` branch at v2.0.0-community.
 
-## v2.0.0-community (LTS)
+## v3.0.0 (Modern Tauri Desktop)
 
-The last release produced under the maintenance-freeze period. ShaPrint
-v2.0.0-community is licensed under **GPL v3** and contains the full
-Community feature set: Server Mode, Client Mode, LAN discovery,
-printer/scanner sharing, notifications, tray/background service,
-auto-purge, cross-VLAN, remote WIA scanning, the limited monitoring
-dashboard, and settings management. Self-compiling this source produces a
-fully working Community binary — no license activation is required.
+The current product architecture:
+- Windows desktop app built with **Tauri 2**, **React 19**, and a modular **Rust** core (`apps/desktop`).
+- Standards-based printer sharing using **IPPS** (Internet Printing Protocol over TLS) and **mDNS discovery**.
+- Client PWG Raster rendering directly through server manufacturer print drivers (ADR 0010).
+- Windows elevated setup helper for firewall configuration and native queue creation (`Add-Printer -IppURL`).
+- Zero plaintext credential leakage: Network Channel verifiers use salted SHA-256 and Windows DPAPI protection.
+- Distributed as native NSIS and MSI installers built via GitHub Actions (`release-desktop.yml`).
 
-## Current status
+## v2.0.0-community (LTS Archive)
 
-- Development has resumed on `main`.
-- New releases will be tagged from this repository again.
-- Bug fixes, feature work, and pull requests are accepted.
-
-## Premium / Enterprise
-
-The commercial edition of ShaPrint — including **Web Print Premium**,
-**Email-to-Print**, and **Driver Auto-Install** — is distributed as an
-official signed binary under a **Commercial EULA** from a separate private
-repository. Community source on this repository never contained any
-premium implementation, and will not be updated to include one.
-
-If you self-compile this source you will always build a Community binary.
-To obtain the Premium binary, contact the project owner through the
-channels listed on the official landing page.
+The legacy .NET 8 WPF application:
+- Archived to the permanent Git branch `legacy/wpf-lts` and tagged `v2.0.0-community`.
+- Licensed under **GPL v3**.
+- Contains proprietary TCP print sharing, UDP discovery, and WIA scanner sharing.
+- Critical security or maintenance fixes for the WPF codebase should be branched from `legacy/wpf-lts`.

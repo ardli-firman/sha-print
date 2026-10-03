@@ -1,0 +1,77 @@
+[package]
+name = "shaprint-desktop"
+version = "3.0.0"
+description = "ShaPrint desktop shell: supervises the client proxy and server sharing runtimes"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-plugin-log"]
+
+[lib]
+# The lib name must differ from the bin name on Windows (rust-lang/cargo#8519).
+name = "shaprint_desktop"
+crate-type = ["lib"]
+
+[[bin]]
+name = "shaprint-desktop"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+async-trait = "0.1"
+# The previous app wrote its protected Network Channel as base64 text; reading that value is the
+# only reason this app decodes base64 itself.
+base64 = "0.22"
+hex = "0.4"
+log = "0.4"
+# `ring` is the TLS backend for both rustls and rcgen on every platform we build, including the
+# Windows CI runner, so no assembly toolchain beyond the platform C compiler is required.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tauri = { version = "2", features = ["tray-icon"], optional = true }
+tauri-plugin-log = { version = "2", optional = true }
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Printing",
+    "Win32_Security_Authorization",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_Xps",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+async-trait = "0.1"
+hex = "0.4"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

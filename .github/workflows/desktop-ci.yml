@@ -1,0 +1,81 @@
+name: Desktop CI
+
+on:
+  push:
+    branches: [main, develop, dev-tauri]
+    paths:
+      - 'apps/desktop/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/desktop-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/desktop-ci.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: apps/desktop
+
+jobs:
+  rust:
+    name: Rust (format, clippy, tests)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # `tauri-build` reads the frontend output, so the UI is built before the Rust steps.
+      - name: Build frontend bundle
+        working-directory: apps/desktop
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+  frontend:
+    name: Frontend (typecheck, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: apps/desktop
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: apps/desktop
+        run: bun run typecheck
+
+      - name: Test
+        working-directory: apps/desktop
+        run: bun run test
