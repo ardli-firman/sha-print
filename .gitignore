@@ -2,55 +2,26 @@
 # Agent & Pi
 .agents/
 .pi/
-docs/
-!docs/
-docs/*
-!docs/adr/
-!docs/adr/**
 skills-lock.json
-CONTEXT.md
-!CONTEXT.md
 
-# .NET
-bin/
-obj/
-[Bb]uild/
-[Mm]erge/
-[Tt]est[Rr]esult*
-[Bb]uild[Ll]og.*
-*.Cache
-*.user
-*.suo
-*.cache
-*.dbmdl
-*.dbproj.schemaview
-*.jfm
-*.pfx
-*.publishsettings
-.vs/
-*.psess
-*.vspx
-*.pidb
-*.svclog
-*.scc
+# Node / Bun
+node_modules/
+dist/
+dist-ssr/
+*.local
 
-# NuGet
-*.nupkg
-*.snupkg
-packages/
-project.lock.json
-project.fragment.lock.json
-artifacts/
+# Rust / Tauri
+target/
+**/*.rs.bk
 
-# Rider
+# IDE & Editors
 .idea/
-*.sln.im
-
-# VS Code
 .vscode/
-AppMode.json
-ClientConfig.json
-ServerConfig.json
+*.suo
+*.user
 
-Output/
+# Logs & OS
+*.log
 crash.log
+.DS_Store
+Thumbs.db

@@ -2,13 +2,17 @@ name: Desktop CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, dev-tauri]
     paths:
       - 'apps/desktop/**'
+      - 'package.json'
+      - 'bun.lock'
       - '.github/workflows/desktop-ci.yml'
   pull_request:
     paths:
       - 'apps/desktop/**'
+      - 'package.json'
+      - 'bun.lock'
       - '.github/workflows/desktop-ci.yml'
   workflow_dispatch:
 
@@ -65,10 +69,13 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
+        working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
       - name: Typecheck
+        working-directory: apps/desktop
         run: bun run typecheck
 
       - name: Test
+        working-directory: apps/desktop
         run: bun run test

@@ -1,0 +1,17 @@
+{
+  "name": "shaprint",
+  "private": true,
+  "version": "3.0.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "bun --filter shaprint-desktop dev",
+    "build": "bun --filter shaprint-desktop build",
+    "preview": "bun --filter shaprint-desktop preview",
+    "typecheck": "bun --filter shaprint-desktop typecheck",
+    "test": "bun --filter shaprint-desktop test",
+    "test:watch": "bun --filter shaprint-desktop test:watch",
+    "tauri": "bun --filter shaprint-desktop tauri"
+  }
+}

@@ -1,0 +1,56 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v3.0.0)'
+        required: true
+        default: 'v3.0.0'
+
+jobs:
+  build-and-release:
+    name: Build & Release Desktop (Windows)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install dependencies
+        working-directory: apps/desktop
+        run: bun install --frozen-lockfile
+
+      - name: Build Tauri Desktop (NSIS & MSI)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name || inputs.tag }}
+          releaseName: 'ShaPrint ${{ github.ref_name || inputs.tag }}'
+          releaseBody: |
+            ## ShaPrint Desktop (Tauri & IPP/IPPS)
+            See release notes and documentation in `docs/adr/`.
+          releaseDraft: false
+          prerelease: false
