@@ -105,6 +105,12 @@ function serviceCard(container: HTMLElement, id: string): HTMLElement {
   return card as HTMLElement;
 }
 
+type WorkspacePage = "Share" | "Connect" | "Settings";
+
+function navigateTo(page: WorkspacePage) {
+  fireEvent.click(screen.getByRole("button", { name: page }));
+}
+
 function printerRow(container: HTMLElement, name: string): HTMLElement {
   const row = container.querySelector(`[data-printer="${name}"]`);
   if (row === null) {
@@ -116,7 +122,7 @@ function printerRow(container: HTMLElement, name: string): HTMLElement {
 /** Waits until the sharing panel has listed the queues. */
 async function sharingPanel(container: HTMLElement): Promise<HTMLElement> {
   await waitFor(() => expect(printerRow(container, "HP LaserJet")).toBeTruthy());
-  return screen.getByRole("region", { name: "Shared printers" });
+  return screen.getByRole("region", { name: "Local printers" });
 }
 
 // Testing Library only cleans up automatically when Vitest globals are turned on; this suite
@@ -181,6 +187,25 @@ const FAILURE: PrintFailure = {
   observed_at_ms: Date.UTC(2026, 0, 2, 3, 4, 5),
 };
 
+describe("workspace navigation", () => {
+  it("starts on Share and keeps Connect and Settings workflows in their own sections", async () => {
+    render(<App />);
+
+    expect(screen.getByRole("heading", { name: "Share printers", level: 1 })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Share" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByRole("region", { name: "Nearby servers" })).toBeNull();
+
+    navigateTo("Connect");
+    expect(await screen.findByRole("heading", { name: "Connect to a server", level: 1 })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Nearby servers" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Local printers" })).toBeNull();
+
+    navigateTo("Settings");
+    expect(await screen.findByRole("heading", { name: "Settings", level: 1 })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Print authorization" })).toBeTruthy();
+  });
+});
+
 describe("runtime status panel", () => {
   it("shows the live state of the proxy and sharing services", async () => {
     const { container } = render(<App />);
@@ -240,7 +265,7 @@ describe("runtime status panel", () => {
     const proxy = serviceCard(container, "client-proxy");
     fireEvent.click(within(proxy).getByRole("button", { name: "Start" }));
 
-    const panel = screen.getByRole("region", { name: "Services" });
+    const panel = screen.getByRole("region", { name: "Print services" });
     const alert = await within(panel).findByRole("alert");
     expect(alert.textContent).toContain("invalid-state");
     expect(alert.textContent).toContain("select at least one printer to share before starting");
@@ -315,6 +340,18 @@ describe("print problems panel", () => {
     expect(within(panel).getByText("Sending the job to the server")).toBeTruthy();
   });
 
+  it("does not claim the print path is clear when failures cannot be read", async () => {
+    vi.mocked(printFailures.getPrintFailures).mockRejectedValue({
+      code: "internal",
+      message: "print failures unavailable",
+    });
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Print problems" });
+    expect(await within(panel).findByRole("alert")).toBeTruthy();
+    expect(within(panel).queryByText(/No print problems reported/i)).toBeNull();
+  });
+
   it("dismisses a failure and returns to the calm state", async () => {
     vi.mocked(printFailures.getPrintFailures).mockResolvedValue(FAILURE);
     vi.mocked(printFailures.dismissPrintFailure).mockResolvedValue(null);
@@ -348,7 +385,7 @@ describe("shared printers panel", () => {
     expect(printerRow(container, "Zebra").dataset.shared).toBe("false");
     expect(printerRow(container, "Canon").dataset.shared).toBe("true");
     expect(within(printerRow(container, "Zebra")).getByText("Not shared")).toBeTruthy();
-    expect(screen.getByText(/2 of 3 local queues are shared/)).toBeTruthy();
+    expect(screen.getByText(/2 of 3 shared/)).toBeTruthy();
   });
 
   it("shares the queues the user selects", async () => {
@@ -368,7 +405,32 @@ describe("shared printers panel", () => {
 
     const fingerprint = await screen.findByTestId("server-fingerprint");
     expect(fingerprint.textContent).toBe(IDENTITY.fingerprint);
-    expect(screen.getByText(/Clients connect to port 8631/)).toBeTruthy();
+    expect(screen.getByText("Port 8631")).toBeTruthy();
+    expect(screen.getByText(/Clients verify this fingerprint/)).toBeTruthy();
+  });
+
+  it("copies the server fingerprint only after the user asks", async () => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      render(<App />);
+      await screen.findByTestId("server-fingerprint");
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+      expect(await screen.findByText("Fingerprint copied.")).toBeTruthy();
+      expect(writeText).toHaveBeenCalledWith(IDENTITY.fingerprint);
+    } finally {
+      if (originalClipboard) {
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
+    }
   });
 
   it("asks for administrator permission only when the user opens client access", async () => {
@@ -396,7 +458,7 @@ describe("shared printers panel", () => {
     await sharingPanel(container);
     fireEvent.click(within(printerRow(container, "Zebra")).getByRole("checkbox"));
 
-    const panel = screen.getByRole("region", { name: "Shared printers" });
+    const panel = screen.getByRole("region", { name: "Local printers" });
     const alert = await within(panel).findByRole("alert");
     expect(alert.textContent).toContain("invalid-input");
     expect(alert.textContent).toContain("'Ghost' is not a local printer queue");
@@ -413,7 +475,7 @@ describe("shared printers panel", () => {
     });
     render(<App />);
 
-    const panel = await screen.findByRole("region", { name: "Shared printers" });
+    const panel = await screen.findByRole("region", { name: "Local printers" });
     const alert = await within(panel).findByRole("alert");
     expect(alert.textContent).toContain("unsupported");
     expect(alert.textContent).toContain("only supported on Windows");
@@ -438,6 +500,7 @@ describe("server connection panel", () => {
       printers: ["Office Laser"],
     });
     render(<App />);
+    navigateTo("Connect");
 
     fireEvent.change(screen.getByLabelText("Server address"), {
       target: { value: "printer.example" },
@@ -480,6 +543,7 @@ describe("server connection panel", () => {
       uri: "ipp://127.0.0.1:8632/ipp/print/printer.example%3A8631/Office%20Laser",
     });
     render(<App />);
+    navigateTo("Connect");
 
     fireEvent.change(screen.getByLabelText("Server address"), {
       target: { value: "printer.example" },
@@ -519,6 +583,7 @@ describe("server connection panel", () => {
         'Could not install the Windows queue "Office Laser (ShaPrint printer.example-8631)" for printer "Office Laser": the Windows Print Spooler service is not running. Start it (services.msc), then try again.',
     });
     render(<App />);
+    navigateTo("Connect");
 
     fireEvent.change(screen.getByLabelText("Server address"), {
       target: { value: "printer.example" },
@@ -546,6 +611,7 @@ describe("server connection panel", () => {
       trusted: false,
     });
     render(<App />);
+    navigateTo("Connect");
 
     fireEvent.change(screen.getByLabelText("Server address"), {
       target: { value: "printer.example" },
@@ -566,6 +632,7 @@ describe("Network Channel panel", () => {
   it("saves a server channel without displaying the secret again", async () => {
     vi.mocked(networkChannel.configureNetworkChannel).mockResolvedValue(true);
     render(<App />);
+    navigateTo("Settings");
 
     const input = screen.getByLabelText("Network Channel") as HTMLInputElement;
     const value = `network-${Date.now()}-${Math.random()}`;
@@ -590,6 +657,7 @@ describe("nearby servers panel", () => {
       trusted: false,
     });
     render(<App />);
+    navigateTo("Connect");
 
     const panel = await screen.findByRole("region", { name: "Nearby servers" });
     expect(await within(panel).findByText("DESKTOP-ABC")).toBeTruthy();
@@ -616,6 +684,7 @@ describe("nearby servers panel", () => {
       return () => {};
     });
     render(<App />);
+    navigateTo("Connect");
 
     const panel = await screen.findByRole("region", { name: "Nearby servers" });
     await waitFor(() => expect(publish).toBeDefined());
@@ -626,6 +695,7 @@ describe("nearby servers panel", () => {
 
   it("keeps working by address when discovery finds nothing", async () => {
     render(<App />);
+    navigateTo("Connect");
 
     const panel = await screen.findByRole("region", { name: "Nearby servers" });
     expect(
@@ -640,6 +710,7 @@ describe("nearby servers panel", () => {
 describe("startup panel", () => {
   it("reports that ShaPrint starts with the user's login and how to quit it", async () => {
     render(<App />);
+    navigateTo("Settings");
 
     const panel = await screen.findByRole("region", { name: "Startup" });
     const toggle = (await within(panel).findByLabelText(
@@ -657,6 +728,7 @@ describe("startup panel", () => {
       command: '"C:\\Program Files\\ShaPrint\\shaprint-desktop.exe" --background',
     });
     render(<App />);
+    navigateTo("Settings");
 
     const panel = await screen.findByRole("region", { name: "Startup" });
     const toggle = (await within(panel).findByLabelText(
@@ -677,6 +749,7 @@ describe("startup panel", () => {
       command: "",
     });
     render(<App />);
+    navigateTo("Settings");
 
     const panel = await screen.findByRole("region", { name: "Startup" });
     expect(
@@ -692,6 +765,7 @@ describe("previous app panel", () => {
   it("reports the Network Channel it took and asks for the printers again", async () => {
     vi.mocked(legacyApi.getLegacyImportReport).mockResolvedValue(LEGACY_REPORT);
     render(<App />);
+    navigateTo("Settings");
 
     const panel = await screen.findByRole("region", { name: "Previous ShaPrint app" });
     expect(await within(panel).findByText(LEGACY_REPORT.channel_note)).toBeTruthy();
@@ -711,6 +785,7 @@ describe("previous app panel", () => {
       return () => {};
     });
     render(<App />);
+    navigateTo("Settings");
 
     const panel = await screen.findByRole("region", { name: "Previous ShaPrint app" });
     await waitFor(() => expect(publish).toBeDefined());
@@ -721,6 +796,7 @@ describe("previous app panel", () => {
 
   it("says nothing was found when there was no previous app", async () => {
     render(<App />);
+    navigateTo("Settings");
 
     const panel = await screen.findByRole("region", { name: "Previous ShaPrint app" });
     expect(
@@ -738,6 +814,7 @@ describe("previous app panel", () => {
     });
     vi.mocked(legacyApi.importLegacySettings).mockResolvedValue(LEGACY_REPORT);
     render(<App />);
+    navigateTo("Settings");
 
     const panel = await screen.findByRole("region", { name: "Previous ShaPrint app" });
     fireEvent.click(await within(panel).findByRole("button", { name: "Import again" }));

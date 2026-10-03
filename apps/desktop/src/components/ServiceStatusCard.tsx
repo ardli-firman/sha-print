@@ -1,5 +1,7 @@
-import { printRecovery } from "../api/availability";
-import type { ServiceId, ServiceState, ServiceStatus } from "../api/types";
+import { printRecovery } from "@/api/availability";
+import type { ServiceId, ServiceState, ServiceStatus } from "@/api/types";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 /** User-facing name and purpose of each supervised service. */
 const SERVICE_LABELS: Partial<Record<ServiceId, { title: string; description: string }>> = {
@@ -25,6 +27,14 @@ const STATE_LABELS: Record<ServiceState, string> = {
   failed: "Failed",
 };
 
+const STATE_VARIANTS: Record<ServiceState, NonNullable<BadgeProps["variant"]>> = {
+  stopped: "muted",
+  starting: "warning",
+  running: "success",
+  stopping: "warning",
+  failed: "destructive",
+};
+
 /** Which control is legal in each state; the shell rejects anything else as `invalid-state`. */
 const CONTROLS: Record<ServiceState, { canStart: boolean; canStop: boolean }> = {
   stopped: { canStart: true, canStop: false },
@@ -45,8 +55,6 @@ interface ServiceStatusCardProps {
 export function ServiceStatusCard({ service, busy, onStart, onStop }: ServiceStatusCardProps) {
   const label = SERVICE_LABELS[service.id];
   const controls = CONTROLS[service.state];
-  // A print path that is not running is why a job may not proceed; say so and name the fix here,
-  // where the Start button already is.
   const recovery = printRecovery(service);
 
   return (
@@ -56,9 +64,9 @@ export function ServiceStatusCard({ service, busy, onStart, onStop }: ServiceSta
           <h3>{label?.title ?? service.id}</h3>
           {label ? <p className="service-description">{label.description}</p> : null}
         </div>
-        <span className={`badge badge-${service.state}`} role="status">
+        <Badge className="service-state-badge" variant={STATE_VARIANTS[service.state]} role="status">
           {STATE_LABELS[service.state] ?? service.state}
-        </span>
+        </Badge>
       </header>
 
       {service.detail ? <p className="service-detail">{service.detail}</p> : null}
@@ -71,12 +79,18 @@ export function ServiceStatusCard({ service, busy, onStart, onStop }: ServiceSta
       ) : null}
 
       <div className="service-actions">
-        <button type="button" onClick={onStart} disabled={busy || !controls.canStart}>
+        <Button type="button" size="sm" onClick={onStart} disabled={busy || !controls.canStart}>
           Start
-        </button>
-        <button type="button" onClick={onStop} disabled={busy || !controls.canStop}>
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={onStop}
+          disabled={busy || !controls.canStop}
+        >
           Stop
-        </button>
+        </Button>
       </div>
     </section>
   );

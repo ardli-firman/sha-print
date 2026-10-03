@@ -1,30 +1,44 @@
+import { RefreshCw } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import type { RuntimeStatusController } from "@/hooks/useRuntimeStatus";
 import { ServiceStatusCard } from "./ServiceStatusCard";
-import type { RuntimeStatusController } from "../hooks/useRuntimeStatus";
 
 interface RuntimeStatusPanelProps {
   runtime: RuntimeStatusController;
 }
 
-/** Live status of every service the shell supervises, with the controls that own their lifetime. */
+/** Live status of the client and server print paths, with lifecycle controls. */
 export function RuntimeStatusPanel({ runtime }: RuntimeStatusPanelProps) {
   const { status, error, busy, unreachable, dismissError } = runtime;
 
   return (
-    <section className="panel" aria-labelledby="services-heading">
+    <Card className="panel runtime-panel" aria-labelledby="services-heading">
       <div className="panel-header">
-        <h2 id="services-heading">Services</h2>
-        <button type="button" onClick={() => void runtime.refresh()} disabled={busy !== null}>
+        <div>
+          <h2 id="services-heading">Print services</h2>
+          <p className="hint">Client proxy and server sharing can run independently.</p>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => void runtime.refresh()}
+          disabled={busy !== null}
+        >
+          <RefreshCw size={15} aria-hidden="true" />
           Refresh
-        </button>
+        </Button>
       </div>
 
       {error ? (
         <p className="banner" role="alert">
           <span className="banner-code">{error.code}</span>
           <span className="banner-message">{error.message}</span>
-          <button type="button" className="banner-dismiss" onClick={dismissError}>
+          <Button type="button" variant="ghost" size="sm" onClick={dismissError}>
             Dismiss
-          </button>
+          </Button>
         </p>
       ) : null}
 
@@ -51,6 +65,6 @@ export function RuntimeStatusPanel({ runtime }: RuntimeStatusPanelProps) {
           ))}
         </ul>
       ) : null}
-    </section>
+    </Card>
   );
 }

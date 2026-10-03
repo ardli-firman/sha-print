@@ -1,5 +1,7 @@
-import type { PrintFailurePath } from "../api/types";
-import type { PrintFailuresController } from "../hooks/usePrintFailures";
+import type { PrintFailurePath } from "@/api/types";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import type { PrintFailuresController } from "@/hooks/usePrintFailures";
 
 /** Where a job stopped, in the user's terms. */
 const PATH_LABELS: Record<PrintFailurePath, string> = {
@@ -19,23 +21,23 @@ interface PrintFailuresPanelProps {
   failures: PrintFailuresController;
 }
 
-/**
- * The shell's explanation of the last print attempt that failed: a stable code, what happened, and
- * the one action that resolves it. The payload never carries the Network Channel or document
- * contents.
- */
+/** The shell's explanation of the last failed job and its single recovery action. */
 export function PrintFailuresPanel({ failures }: PrintFailuresPanelProps) {
   const { failure, error, dismiss } = failures;
   const observed = failure ? observedAt(failure.observed_at_ms) : null;
+  const hasProblem = Boolean(failure || error);
 
   return (
-    <section className="panel" aria-labelledby="print-failures-heading">
+    <Card
+      className={`panel print-problems-panel ${hasProblem ? "has-problem" : "is-clear"}`}
+      aria-labelledby="print-failures-heading"
+    >
       <div className="panel-header">
         <h2 id="print-failures-heading">Print problems</h2>
         {failure ? (
-          <button type="button" onClick={() => void dismiss()}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => void dismiss()}>
             Dismiss
-          </button>
+          </Button>
         ) : null}
       </div>
 
@@ -57,15 +59,14 @@ export function PrintFailuresPanel({ failures }: PrintFailuresPanelProps) {
             <strong>Next step:</strong> {failure.recovery}
           </p>
           <p className="failure-when">
-            Reported{" "}
-            <time dateTime={observed?.iso ?? ""}>{observed?.text ?? "time unknown"}</time>
+            Reported <time dateTime={observed?.iso ?? ""}>{observed?.text ?? "time unknown"}</time>
           </p>
         </article>
-      ) : (
+      ) : error ? null : (
         <p className="hint">
           No print problems reported. Jobs from installed queues print through the client proxy.
         </p>
       )}
-    </section>
+    </Card>
   );
 }
