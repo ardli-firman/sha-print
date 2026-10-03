@@ -1,0 +1,26 @@
+{
+  "name": "ShaPrint",
+  "short_name": "ShaPrint",
+  "description": "Zero-cloud, secure peer-to-peer LAN printer sharing",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "theme_color": "#126b73",
+  "background_color": "#1b292b",
+  "display": "standalone"
+}
