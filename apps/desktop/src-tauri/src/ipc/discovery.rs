@@ -28,6 +28,8 @@ pub struct NearbyServerDto {
     pub address: String,
     /// The printers the server says it shares.
     pub printers: Vec<String>,
+    /// Semantic version advertised by the server, if any.
+    pub version: Option<String>,
 }
 
 impl From<&NearbyServer> for NearbyServerDto {
@@ -40,6 +42,7 @@ impl From<&NearbyServer> for NearbyServerDto {
                 .iter()
                 .map(|printer| printer.as_str().to_owned())
                 .collect(),
+            version: server.version().map(ToOwned::to_owned),
         }
     }
 }
@@ -79,10 +82,11 @@ mod tests {
 
     #[test]
     fn nearby_server_payload_shape_is_stable() {
-        let server = NearbyServer::new(
+        let server = NearbyServer::with_version(
             "DESKTOP-ABC",
             "192.0.2.10:8631",
             vec![PrinterName::parse("Zebra").expect("valid printer name")],
+            Some("3.0.0".to_owned()),
         )
         .expect("a valid nearby server");
 
@@ -95,7 +99,8 @@ mod tests {
                 "servers": [{
                     "name": "DESKTOP-ABC",
                     "address": "192.0.2.10:8631",
-                    "printers": ["Zebra"]
+                    "printers": ["Zebra"],
+                    "version": "3.0.0"
                 }]
             })
         );

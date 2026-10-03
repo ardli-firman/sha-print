@@ -14,7 +14,8 @@ use super::protocol::{
 
 use crate::adapters::ipps::NetworkChannel;
 use crate::application::{
-    DuplexMode, PrintFailures, PrintJob, PrintJobSubmitter, PrintOrientation, PrintSettings,
+    DuplexMode, JobLease, PrintFailures, PrintJob, PrintJobSubmitter, PrintJobTracker,
+    PrintOrientation, PrintSettings,
 };
 
 #[cfg(test)]
@@ -80,37 +81,59 @@ pub async fn answer_job(
     channel: &NetworkChannel,
     submitter: &dyn PrintJobSubmitter,
     failures: &PrintFailures,
-) -> Vec<u8> {
+    tracker: &PrintJobTracker,
+) -> (Vec<u8>, Option<JobLease>) {
     let request = match Request::parse(&bytes) {
         Ok(request) => request,
-        Err(_) => return response(0, IPP_VERSION_1_1, Status::BadRequest, &[]),
+        Err(_) => return (response(0, IPP_VERSION_1_1, Status::BadRequest, &[]), None),
     };
     let request_id = request.request_id();
     let version = request.response_version();
     if !request.version_is_supported() {
-        return response(request_id, version, Status::VersionNotSupported, &[]);
+        return (
+            response(request_id, version, Status::VersionNotSupported, &[]),
+            None,
+        );
     }
     let operation = request.operation();
     if operation != OPERATION_PRINT_JOB && operation != OPERATION_VALIDATE_JOB {
-        return answer_with_job_status(
-            &bytes,
-            host,
-            shared,
-            channel.is_configured() && submitter.is_available(),
+        return (
+            answer_with_job_status(
+                &bytes,
+                host,
+                shared,
+                channel.is_configured() && submitter.is_available(),
+            ),
+            None,
         );
     }
 
+    let active_job_guard = if operation == OPERATION_PRINT_JOB {
+        Some(tracker.acquire_job())
+    } else {
+        None
+    };
+
     let Some(candidate) = request.value("network-channel") else {
-        return response(request_id, version, Status::NotAuthorized, &[]);
+        return (
+            response(request_id, version, Status::NotAuthorized, &[]),
+            active_job_guard,
+        );
     };
     if !channel.authorizes(candidate) {
-        return response(request_id, version, Status::NotAuthorized, &[]);
+        return (
+            response(request_id, version, Status::NotAuthorized, &[]),
+            active_job_guard,
+        );
     }
     if !submitter.is_available() {
         // Reported only after authorization, so an anonymous caller cannot fill the server user's
         // screen with failures it has no way to act on.
         failures.report(PrintFailure::server(ErrorCode::QueueUnavailable, None));
-        return response(request_id, version, Status::NotAcceptingJobs, &[]);
+        return (
+            response(request_id, version, Status::NotAcceptingJobs, &[]),
+            active_job_guard,
+        );
     }
     let shared_printers = shared.shared_printers();
     let selected = request
@@ -118,7 +141,10 @@ pub async fn answer_job(
         .and_then(|uri| find_by_uri(&shared_printers, host, uri))
         .cloned();
     let Some(printer) = selected else {
-        return response(request_id, version, Status::NotFound, &[]);
+        return (
+            response(request_id, version, Status::NotFound, &[]),
+            active_job_guard,
+        );
     };
 
     if let Some(document_format) = request.value("document-format") {
@@ -126,29 +152,41 @@ pub async fn answer_job(
             document_format.to_ascii_lowercase().as_str(),
             "image/pwg-raster"
         ) {
-            return response(request_id, version, Status::DocumentFormatNotSupported, &[]);
+            return (
+                response(request_id, version, Status::DocumentFormatNotSupported, &[]),
+                active_job_guard,
+            );
         }
     } else if operation == OPERATION_PRINT_JOB {
-        return response(request_id, version, Status::BadRequest, &[]);
+        return (
+            response(request_id, version, Status::BadRequest, &[]),
+            active_job_guard,
+        );
     }
 
     let settings = match job_settings(&request) {
         Ok(settings) => settings,
-        Err(status) => return response(request_id, version, status, &[]),
+        Err(status) => return (response(request_id, version, status, &[]), active_job_guard),
     };
 
     if operation == OPERATION_VALIDATE_JOB {
-        return response(request_id, version, Status::Ok, &[]);
+        return (
+            response(request_id, version, Status::Ok, &[]),
+            active_job_guard,
+        );
     }
 
     if request.document().is_empty() {
-        return response(request_id, version, Status::BadRequest, &[]);
+        return (
+            response(request_id, version, Status::BadRequest, &[]),
+            active_job_guard,
+        );
     }
 
     let document_start = request.document_start();
     drop(request);
     let job = PrintJob::from_ipp_body(bytes, document_start, settings);
-    match submitter.submit(&printer, job).await {
+    let answer = match submitter.submit(&printer, job).await {
         Ok(job_id) => {
             let printer_uri = entry(host, &printer, true).uri;
             let job_uri = format!("{printer_uri}/jobs/{job_id}");
@@ -166,7 +204,8 @@ pub async fn answer_job(
             ));
             response(request_id, version, status, &[])
         }
-    }
+    };
+    (answer, active_job_guard)
 }
 
 /// The code a user should see when the spooler refused a job.

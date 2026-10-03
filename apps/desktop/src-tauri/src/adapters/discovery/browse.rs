@@ -14,7 +14,7 @@ use tokio::net::UdpSocket;
 
 use crate::adapters::discovery::{
     send_to_all, wire, DISCOVERY_PORTS, MAX_DATAGRAM, MDNS_GROUP, NAME_PROPERTY, QUEUE_PROPERTY,
-    READ_BACKOFF,
+    READ_BACKOFF, VERSION_PROPERTY,
 };
 use crate::application::{AdvertisementSink, Browse, DiscoveryBrowser, Shutdown};
 use crate::domain::{AppError, NearbyServer, PrinterName};
@@ -170,10 +170,12 @@ fn endpoint_address(service: &wire::Service, from: SocketAddr) -> Option<String>
 /// One advertised instance, as the client will offer it to a user.
 fn nearby_server(service: &wire::Service, address: &str) -> Option<NearbyServer> {
     let mut label = None;
+    let mut version = None;
     let mut printers: Vec<PrinterName> = Vec::new();
     for (key, value) in &service.properties {
         match key.as_str() {
             NAME_PROPERTY if label.is_none() => label = Some(value.clone()),
+            VERSION_PROPERTY if version.is_none() => version = Some(value.clone()),
             QUEUE_PROPERTY => {
                 if let Ok(name) = PrinterName::parse(value) {
                     if !printers.contains(&name) {
@@ -185,7 +187,7 @@ fn nearby_server(service: &wire::Service, address: &str) -> Option<NearbyServer>
         }
     }
     let label = label.unwrap_or_else(|| instance_label(&service.instance));
-    NearbyServer::new(&label, address, printers).ok()
+    NearbyServer::with_version(&label, address, printers, version).ok()
 }
 
 /// The first label of an instance name, used when an advertisement carries no server label.
@@ -383,5 +385,36 @@ mod tests {
             vec![("192.0.2.10:8631".to_owned(), Duration::from_secs(120))]
         );
         assert!(recording.withdrawals().is_empty());
+    }
+
+    #[test]
+    fn an_answer_with_version_exposes_the_advertised_version() {
+        let server = discovered(
+            &service(&[
+                ("rp", "ipp/print"),
+                ("name", "DESKTOP-ABC"),
+                ("v", "3.0.0"),
+                ("queue", "Zebra"),
+            ]),
+            "192.0.2.10:5353",
+        )
+        .expect("a usable advertisement");
+
+        assert_eq!(server.version(), Some("3.0.0"));
+    }
+
+    #[test]
+    fn an_older_server_answer_without_version_succeeds_cleanly_with_none() {
+        let server = discovered(
+            &service(&[
+                ("rp", "ipp/print"),
+                ("name", "DESKTOP-LEGACY"),
+                ("queue", "LaserJet"),
+            ]),
+            "192.0.2.10:5353",
+        )
+        .expect("a usable legacy advertisement");
+
+        assert_eq!(server.version(), None);
     }
 }

@@ -45,9 +45,21 @@ impl RuntimeService for ServerSharingService {
         ServiceId::ServerSharing
     }
 
-    /// Sharing is opt-in: the user starts and stops it explicitly (ADR 0001).
+    /// Sharing autostarts if the user previously had sharing enabled and has valid printers.
     fn autostart(&self) -> bool {
-        false
+        self.sharing.is_autostart_enabled()
+    }
+
+    fn started(&self) {
+        if let Err(error) = self.sharing.set_sharing_enabled(true) {
+            log::warn!("cannot persist sharing enabled state: {error}");
+        }
+    }
+
+    fn stopped(&self) {
+        if let Err(error) = self.sharing.set_sharing_enabled(false) {
+            log::warn!("cannot persist sharing stopped state: {error}");
+        }
     }
 
     /// Sharing needs something to share: a server with no selected queue would open a port and
@@ -273,6 +285,7 @@ mod tests {
             Arc::new(NetworkChannel::in_memory()),
             Arc::new(UnavailableSubmitter),
             Arc::new(PrintFailures::new()),
+            Arc::new(crate::application::PrintJobTracker::new()),
         ));
         let runtime = RuntimeCoordinator::new(vec![Arc::new(ServerSharingService::new(
             Arc::clone(&sharing),
@@ -333,6 +346,7 @@ mod tests {
             Arc::new(NetworkChannel::in_memory()),
             Arc::new(UnavailableSubmitter),
             Arc::new(PrintFailures::new()),
+            Arc::new(crate::application::PrintJobTracker::new()),
         ));
         let (advertiser, _recorded) = FakeAdvertiser::available();
         (

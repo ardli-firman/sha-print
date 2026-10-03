@@ -23,7 +23,9 @@ use tokio::time::timeout;
 use tokio_rustls::{rustls::ServerConfig, TlsAcceptor};
 
 use crate::adapters::identity::ServerIdentity;
-use crate::application::{PrintFailures, PrintJobSubmitter, ServiceContext, SharedPrinterSource};
+use crate::application::{
+    PrintFailures, PrintJobSubmitter, PrintJobTracker, ServiceContext, SharedPrinterSource,
+};
 use crate::domain::{AppError, CertificateFingerprint};
 
 /// Port the sharing endpoint listens on.
@@ -45,6 +47,7 @@ pub struct IppsServer {
     channel: Arc<NetworkChannel>,
     submitter: Arc<dyn PrintJobSubmitter>,
     failures: Arc<PrintFailures>,
+    tracker: Arc<PrintJobTracker>,
     bound: Mutex<Option<SocketAddr>>,
 }
 
@@ -56,6 +59,7 @@ impl IppsServer {
         channel: Arc<NetworkChannel>,
         submitter: Arc<dyn PrintJobSubmitter>,
         failures: Arc<PrintFailures>,
+        tracker: Arc<PrintJobTracker>,
     ) -> Self {
         Self {
             port,
@@ -63,6 +67,7 @@ impl IppsServer {
             channel,
             submitter,
             failures,
+            tracker,
             bound: Mutex::new(None),
         }
     }
@@ -114,15 +119,15 @@ impl IppsServer {
                 Some(_) = connections.join_next(), if !connections.is_empty() => {}
                 accepted = listener.accept() => match accepted {
                     Ok((stream, peer)) => {
-                        connections.spawn(serve_client(
-                            stream,
-                            Arc::clone(&tls),
-                            Arc::clone(&directory),
-                            Arc::clone(&self.channel),
-                            Arc::clone(&self.submitter),
-                            Arc::clone(&self.failures),
-                            peer,
-                        ));
+                        let server_ctx = ServerClientContext {
+                            tls: Arc::clone(&tls),
+                            directory: Arc::clone(&directory),
+                            channel: Arc::clone(&self.channel),
+                            submitter: Arc::clone(&self.submitter),
+                            failures: Arc::clone(&self.failures),
+                            tracker: Arc::clone(&self.tracker),
+                        };
+                        connections.spawn(serve_client(stream, server_ctx, peer));
                     }
                     Err(error) => log::warn!("cannot accept a client connection message={error}"),
                 },
@@ -154,17 +159,18 @@ impl IppsServer {
     }
 }
 
-/// Completes the TLS handshake and answers one request.
-async fn serve_client(
-    stream: TcpStream,
+struct ServerClientContext {
     tls: Arc<ServerConfig>,
     directory: Arc<dyn SharedPrinterSource>,
     channel: Arc<NetworkChannel>,
     submitter: Arc<dyn PrintJobSubmitter>,
     failures: Arc<PrintFailures>,
-    peer: SocketAddr,
-) {
-    let acceptor = TlsAcceptor::from(tls);
+    tracker: Arc<PrintJobTracker>,
+}
+
+/// Completes the TLS handshake and answers one request.
+async fn serve_client(stream: TcpStream, ctx: ServerClientContext, peer: SocketAddr) {
+    let acceptor = TlsAcceptor::from(ctx.tls);
     let handshake = timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await;
     let tls_stream = match handshake {
         Ok(Ok(stream)) => stream,
@@ -180,10 +186,11 @@ async fn serve_client(
 
     if let Err(error) = answer_request_with_jobs(
         tls_stream,
-        directory.as_ref(),
-        channel.as_ref(),
-        submitter.as_ref(),
-        failures.as_ref(),
+        ctx.directory.as_ref(),
+        ctx.channel.as_ref(),
+        ctx.submitter.as_ref(),
+        ctx.failures.as_ref(),
+        ctx.tracker.as_ref(),
     )
     .await
     {
@@ -201,6 +208,7 @@ pub async fn answer_request_with_jobs<S>(
     channel: &NetworkChannel,
     submitter: &dyn PrintJobSubmitter,
     failures: &PrintFailures,
+    tracker: &PrintJobTracker,
 ) -> Result<(), AppError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -241,8 +249,10 @@ where
             return respond(&mut write, "400 Bad Request", "text/plain", &[]).await;
         }
     };
-    let answer =
-        endpoint::answer_job(body, authority, directory, channel, submitter, failures).await;
+    let (answer, _active_job_guard) = endpoint::answer_job(
+        body, authority, directory, channel, submitter, failures, tracker,
+    )
+    .await;
     respond(&mut write, "200 OK", http::IPP_CONTENT_TYPE, &answer).await
 }
 
@@ -325,8 +335,15 @@ mod tests {
         let channel = NetworkChannel::in_memory();
         let submitter = UnavailableSubmitter;
         let failures = PrintFailures::new();
-        let answering =
-            answer_request_with_jobs(server, directory.as_ref(), &channel, &submitter, &failures);
+        let tracker = PrintJobTracker::new();
+        let answering = answer_request_with_jobs(
+            server,
+            directory.as_ref(),
+            &channel,
+            &submitter,
+            &failures,
+            &tracker,
+        );
         let exchange = async move {
             client.write_all(request).await.expect("sends the request");
             let mut answer = Vec::new();

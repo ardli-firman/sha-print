@@ -2,6 +2,7 @@ import { Laptop, Plus, Radio, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ServerVersionBadges } from "./ServerVersionBadges";
 import type { NearbyServersController } from "../hooks/useNearbyServers";
 import type { ServerConnectionsController } from "../hooks/useServerConnections";
 
@@ -83,51 +84,55 @@ export function NearbyServersPanel({
           aria-label="Nearby ShaPrint servers"
           aria-live="polite"
         >
-          {servers.map((server) => (
-            <li key={server.address} className="py-3 first:pt-1 last:pb-1">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Laptop size={16} className="text-primary shrink-0" />
-                    <strong className="font-semibold text-sm text-foreground truncate">
-                      {server.name}
-                    </strong>
-                    <Badge variant="muted" className="text-[10px]">
-                      {server.printers.length} shared {server.printers.length === 1 ? "printer" : "printers"}
-                    </Badge>
+          {servers.map((server) => {
+            return (
+              <li key={server.address} className="py-3 first:pt-1 last:pb-1">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Laptop size={16} className="text-primary shrink-0" />
+                      <strong className="font-semibold text-sm text-foreground truncate">
+                        {server.name}
+                      </strong>
+                      <ServerVersionBadges version={server.version} />
+                      <Badge variant="muted" className="text-[10px]">
+                        {server.printers.length} shared{" "}
+                        {server.printers.length === 1 ? "printer" : "printers"}
+                      </Badge>
+                    </div>
+                    <p className="hint mt-1 text-xs text-muted-foreground">
+                      <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+                        {server.address}
+                      </code>
+                    </p>
+                    <p className="hint mt-0.5 text-xs text-muted-foreground">
+                      {server.printers.length > 0
+                        ? `Shares: ${server.printers.join(", ")}`
+                        : "Shares no printer right now"}
+                    </p>
                   </div>
-                  <p className="hint mt-1 text-xs text-muted-foreground">
-                    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
-                      {server.address}
-                    </code>
-                  </p>
-                  <p className="hint mt-0.5 text-xs text-muted-foreground">
-                    {server.printers.length > 0
-                      ? `Shares: ${server.printers.join(", ")}`
-                      : "Shares no printer right now"}
-                  </p>
-                </div>
 
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0 text-xs h-8 sm:self-center self-start"
-                  onClick={() => void connections.reviewAddress(server.address)}
-                  disabled={connections.busy !== null}
-                >
-                  {connections.busy === "inspect" && connections.address === server.address ? (
-                    <>
-                      <RefreshCw size={13} className="animate-spin mr-1" />
-                      <span>Reviewing…</span>
-                    </>
-                  ) : (
-                    "Review identity"
-                  )}
-                </Button>
-              </div>
-            </li>
-          ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 text-xs h-8 sm:self-center self-start"
+                    onClick={() => void connections.reviewAddress(server.address)}
+                    disabled={connections.busy !== null}
+                  >
+                    {connections.busy === "inspect" && connections.address === server.address ? (
+                      <>
+                        <RefreshCw size={13} className="animate-spin mr-1" />
+                        <span>Reviewing…</span>
+                      </>
+                    ) : (
+                      "Review identity"
+                    )}
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

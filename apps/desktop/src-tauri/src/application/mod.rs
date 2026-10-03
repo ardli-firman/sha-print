@@ -4,6 +4,7 @@
 mod coordinator;
 mod discovery;
 mod failures;
+mod job_tracker;
 mod legacy;
 mod lifecycle;
 mod printers;
@@ -19,6 +20,7 @@ pub use discovery::{
     ServerAdvertiser,
 };
 pub use failures::PrintFailures;
+pub use job_tracker::{JobLease, PrintJobTracker, DRAIN_COOLDOWN, QUIET_WINDOW};
 pub use legacy::{
     ChannelOutcome, ChannelStore, ImportReport, LegacyChannel, LegacyImport, LegacySettingsSource,
     LegacySnapshot, SkippedSetting,

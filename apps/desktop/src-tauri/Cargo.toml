@@ -8,7 +8,7 @@ publish = false
 
 [features]
 default = ["desktop"]
-desktop = ["dep:tauri", "dep:tauri-plugin-log"]
+desktop = ["dep:tauri", "dep:tauri-plugin-log", "dep:tauri-plugin-updater"]
 
 [lib]
 # The lib name must differ from the bin name on Windows (rust-lang/cargo#8519).
@@ -40,6 +40,7 @@ serde_json = "1"
 sha2 = "0.10"
 tauri = { version = "2", features = ["tray-icon"], optional = true }
 tauri-plugin-log = { version = "2", optional = true }
+tauri-plugin-updater = { version = "2", optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

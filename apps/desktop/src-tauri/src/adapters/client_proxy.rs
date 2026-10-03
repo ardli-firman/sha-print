@@ -17,7 +17,7 @@ use tokio::{
 
 use crate::{
     adapters::{client_connections::ClientConnections, ipps::protocol, ipps::NetworkChannel},
-    application::{PrintFailures, RuntimeService, ServiceContext},
+    application::{PrintFailures, PrintJobTracker, RuntimeService, ServiceContext},
     domain::{AppError, ErrorCode, PrintFailure, PrinterName, ServiceId},
 };
 
@@ -39,6 +39,7 @@ pub struct ClientProxyService {
     connections: Arc<ClientConnections>,
     channel: Arc<NetworkChannel>,
     failures: Arc<PrintFailures>,
+    tracker: Arc<PrintJobTracker>,
     port: u16,
     bound: Mutex<Option<SocketAddr>>,
 }
@@ -57,8 +58,15 @@ impl ClientProxyService {
         connections: Arc<ClientConnections>,
         channel: Arc<NetworkChannel>,
         failures: Arc<PrintFailures>,
+        tracker: Arc<PrintJobTracker>,
     ) -> Self {
-        Self::with_port(connections, channel, failures, CLIENT_PROXY_DEFAULT_PORT)
+        Self::with_port(
+            connections,
+            channel,
+            failures,
+            tracker,
+            CLIENT_PROXY_DEFAULT_PORT,
+        )
     }
 
     /// Builds the loopback endpoint; port zero lets tests ask the OS for an unused port.
@@ -66,12 +74,14 @@ impl ClientProxyService {
         connections: Arc<ClientConnections>,
         channel: Arc<NetworkChannel>,
         failures: Arc<PrintFailures>,
+        tracker: Arc<PrintJobTracker>,
         port: u16,
     ) -> Self {
         Self {
             connections,
             channel,
             failures,
+            tracker,
             port,
             bound: Mutex::new(None),
         }
@@ -134,6 +144,7 @@ impl RuntimeService for ClientProxyService {
                     let client_connections = Arc::clone(&self.connections);
                     let channel = Arc::clone(&self.channel);
                     let failures = Arc::clone(&self.failures);
+                    let tracker = Arc::clone(&self.tracker);
                     let authority = local.to_string();
                     connections.spawn(async move {
                         if let Err(error) = serve_client(
@@ -142,6 +153,7 @@ impl RuntimeService for ClientProxyService {
                             &client_connections,
                             &channel,
                             &failures,
+                            &tracker,
                         )
                         .await
                         {
@@ -168,6 +180,7 @@ async fn serve_client(
     connections: &ClientConnections,
     channel: &NetworkChannel,
     failures: &PrintFailures,
+    tracker: &PrintJobTracker,
 ) -> Result<(), AppError> {
     let (read, mut write) = tokio::io::split(stream);
     let mut reader = BufReader::new(read);
@@ -290,6 +303,11 @@ async fn serve_client(
         }
     };
     trace_issue34("route=accepted");
+    let _job_lease = if operation == protocol::OPERATION_PRINT_JOB {
+        Some(tracker.acquire_job())
+    } else {
+        None
+    };
     let remote_uri = format!(
         "ipps://{server_address}/ipp/print/{}",
         protocol::percent_encode(printer_name.as_str())

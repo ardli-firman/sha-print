@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input, PasswordInput } from "@/components/ui/input";
+import { ServerVersionBadges } from "./ServerVersionBadges";
 import type { NearbyServersController } from "../hooks/useNearbyServers";
 import type { ServerConnectionsController } from "../hooks/useServerConnections";
 import type { NetworkChannelController } from "@/features/network-channel";
@@ -241,36 +242,39 @@ export function AddPrinterDialog({
               </div>
             ) : (
               <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
-                {nearby.servers.map((server: NearbyServer) => (
-                  <div
-                    key={server.address}
-                    className="wizard-server-option"
-                  >
-                    <div className="min-w-0 pr-2">
-                      <div className="flex items-center gap-2">
-                        <Laptop size={16} className="text-primary shrink-0" />
-                        <span className="font-semibold text-sm truncate">{server.name}</span>
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-0.5 font-mono">
-                        {server.address}
-                      </div>
-                      <div className="text-[11px] text-muted-foreground mt-1">
-                        {server.printers.length > 0
-                          ? `Shares: ${server.printers.join(", ")}`
-                          : "Shares 0 printers"}
-                      </div>
-                    </div>
-                    <Button
-                      size="sm"
-                      onClick={() => void handleSelectServer(server.address)}
-                      disabled={busy !== null}
+                {nearby.servers.map((server: NearbyServer) => {
+                  return (
+                    <div
+                      key={server.address}
+                      className="wizard-server-option"
                     >
-                      {busy === "inspect" && connections.address === server.address
-                        ? "Reviewing…"
-                        : "Review identity"}
-                    </Button>
-                  </div>
-                ))}
+                      <div className="min-w-0 pr-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Laptop size={16} className="text-primary shrink-0" />
+                          <span className="font-semibold text-sm truncate">{server.name}</span>
+                          <ServerVersionBadges version={server.version} />
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5 font-mono">
+                          {server.address}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground mt-1">
+                          {server.printers.length > 0
+                            ? `Shares: ${server.printers.join(", ")}`
+                            : "Shares 0 printers"}
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => void handleSelectServer(server.address)}
+                        disabled={busy !== null}
+                      >
+                        {busy === "inspect" && connections.address === server.address
+                          ? "Reviewing…"
+                          : "Review identity"}
+                      </Button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

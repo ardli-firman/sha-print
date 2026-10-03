@@ -273,8 +273,9 @@ async fn send_with_failures(
     printer: &dyn PrintJobSubmitter,
     failures: &PrintFailures,
 ) -> Vec<u8> {
+    let tracker = shaprint_desktop::application::PrintJobTracker::new();
     let (client, server) = duplex(16 * 1024);
-    let answering = answer_request_with_jobs(server, shared, channel, printer, failures);
+    let answering = answer_request_with_jobs(server, shared, channel, printer, failures, &tracker);
     let exchange = async move {
         let mut client = client;
         let head = format!("POST /ipp/print HTTP/1.1\r\nHost: server:8631\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n", body.len());
@@ -369,12 +370,14 @@ impl LiveServer {
             .await
             .expect("selects printer");
         let identity = Arc::new(ServerIdentity::generate().expect("generates identity"));
+        let tracker = Arc::new(shaprint_desktop::application::PrintJobTracker::new());
         let endpoint = Arc::new(IppsServer::new(
             0,
             identity,
             channel,
             submitter,
             Arc::new(PrintFailures::new()),
+            tracker,
         ));
         let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
             Arc::clone(&sharing),

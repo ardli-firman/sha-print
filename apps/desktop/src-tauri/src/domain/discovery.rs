@@ -14,6 +14,8 @@ use crate::domain::{AppError, PrinterName};
 pub const NAME_LIMIT: usize = 64;
 /// Longest address the UI accepts from an advertisement; `host:port` is a fraction of this.
 pub const ADDRESS_LIMIT: usize = 255;
+/// Longest version string an advertisement may carry.
+pub const VERSION_LIMIT: usize = 32;
 
 /// A server the client found on the local network.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +23,7 @@ pub struct NearbyServer {
     name: String,
     address: String,
     printers: Vec<PrinterName>,
+    version: Option<String>,
 }
 
 impl NearbyServer {
@@ -30,6 +33,16 @@ impl NearbyServer {
     /// advertisement can never push unusable text into the UI. Whether the address is actually
     /// reachable is not decided here: reviewing it does that, exactly as for a manual address.
     pub fn new(name: &str, address: &str, printers: Vec<PrinterName>) -> Result<Self, AppError> {
+        Self::with_version(name, address, printers, None)
+    }
+
+    /// Builds a nearby server including an optional advertised version.
+    pub fn with_version(
+        name: &str,
+        address: &str,
+        printers: Vec<PrinterName>,
+        version: Option<String>,
+    ) -> Result<Self, AppError> {
         let name = name.trim();
         let address = address.trim();
         if name.is_empty() || name.chars().count() > NAME_LIMIT || has_control(name) {
@@ -42,10 +55,20 @@ impl NearbyServer {
                 "the advertised server address is not usable",
             ));
         }
+        let clean_version = version.and_then(|v| {
+            let trimmed = v.trim();
+            if trimmed.is_empty() || trimmed.chars().count() > VERSION_LIMIT || has_control(trimmed)
+            {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        });
         Ok(Self {
             name: name.to_owned(),
             address: address.to_owned(),
             printers,
+            version: clean_version,
         })
     }
 
@@ -62,6 +85,11 @@ impl NearbyServer {
     /// The queues the server says it shares.
     pub fn printers(&self) -> &[PrinterName] {
         &self.printers
+    }
+
+    /// The semantic version the server advertised, if any.
+    pub fn version(&self) -> Option<&str> {
+        self.version.as_deref()
     }
 }
 
@@ -128,5 +156,44 @@ mod tests {
             .expect("a valid advertisement");
 
         assert!(server.printers().is_empty());
+    }
+
+    #[test]
+    fn server_exposes_advertised_version_when_present() {
+        let server = NearbyServer::with_version(
+            "DESKTOP-ABC",
+            "192.0.2.10:8631",
+            vec![name("Zebra")],
+            Some("3.0.0".to_owned()),
+        )
+        .expect("valid server");
+
+        assert_eq!(server.version(), Some("3.0.0"));
+    }
+
+    #[test]
+    fn server_omits_version_when_absent_or_invalid() {
+        let older_server =
+            NearbyServer::new("DESKTOP-OLD", "192.0.2.11:8631", Vec::new()).expect("valid server");
+        assert_eq!(older_server.version(), None);
+
+        let whitespace_version = NearbyServer::with_version(
+            "DESKTOP-ABC",
+            "192.0.2.10:8631",
+            Vec::new(),
+            Some("   ".to_owned()),
+        )
+        .expect("valid server");
+        assert_eq!(whitespace_version.version(), None);
+
+        let overlong = "v".repeat(VERSION_LIMIT + 1);
+        let overlong_server = NearbyServer::with_version(
+            "DESKTOP-ABC",
+            "192.0.2.10:8631",
+            Vec::new(),
+            Some(overlong),
+        )
+        .expect("valid server");
+        assert_eq!(overlong_server.version(), None);
     }
 }
