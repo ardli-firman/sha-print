@@ -15,6 +15,7 @@ jobs:
   build-and-release:
     name: Build & Release Desktop (Windows)
     runs-on: windows-latest
+    environment: release
     permissions:
       contents: write
 
