@@ -42,8 +42,9 @@ use adapters::{
 use application::{close_action, CloseAction};
 use application::{
     ChannelStore, ClientProxyState, Discovery, DiscoveryBrowser, DiscoveryService, LegacyImport,
-    LegacySettingsSource, PrintFailures, PrintJobSubmitter, QueueInstallation, RuntimeCoordinator,
-    ServerAdvertiser, Setup, Sharing, Startup, StartupRegistration, TrustedServerPrinters,
+    LegacySettingsSource, PrintFailures, PrintJobSubmitter, PrintJobTracker, QueueInstallation,
+    RuntimeCoordinator, ServerAdvertiser, Setup, Sharing, Startup, StartupRegistration,
+    TrustedServerPrinters,
 };
 use domain::AppError;
 
@@ -63,6 +64,7 @@ pub struct Shell {
     network_channel: Arc<NetworkChannel>,
     discovery: Arc<Discovery>,
     print_failures: Arc<PrintFailures>,
+    job_tracker: Arc<PrintJobTracker>,
     queue_installation: Arc<QueueInstallation>,
 }
 
@@ -70,18 +72,23 @@ impl Shell {
     /// Builds the shell for the app data directory the identity and settings live in.
     pub fn new(data_dir: &Path) -> Result<Self, AppError> {
         let identity = Arc::new(FileIdentityStore::new(data_dir).load_or_create()?);
-        let sharing = Arc::new(Sharing::new(default_printer_catalog()));
+        let sharing = Arc::new(Sharing::with_persistence(
+            default_printer_catalog(),
+            Some(data_dir),
+        ));
         let client_connections = Arc::new(ClientConnections::new(data_dir)?);
         let network_channel = Arc::new(NetworkChannel::open(data_dir)?);
         // Both print paths report here, so the window has one place to answer "why did my print
         // not come out?" (#39).
         let print_failures = Arc::new(PrintFailures::new());
+        let job_tracker = Arc::new(PrintJobTracker::new());
         let endpoint = Arc::new(IppsServer::new(
             DEFAULT_PORT,
             identity,
             Arc::clone(&network_channel),
             default_print_job_submitter(),
             Arc::clone(&print_failures),
+            Arc::clone(&job_tracker),
         ));
         let setup = Arc::new(Setup::new(Arc::new(SystemElevation::new())));
         let startup = Arc::new(Startup::new(default_startup_registration(), Some(data_dir)));
@@ -104,6 +111,7 @@ impl Shell {
                 Arc::clone(&client_connections),
                 Arc::clone(&network_channel),
                 Arc::clone(&print_failures),
+                Arc::clone(&job_tracker),
             )),
             Arc::new(ServerSharingService::new(
                 Arc::clone(&sharing),
@@ -134,6 +142,7 @@ impl Shell {
             network_channel,
             discovery,
             print_failures,
+            job_tracker,
             queue_installation,
         })
     }
@@ -178,8 +187,17 @@ impl Shell {
         Arc::clone(&self.print_failures)
     }
 
+    pub fn job_tracker(&self) -> Arc<PrintJobTracker> {
+        Arc::clone(&self.job_tracker)
+    }
+
     pub fn queue_installation(&self) -> Arc<QueueInstallation> {
         Arc::clone(&self.queue_installation)
+    }
+
+    /// Restores the persistent sharing state against available local queues.
+    pub async fn restore(&self) -> Result<(), AppError> {
+        self.sharing.restore().await
     }
 }
 
@@ -253,6 +271,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
                 )])
                 .build(),
         )
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             ipc::commands::get_runtime_status,
             ipc::commands::start_service,
@@ -274,6 +293,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ipc::server_settings::configure_network_channel,
             ipc::server_settings::get_network_channel_status,
             ipc::discovery::list_nearby_servers,
+            ipc::commands::get_drain_status,
         ])
         .setup(move |app| {
             use tauri::Manager;
@@ -300,6 +320,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
             app.manage(shell.startup());
             app.manage(shell.legacy_import());
             app.manage(shell.queue_installation());
+            app.manage(shell.job_tracker());
 
             // The tray is what makes the app reachable after its window is closed, so its
             // availability decides what closing the window means.
@@ -335,6 +356,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
             // brought over from the previous application (#41).
             let runtime = shell.runtime();
             let legacy_import = shell.legacy_import();
+            let sharing = shell.sharing();
             drop(tauri::async_runtime::spawn(async move {
                 match legacy_import.apply().await {
                     Ok(report) => log::info!(
@@ -348,6 +370,13 @@ pub fn run(background: bool) -> Result<(), AppError> {
                         error.code_str(),
                         error
                     ),
+                }
+                if let Err(error) = sharing.restore().await {
+                    log::warn!(
+                        "cannot restore server sharing code={} message={}",
+                        error.code_str(),
+                        error
+                    );
                 }
                 if let Err(error) = runtime.start_autostart().await {
                     log::warn!(

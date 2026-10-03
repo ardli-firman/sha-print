@@ -17,8 +17,8 @@ use tauri::State;
 
 use crate::adapters::IppsServer;
 use crate::application::{
-    LegacyImport, PrintFailures, QueueInstallation, RuntimeCoordinator, Setup, SetupOutcome,
-    Sharing, Startup,
+    LegacyImport, PrintFailures, PrintJobTracker, QueueInstallation, RuntimeCoordinator, Setup,
+    SetupOutcome, Sharing, Startup,
 };
 use crate::domain::{AppError, PrinterName, ServiceId, SetupAction};
 use crate::ipc::dto::{
@@ -49,6 +49,30 @@ pub type SharedLegacyImport = Arc<LegacyImport>;
 
 /// Native client queue installation.
 pub type SharedQueueInstallation = Arc<QueueInstallation>;
+
+/// In-flight print job tracker and drain guard.
+pub type SharedPrintJobTracker = Arc<PrintJobTracker>;
+
+/// Current drain guard and restart readiness status.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DrainStatusDto {
+    pub active_jobs: usize,
+    pub is_restart_safe: bool,
+    pub is_idle_for_quiet_window: bool,
+}
+
+/// Returns whether restart is safe and whether in-flight print jobs are active.
+#[tauri::command]
+pub async fn get_drain_status(
+    tracker: State<'_, SharedPrintJobTracker>,
+) -> Result<DrainStatusDto, AppErrorDto> {
+    log::info!("command=get_drain_status");
+    Ok(DrainStatusDto {
+        active_jobs: tracker.active_count(),
+        is_restart_safe: tracker.is_restart_safe(),
+        is_idle_for_quiet_window: tracker.is_idle_for_quiet_window(),
+    })
+}
 
 /// Returns the current status of every supervised service.
 #[tauri::command]

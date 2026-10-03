@@ -115,4 +115,10 @@ pub trait RuntimeService: Send + Sync + 'static {
 
     /// Runs the service until cancelled, reporting readiness through the context.
     async fn run(&self, context: ServiceContext) -> Result<(), AppError>;
+
+    /// Called when the service has successfully started and reported ready.
+    fn started(&self) {}
+
+    /// Called when the service has been explicitly stopped by the user.
+    fn stopped(&self) {}
 }

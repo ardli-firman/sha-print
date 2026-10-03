@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Main window: calls the shell's runtime status and service lifecycle commands and listens for runtime status events. No shell, filesystem, dialog, opener, or remote content permissions are granted.",
+  "description": "Main window: calls the shell's runtime status and service lifecycle commands, listens for runtime status events, and allows routine updater checks and downloads without granting broader permissions.",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
-    "core:event:allow-unlisten"
+    "core:event:allow-unlisten",
+    "updater:default"
   ]
 }

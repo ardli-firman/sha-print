@@ -42,6 +42,8 @@ const READ_BACKOFF: Duration = Duration::from_millis(50);
 pub const PATH_PROPERTY: &str = "rp";
 pub const NAME_PROPERTY: &str = "name";
 pub const QUEUE_PROPERTY: &str = "queue";
+/// Application semver attribute (ADR 0012 §5).
+pub const VERSION_PROPERTY: &str = "v";
 /// The resource path a browser connects to, shared with the IPPS endpoint.
 pub const RESOURCE_PATH: &str = "ipp/print";
 

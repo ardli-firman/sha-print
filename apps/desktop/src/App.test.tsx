@@ -795,6 +795,66 @@ describe("nearby servers panel", () => {
     expect(screen.getByLabelText("Server address")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Inspect certificate" })).toBeTruthy();
   });
+
+  it("exposes the advertised version and displays a non-blocking version drift badge when server is newer", async () => {
+    vi.mocked(discovery.listNearbyServers).mockResolvedValue({
+      servers: [
+        {
+          name: "DESKTOP-MATCH",
+          address: "192.0.2.10:8631",
+          printers: ["Zebra"],
+          version: "3.0.0",
+        },
+        {
+          name: "DESKTOP-NEWER",
+          address: "192.0.2.11:8631",
+          printers: ["Canon"],
+          version: "3.1.0",
+        },
+        {
+          name: "DESKTOP-LEGACY",
+          address: "192.0.2.12:8631",
+          printers: ["HP"],
+          version: null,
+        },
+      ],
+    });
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue({
+      address: "192.0.2.11:8631",
+      current_fingerprint:
+        "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
+      previous_fingerprint: null,
+      trusted: false,
+    });
+
+    render(<App />);
+    navigateTo("Connect");
+
+    const panel = await screen.findByRole("region", { name: "Nearby servers" });
+
+    // Matching version server displays version badge without drift badge
+    expect(await within(panel).findByText("DESKTOP-MATCH")).toBeTruthy();
+    expect(within(panel).getByText("v3.0.0")).toBeTruthy();
+
+    // Legacy server displays without version badge or drift badge
+    expect(await within(panel).findByText("DESKTOP-LEGACY")).toBeTruthy();
+
+    // Newer server displays version badge AND version-drift advisory badge
+    expect(await within(panel).findByText("DESKTOP-NEWER")).toBeTruthy();
+    expect(within(panel).getByText("v3.1.0")).toBeTruthy();
+    const driftBadge = within(panel).getByText(/Newer server release/);
+    expect(driftBadge).toBeTruthy();
+
+    // Version drift does not block review identity action
+    const newerServerItem = within(panel).getByText("DESKTOP-NEWER").closest("li")!;
+    const reviewButton = within(newerServerItem).getByRole("button", { name: "Review identity" });
+    expect((reviewButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(reviewButton);
+
+    await waitFor(() =>
+      expect(serverConnections.inspectServerConnection).toHaveBeenCalledWith("192.0.2.11:8631"),
+    );
+  });
 });
 
 describe("startup panel", () => {
