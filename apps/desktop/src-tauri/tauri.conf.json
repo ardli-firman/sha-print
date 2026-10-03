@@ -46,7 +46,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM3NUNBQzAxMkREMjE3OUYKUldTZkY5SXRBYXhjTjU1RmV0T2diRWx3SE85Tk5QdHB0MzU2YWZoOHZzY1U2dkZqUUhUUlRhMjAK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkxRjM5RDI0RkY4QUUwOEYKUldTUDRJci9KSjN6a2JRakZSKzVsYUtWdUp3YzJzeVZPdzNPYTdlRlhwSG9vdkVMdFhSZDEzU0gK",
       "endpoints": [
         "https://github.com/ardli-firman/sha-print/releases/latest/download/latest.json"
       ]
