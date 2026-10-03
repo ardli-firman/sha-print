@@ -238,12 +238,13 @@ impl RuntimeCoordinator {
                 ServiceReporter::new(id, Arc::clone(&self.registry)),
             );
             let registry = Arc::clone(&self.registry);
-            let task = tokio::spawn(supervise(service, context, registry));
+            let task = tokio::spawn(supervise(Arc::clone(&service), context, registry));
             running.insert(id, RunningService { cancel, task });
         }
 
         match self.await_ready(id).await {
             Ok(()) => {
+                service.started();
                 log::info!("service started id={}", id.as_str());
                 Ok(())
             }
@@ -285,6 +286,9 @@ impl RuntimeCoordinator {
         match timeout_at(Instant::now() + self.shutdown_timeout, entry.task).await {
             Ok(_) => {
                 self.settle_stopped(id);
+                if let Ok(service) = self.service(id) {
+                    service.stopped();
+                }
                 log::info!("service stopped id={}", id.as_str());
                 Ok(())
             }

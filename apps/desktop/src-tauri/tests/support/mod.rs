@@ -78,6 +78,27 @@ pub fn sharing_runtime(queues: &[&str]) -> (Arc<Sharing>, Arc<IppsServer>) {
     sharing_runtime_on(queues, 0)
 }
 
+/// The persistent sharing configuration over `queues` using `data_dir`.
+pub fn sharing_runtime_persistent(
+    queues: &[&str],
+    data_dir: &std::path::Path,
+) -> (Arc<Sharing>, Arc<IppsServer>) {
+    let sharing = Arc::new(Sharing::with_persistence(
+        FakeCatalog::new(queues),
+        Some(data_dir),
+    ));
+    let identity = ServerIdentity::generate().expect("generates a server identity");
+    let endpoint = Arc::new(IppsServer::new(
+        0,
+        Arc::new(identity),
+        Arc::new(NetworkChannel::in_memory()),
+        Arc::new(UnavailableSubmitter),
+        Arc::new(PrintFailures::new()),
+        Arc::new(shaprint_desktop::application::PrintJobTracker::new()),
+    ));
+    (sharing, endpoint)
+}
+
 /// The sharing configuration over `queues`, with the endpoint on `port` (0 asks the operating
 /// system). Discovery advertises the configured port, so a test that reads the advertised address
 /// back has to name one.
@@ -90,6 +111,7 @@ pub fn sharing_runtime_on(queues: &[&str], port: u16) -> (Arc<Sharing>, Arc<Ipps
         Arc::new(NetworkChannel::in_memory()),
         Arc::new(UnavailableSubmitter),
         Arc::new(PrintFailures::new()),
+        Arc::new(shaprint_desktop::application::PrintJobTracker::new()),
     ));
     (sharing, endpoint)
 }

@@ -25,3 +25,9 @@ target/
 crash.log
 .DS_Store
 Thumbs.db
+
+# Signing keys & secrets
+.keys/
+*.key
+*.priv
+

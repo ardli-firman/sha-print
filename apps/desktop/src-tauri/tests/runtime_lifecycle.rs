@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use shaprint_desktop::adapters::ipps::NetworkChannel;
 use shaprint_desktop::adapters::{client_connections::ClientConnections, ClientProxyService};
-use shaprint_desktop::application::{PrintFailures, RuntimeCoordinator, Sharing};
+use shaprint_desktop::application::{
+    PrintFailures, RuntimeCoordinator, SharedPrinterSource, Sharing,
+};
 use shaprint_desktop::domain::{ErrorCode, ServiceId, ServiceState};
 use shaprint_desktop::Shell;
 
@@ -21,11 +23,13 @@ fn coordinator(queues: &[&str]) -> (RuntimeCoordinator, Arc<Sharing>) {
             .expect("opens proxy trust store"),
     );
     let channel = Arc::new(NetworkChannel::in_memory());
+    let tracker = Arc::new(shaprint_desktop::application::PrintJobTracker::new());
     let runtime = RuntimeCoordinator::new(vec![
         Arc::new(ClientProxyService::with_port(
             connections,
             channel,
             Arc::new(PrintFailures::new()),
+            tracker,
             0,
         )),
         Arc::new(support::sharing_service(Arc::clone(&sharing), endpoint)),
@@ -156,4 +160,239 @@ async fn services_the_shell_does_not_own_are_rejected_with_a_stable_code() {
 
     let unknown = ServiceId::parse("scanner").expect_err("not a service");
     assert_eq!(unknown.code(), ErrorCode::UnknownService);
+}
+
+#[tokio::test]
+async fn persistent_selection_and_automatic_sharing_resumption_across_restarts() {
+    let dir = temporary_directory("persist-lifecycle-resume");
+
+    // Session 1: select printer, start sharing, then shutdown
+    {
+        let (sharing, endpoint) =
+            support::sharing_runtime_persistent(&["HP LaserJet", "Zebra"], &dir);
+        sharing
+            .set_shared(printer_names(&["HP LaserJet"]))
+            .await
+            .expect("selects printer");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
+            Arc::clone(&sharing),
+            endpoint,
+        ))]);
+
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("starts sharing");
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Running
+        );
+
+        // App closes
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    // Session 2: relaunch with same dir, restore and run autostart
+    {
+        let (sharing, endpoint) =
+            support::sharing_runtime_persistent(&["HP LaserJet", "Zebra"], &dir);
+        sharing.restore().await.expect("restores sharing state");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
+            Arc::clone(&sharing),
+            endpoint,
+        ))]);
+
+        assert_eq!(
+            sharing
+                .shared_printers()
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>(),
+            vec!["HP LaserJet"]
+        );
+
+        runtime.start_autostart().await.expect("autostart succeeds");
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Running
+        );
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn explicitly_stopping_sharing_stays_stopped_across_restarts_while_preserving_selection() {
+    let dir = temporary_directory("persist-lifecycle-stop");
+
+    // Session 1: select, start, explicitly stop, then shutdown
+    {
+        let (sharing, endpoint) =
+            support::sharing_runtime_persistent(&["HP LaserJet", "Zebra"], &dir);
+        sharing
+            .set_shared(printer_names(&["Zebra"]))
+            .await
+            .expect("selects printer");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
+            Arc::clone(&sharing),
+            endpoint,
+        ))]);
+
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("starts sharing");
+        runtime
+            .stop(ServiceId::ServerSharing)
+            .await
+            .expect("explicitly stops sharing");
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Stopped
+        );
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    // Session 2: relaunch
+    {
+        let (sharing, endpoint) =
+            support::sharing_runtime_persistent(&["HP LaserJet", "Zebra"], &dir);
+        sharing.restore().await.expect("restores sharing state");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
+            Arc::clone(&sharing),
+            endpoint,
+        ))]);
+
+        runtime.start_autostart().await.expect("autostart succeeds");
+        // Must stay stopped because user explicitly stopped it
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Stopped
+        );
+        // But printer selection is preserved in UI
+        assert_eq!(
+            sharing
+                .shared_printers()
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Zebra"]
+        );
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn restarting_when_one_printer_removed_filters_it_and_resumes_sharing() {
+    let dir = temporary_directory("persist-lifecycle-one-removed");
+
+    // Session 1: select two printers, start, shutdown
+    {
+        let (sharing, endpoint) =
+            support::sharing_runtime_persistent(&["HP LaserJet", "Zebra"], &dir);
+        sharing
+            .set_shared(printer_names(&["HP LaserJet", "Zebra"]))
+            .await
+            .expect("selects both");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
+            Arc::clone(&sharing),
+            endpoint,
+        ))]);
+
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("starts sharing");
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    // Session 2: Zebra was uninstalled from the OS
+    {
+        let (sharing, endpoint) = support::sharing_runtime_persistent(&["HP LaserJet"], &dir);
+        sharing.restore().await.expect("restores and filters");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
+            Arc::clone(&sharing),
+            endpoint,
+        ))]);
+
+        runtime.start_autostart().await.expect("autostart succeeds");
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Running
+        );
+        assert_eq!(
+            sharing
+                .shared_printers()
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>(),
+            vec!["HP LaserJet"]
+        );
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn restarting_when_all_printers_removed_leaves_sharing_stopped_cleanly() {
+    let dir = temporary_directory("persist-lifecycle-all-removed");
+
+    // Session 1: select Zebra, start, shutdown
+    {
+        let (sharing, endpoint) = support::sharing_runtime_persistent(&["Zebra"], &dir);
+        sharing
+            .set_shared(printer_names(&["Zebra"]))
+            .await
+            .expect("selects Zebra");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
+            Arc::clone(&sharing),
+            endpoint,
+        ))]);
+
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("starts sharing");
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    // Session 2: Zebra was uninstalled, only Canon exists
+    {
+        let (sharing, endpoint) = support::sharing_runtime_persistent(&["Canon"], &dir);
+        sharing.restore().await.expect("restores and filters");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
+            Arc::clone(&sharing),
+            endpoint,
+        ))]);
+
+        runtime
+            .start_autostart()
+            .await
+            .expect("autostart cleanly skips sharing");
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Stopped
+        );
+        assert!(sharing.shared_printers().is_empty());
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
 }

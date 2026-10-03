@@ -93,6 +93,8 @@ export interface NearbyServer {
   address: string;
   /** The printers the server says it shares. */
   printers: string[];
+  /** Semantic version advertised by the server, if any. */
+  version?: string | null;
 }
 
 /** Every server currently visible on the local network. */

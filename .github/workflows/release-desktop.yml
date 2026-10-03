@@ -15,6 +15,7 @@ jobs:
   build-and-release:
     name: Build & Release Desktop (Windows)
     runs-on: windows-latest
+    environment: release
     permissions:
       contents: write
 
@@ -41,10 +42,12 @@ jobs:
         working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
-      - name: Build Tauri Desktop (NSIS & MSI)
+      - name: Build Tauri Desktop (NSIS & Signed Update Bundles)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name || inputs.tag }}

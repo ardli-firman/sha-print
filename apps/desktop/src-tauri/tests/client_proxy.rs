@@ -112,12 +112,14 @@ impl RunningPair {
             .await
             .expect("selects server queue");
         let submitter = Arc::new(FakeSubmitter::default());
+        let server_tracker = Arc::new(shaprint_desktop::application::PrintJobTracker::new());
         let endpoint = Arc::new(IppsServer::new(
             server_port,
             Arc::new(ServerIdentity::generate().expect("creates server identity")),
             server_channel,
             submitter.clone(),
             Arc::new(PrintFailures::new()),
+            server_tracker,
         ));
         let server = Arc::new(RuntimeCoordinator::new(vec![Arc::new(
             support::sharing_service(sharing, endpoint.clone()),
@@ -154,10 +156,12 @@ impl RunningPair {
         // The proxy reports what it could not forward here, so a test can read the same surface the
         // window shows (#39).
         let failures = Arc::new(PrintFailures::new());
+        let client_tracker = Arc::new(shaprint_desktop::application::PrintJobTracker::new());
         let proxy = Arc::new(ClientProxyService::with_port(
             client_connections.clone(),
             client_channel.clone(),
             Arc::clone(&failures),
+            client_tracker,
             proxy_port,
         ));
         let client = Arc::new(RuntimeCoordinator::new(vec![proxy.clone()]));

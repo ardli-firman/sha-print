@@ -330,3 +330,19 @@ async fn ask(socket: &tokio::net::UdpSocket, port: u16) -> Option<Vec<u8>> {
         _ => None,
     }
 }
+
+#[tokio::test]
+async fn server_advertises_its_version_and_client_discovers_it() {
+    let port = free_port();
+    let advertiser = Arc::new(MdnsAdvertiser::on(vec![0]).with_ttl(ADVERTISED));
+    let (server_runtime, _endpoint) = start_server(&["Zebra"], port, Arc::clone(&advertiser)).await;
+    let bound = advertiser.bound_port().expect("advertiser binds");
+
+    let (client_runtime, discovery) = start_client(bound).await;
+    let server = discovered(&discovery).await;
+
+    assert_eq!(server.version(), Some(env!("CARGO_PKG_VERSION")));
+
+    client_runtime.shutdown().await.expect("the client stops");
+    server_runtime.shutdown().await.expect("the server stops");
+}

@@ -175,12 +175,14 @@ impl RunningClient {
             .await
             .expect("selects the shared queue");
         let submitter = Arc::new(RecordingSubmitter::default());
+        let server_tracker = Arc::new(shaprint_desktop::application::PrintJobTracker::new());
         let endpoint = Arc::new(IppsServer::new(
             server_port,
             Arc::new(ServerIdentity::generate().expect("creates a server identity")),
             server_channel,
             submitter.clone(),
             Arc::new(PrintFailures::new()),
+            server_tracker,
         ));
         // The shared helper advertises on an ephemeral discovery port, so this test never competes
         // for the machine's multicast DNS port.
@@ -216,10 +218,12 @@ impl RunningClient {
             .configure(&channel_value)
             .await
             .expect("configures the client Network Channel");
+        let proxy_tracker = Arc::new(shaprint_desktop::application::PrintJobTracker::new());
         let proxy = Arc::new(ClientProxyService::with_port(
             Arc::clone(&connections),
             client_channel,
             Arc::new(PrintFailures::new()),
+            proxy_tracker,
             proxy_port,
         ));
         let coordinator = Arc::new(RuntimeCoordinator::new(vec![proxy.clone()]));

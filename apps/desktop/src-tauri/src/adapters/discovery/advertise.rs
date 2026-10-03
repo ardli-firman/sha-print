@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 
 use crate::adapters::discovery::{
     send_to_all, wire, DISCOVERY_PORTS, MAX_DATAGRAM, MDNS_GROUP, NAME_PROPERTY, PATH_PROPERTY,
-    QUEUE_PROPERTY, READ_BACKOFF, RESOURCE_PATH,
+    QUEUE_PROPERTY, READ_BACKOFF, RESOURCE_PATH, VERSION_PROPERTY,
 };
 use crate::application::{Advertisement, ServerAdvertiser};
 use crate::domain::{AppError, PrinterName};
@@ -76,6 +76,10 @@ fn properties(label: &str, printers: &[PrinterName]) -> Vec<(String, String)> {
     let mut properties = vec![
         (PATH_PROPERTY.to_owned(), RESOURCE_PATH.to_owned()),
         (NAME_PROPERTY.to_owned(), label.to_owned()),
+        (
+            VERSION_PROPERTY.to_owned(),
+            env!("CARGO_PKG_VERSION").to_owned(),
+        ),
     ];
     properties.extend(
         printers
@@ -467,6 +471,7 @@ mod tests {
             vec![
                 ("rp".to_owned(), "ipp/print".to_owned()),
                 ("name".to_owned(), "DESKTOP-ABC".to_owned()),
+                ("v".to_owned(), env!("CARGO_PKG_VERSION").to_owned()),
                 ("queue".to_owned(), "Zebra".to_owned()),
                 ("queue".to_owned(), "HP LaserJet".to_owned()),
             ]
