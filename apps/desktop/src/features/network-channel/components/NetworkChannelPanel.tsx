@@ -91,6 +91,7 @@ export function NetworkChannelPanel({ settings }: NetworkChannelPanelProps) {
             <PasswordInput
               id="network-channel"
               name="network-channel"
+              visibilityLabel="Network Channel"
               autoComplete="new-password"
               placeholder="Enter the shared Network Channel"
               value={value}

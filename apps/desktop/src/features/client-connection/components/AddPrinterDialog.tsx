@@ -446,6 +446,7 @@ export function AddPrinterDialog({
             </label>
             <PasswordInput
               id="wizard-network-channel"
+              visibilityLabel="Network Channel"
               autoComplete="new-password"
               placeholder="Enter the shared Network Channel"
               value={channelInput}

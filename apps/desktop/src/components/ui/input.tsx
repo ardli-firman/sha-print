@@ -19,24 +19,44 @@ export function Input({ className, type, ...props }: InputProps) {
   );
 }
 
-export function PasswordInput({ className, ...props }: InputProps) {
+export type PasswordInputProps = Omit<InputProps, "type"> & {
+  visibilityLabel: string;
+};
+
+export function PasswordInput({
+  className,
+  disabled,
+  id,
+  visibilityLabel,
+  ...props
+}: PasswordInputProps) {
   const [show, setShow] = useState(false);
+  const actionLabel = `${show ? "Hide" : "Show"} ${visibilityLabel}`;
 
   return (
-    <div className="relative flex w-full items-center">
+    <div className="password-field relative flex w-full items-center">
       <Input
+        id={id}
         type={show ? "text" : "password"}
+        disabled={disabled}
         className={cn("pr-10", className)}
         {...props}
       />
       <button
         type="button"
-        tabIndex={-1}
+        data-slot="password-visibility-toggle"
+        className="password-visibility-toggle absolute right-1 flex size-7 items-center justify-center"
         onClick={() => setShow((prev) => !prev)}
-        className="absolute right-2 flex size-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
-        aria-label={show ? "Hide secret" : "Show secret"}
+        disabled={disabled}
+        aria-label={actionLabel}
+        aria-controls={id}
+        title={actionLabel}
       >
-        {show ? <EyeOff size={15} /> : <Eye size={15} />}
+        {show ? (
+          <EyeOff size={15} aria-hidden="true" />
+        ) : (
+          <Eye size={15} aria-hidden="true" />
+        )}
       </button>
     </div>
   );

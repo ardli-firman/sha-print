@@ -704,6 +704,21 @@ describe("server connection panel", () => {
 });
 
 describe("Network Channel panel", () => {
+  it("gives the visibility button a field-specific name and keyboard focus", async () => {
+    render(<App />);
+    navigateTo("Settings");
+
+    const panel = await screen.findByRole("region", { name: "Print authorization" });
+    const input = within(panel).getByLabelText("Network Channel") as HTMLInputElement;
+    const showButton = within(panel).getByRole("button", { name: "Show Network Channel" });
+
+    expect(input.type).toBe("password");
+    expect(showButton.tabIndex).toBe(0);
+    fireEvent.click(showButton);
+    expect(input.type).toBe("text");
+    expect(within(panel).getByRole("button", { name: "Hide Network Channel" })).toBeTruthy();
+  });
+
   it("saves a server channel without displaying the secret again", async () => {
     vi.mocked(networkChannel.configureNetworkChannel).mockResolvedValue(true);
     render(<App />);
