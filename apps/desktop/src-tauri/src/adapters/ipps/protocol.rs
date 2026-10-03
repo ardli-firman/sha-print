@@ -566,6 +566,8 @@ pub fn response(
                 "na_legal_8.5x14in",
                 "iso_a3_297x420mm",
                 "iso_a5_148x210mm",
+                "om_folio_210x330mm",
+                "na_foolscap_8.5x13in",
             ],
         );
         write_texts(
@@ -578,6 +580,8 @@ pub fn response(
                 "na_legal_8.5x14in",
                 "iso_a3_297x420mm",
                 "iso_a5_148x210mm",
+                "om_folio_210x330mm",
+                "na_foolscap_8.5x13in",
             ],
         );
         write_text(&mut out, tag::KEYWORD, "sides-default", "one-sided");
@@ -936,6 +940,8 @@ mod tests {
                 "na_legal_8.5x14in",
                 "iso_a3_297x420mm",
                 "iso_a5_148x210mm",
+                "om_folio_210x330mm",
+                "na_foolscap_8.5x13in",
             ]
         );
         let ready = texts(&attributes, "media-ready");

@@ -27,3 +27,13 @@ hand. A nearby server is a hint to review, never a trusted server.
 A native Windows print queue installed on a client computer that routes print jobs through ShaPrint's
 local client proxy to a server's shared printer.
 
+**Loaded media**:
+The physical paper size loaded in a shared printer's tray and configured on the server's printer queue.
+_Avoid_: physical paper, server default form, tray paper
+
+**Requested media**:
+The page size a client specifies for a print job, which may be smaller than the shared printer's loaded
+media.
+_Avoid_: client paper size, document paper size
+
+
