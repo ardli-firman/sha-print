@@ -209,6 +209,7 @@ describe("workspace navigation", () => {
 describe("runtime status panel", () => {
   it("shows the live state of the proxy and sharing services", async () => {
     const { container } = render(<App />);
+    navigateTo("Settings");
 
     await waitFor(() => expect(container.querySelector('[data-service="client-proxy"]')).not.toBeNull());
 
@@ -225,6 +226,7 @@ describe("runtime status panel", () => {
       return () => {};
     });
     const { container } = render(<App />);
+    navigateTo("Settings");
 
     await waitFor(() => expect(publish).toBeDefined());
     publish?.(runtimeWith("failed", "running"));
@@ -244,6 +246,7 @@ describe("runtime status panel", () => {
   it("renders the status returned by a service action", async () => {
     vi.mocked(ipc.startService).mockResolvedValue(runtimeWith("running", "running"));
     const { container } = render(<App />);
+    navigateTo("Settings");
 
     await waitFor(() => expect(container.querySelector('[data-service="server-sharing"]')).not.toBeNull());
     const sharing = serviceCard(container, "server-sharing");
@@ -260,6 +263,7 @@ describe("runtime status panel", () => {
       message: "select at least one printer to share before starting",
     });
     const { container } = render(<App />);
+    navigateTo("Settings");
 
     await waitFor(() => expect(container.querySelector('[data-service="client-proxy"]')).not.toBeNull());
     const proxy = serviceCard(container, "client-proxy");
@@ -278,6 +282,7 @@ describe("runtime status panel", () => {
     vi.mocked(ipc.listLocalPrinters).mockRejectedValue(new Error("ipc unavailable"));
     vi.mocked(ipc.getServerIdentity).mockRejectedValue(new Error("ipc unavailable"));
     render(<App />);
+    navigateTo("Settings");
 
     const hint = await screen.findByText(/runtime is not reachable/i);
     expect(hint).toBeTruthy();
@@ -290,6 +295,7 @@ describe("runtime status panel", () => {
       return () => {};
     });
     const { container } = render(<App />);
+    navigateTo("Settings");
 
     await waitFor(() => expect(publish).toBeDefined());
 

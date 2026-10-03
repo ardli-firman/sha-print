@@ -142,7 +142,6 @@ function App() {
         </header>
 
         <div className="workspace-content">
-          <RuntimeStatusPanel runtime={runtime} />
           <PrintFailuresPanel failures={failures} />
 
           <section className="page-stack" aria-label={pageContent.title}>
@@ -179,6 +178,7 @@ function App() {
               <>
                 <NetworkChannelPanel settings={networkChannel} />
                 <StartupPanel startup={startup} />
+                <RuntimeStatusPanel runtime={runtime} />
                 <LegacyImportPanel legacy={legacy} />
               </>
             ) : null}
