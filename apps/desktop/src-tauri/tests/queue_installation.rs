@@ -270,12 +270,7 @@ fn print_job(printer_uri: &str, document: &[u8]) -> Vec<u8> {
     text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
     text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
     text_attribute(&mut body, 0x45, "printer-uri", printer_uri);
-    text_attribute(
-        &mut body,
-        0x49,
-        "document-format",
-        "application/octet-stream",
-    );
+    text_attribute(&mut body, 0x49, "document-format", "image/pwg-raster");
     body.push(3);
     body.extend(document);
     body

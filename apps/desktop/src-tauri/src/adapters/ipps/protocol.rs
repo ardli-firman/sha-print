@@ -553,13 +553,7 @@ pub fn response(
             &mut out,
             tag::MIME_MEDIA_TYPE,
             "document-format-supported",
-            &[
-                "image/pwg-raster",
-                "application/oxps",
-                "application/pdf",
-                "application/PCLm",
-                "application/octet-stream",
-            ],
+            &["image/pwg-raster"],
         );
         write_text(&mut out, tag::KEYWORD, "media-default", "iso_a4_210x297mm");
         write_texts(
@@ -624,6 +618,12 @@ pub fn response(
             tag::KEYWORD,
             "pwg-raster-document-type-supported",
             &["sgray_8", "srgb_8"],
+        );
+        write_text(
+            &mut out,
+            tag::KEYWORD,
+            "pwg-raster-document-sheet-back",
+            "normal",
         );
         write_text(&mut out, tag::KEYWORD, "output-bin-default", "face-down");
         write_texts(

@@ -124,11 +124,7 @@ pub async fn answer_job(
     if let Some(document_format) = request.value("document-format") {
         if !matches!(
             document_format.to_ascii_lowercase().as_str(),
-            "application/octet-stream"
-                | "image/pwg-raster"
-                | "application/pdf"
-                | "application/pclm"
-                | "application/oxps"
+            "image/pwg-raster"
         ) {
             return response(request_id, version, Status::DocumentFormatNotSupported, &[]);
         }
@@ -406,13 +402,7 @@ mod tests {
 
         assert_eq!(
             values_of(&answer, b"document-format-supported"),
-            vec![
-                "image/pwg-raster",
-                "application/oxps",
-                "application/pdf",
-                "application/PCLm",
-                "application/octet-stream"
-            ]
+            vec!["image/pwg-raster"]
         );
     }
 

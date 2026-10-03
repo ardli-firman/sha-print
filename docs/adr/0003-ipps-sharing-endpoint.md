@@ -1,5 +1,7 @@
 # IPPS sharing endpoint and server identity
 
+The document-format and RAW spooler submission decisions below are replaced by ADR 0010.
+
 ---
 status: accepted
 ---

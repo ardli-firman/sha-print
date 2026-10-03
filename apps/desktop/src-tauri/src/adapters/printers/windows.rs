@@ -159,17 +159,49 @@ mod tests {
         }
     }
 
-    /// Submits one PCL page through the real Windows spooler adapter.
+    /// Renders one raster page through the installed driver, including USB inkjet queues.
     #[tokio::test]
-    #[ignore = "requires a Windows queue that accepts PCL; see the desktop README"]
-    async fn smoke_submits_a_print_ready_page_to_a_real_queue() {
+    #[ignore = "requires a real Windows printer queue; see the desktop README"]
+    async fn smoke_renders_a_raster_page_to_a_real_queue() {
         let queue = std::env::var("SHAPRINT_WINDOWS_SMOKE_PRINTER")
             .expect("set SHAPRINT_WINDOWS_SMOKE_PRINTER to an installed queue name");
         let printer = PrinterName::parse(&queue).expect("uses a valid installed queue name");
-        let mut document = b"\x1bE\x1b&l0O\x1b&l2A".to_vec();
-        document.extend_from_slice(b"ShaPrint Windows real-queue smoke test\r\n");
-        document.push(0x0c);
+        let mut document = b"RaS2".to_vec();
+        let mut header = vec![0u8; 1796];
+        // 1-inch black square, 1 inch from the top and left of an A4 sheet at 300 dpi.
+        for (offset, value) in [
+            (276, 300u32),
+            (280, 300),
+            (372, 2480),
+            (376, 3508),
+            (384, 8),
+            (388, 8),
+            (392, 2480),
+            (400, 18),
+            (420, 1),
+        ] {
+            header[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        document.extend(header);
+        for y in 0..3508 {
+            document.push(0); // one row
+            let mut x = 0usize;
+            while x < 2480 {
+                let black = (300..600).contains(&y) && (300..600).contains(&x);
+                let end = if (300..600).contains(&y) && x < 300 {
+                    300
+                } else if black {
+                    600
+                } else {
+                    2480
+                };
+                let count = (end - x).min(128);
+                document.extend([(count - 1) as u8, if black { 0 } else { 255 }]);
+                x += count;
+            }
+        }
         let settings = crate::application::PrintSettings {
+            media: Some("iso_a4_210x297mm".to_owned()),
             copies: Some(1),
             ..Default::default()
         };
@@ -178,7 +210,7 @@ mod tests {
         let job_id = WindowsPrintJobSubmitter
             .submit(&printer, job)
             .await
-            .expect("the real queue accepts the PCL smoke page");
+            .expect("the real queue accepts the rendered raster page");
 
         assert_ne!(job_id, 0);
     }
@@ -280,7 +312,7 @@ mod tests {
     }
 }
 
-/// Submits printer-ready `application/octet-stream` bytes as RAW to the selected Windows queue.
+/// Renders PWG Raster pages through the selected queue's installed Windows driver.
 #[derive(Debug, Default)]
 pub struct WindowsPrintJobSubmitter;
 
@@ -294,32 +326,14 @@ impl PrintJobSubmitter for WindowsPrintJobSubmitter {
     }
 }
 
-#[repr(C)]
-struct DocInfo1W {
-    document_name: *const u16,
-    output_file: *const u16,
-    data_type: *const u16,
-}
-
 #[link(name = "winspool")]
 unsafe extern "system" {
-    fn OpenPrinterW(
+    pub(super) fn OpenPrinterW(
         name: *const u16,
         printer: *mut *mut std::ffi::c_void,
         defaults: *const std::ffi::c_void,
     ) -> i32;
-    fn ClosePrinter(printer: *mut std::ffi::c_void) -> i32;
-    fn StartDocPrinterW(printer: *mut std::ffi::c_void, level: u32, info: *const u8) -> u32;
-    fn StartPagePrinter(printer: *mut std::ffi::c_void) -> i32;
-    fn WritePrinter(
-        printer: *mut std::ffi::c_void,
-        bytes: *const std::ffi::c_void,
-        count: u32,
-        written: *mut u32,
-    ) -> i32;
-    fn EndPagePrinter(printer: *mut std::ffi::c_void) -> i32;
-    fn EndDocPrinter(printer: *mut std::ffi::c_void) -> i32;
-    fn AbortPrinter(printer: *mut std::ffi::c_void) -> i32;
+    pub(super) fn ClosePrinter(printer: *mut std::ffi::c_void) -> i32;
     fn DocumentPropertiesW(
         window: *mut std::ffi::c_void,
         printer: *mut std::ffi::c_void,
@@ -330,128 +344,9 @@ unsafe extern "system" {
     ) -> i32;
 }
 
-#[repr(C)]
-struct PrinterDefaultsW {
-    p_datatype: *mut u16,
-    p_devmode: *mut u8,
-    desired_access: u32,
-}
+use super::windows_render::submit_windows_job;
 
-fn submit_windows_job(printer: &str, job: &PrintJob) -> Result<u32, AppError> {
-    use std::ptr;
-    let document = job.document();
-    if document.len() > u32::MAX as usize {
-        return Err(AppError::invalid_input(
-            "the print document is too large for the Windows spooler",
-        ));
-    }
-    let printer_wide: Vec<u16> = printer.encode_utf16().chain(std::iter::once(0)).collect();
-    let document_wide: Vec<u16> = "ShaPrint job"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut raw_wide: Vec<u16> = "RAW".encode_utf16().chain(std::iter::once(0)).collect();
-    let info = DocInfo1W {
-        document_name: document_wide.as_ptr(),
-        output_file: ptr::null(),
-        data_type: raw_wide.as_ptr(),
-    };
-
-    let mut query_handle = ptr::null_mut();
-    // SAFETY: pointers refer to NUL-terminated strings and writable handle storage.
-    let opened = unsafe { OpenPrinterW(printer_wide.as_ptr(), &mut query_handle, ptr::null()) };
-    if opened == 0 {
-        return Err(spooler_error("cannot open the selected Windows printer"));
-    }
-    let dev_mode = prepare_dev_mode(query_handle, printer_wide.as_ptr(), job.settings());
-    // SAFETY: query_handle was returned successfully by OpenPrinterW.
-    unsafe {
-        ClosePrinter(query_handle);
-    }
-    let mut dev_mode = dev_mode?;
-
-    let mut defaults = PrinterDefaultsW {
-        p_datatype: raw_wide.as_mut_ptr(),
-        p_devmode: match &mut dev_mode {
-            Some(dm) => dm.as_mut_ptr(),
-            None => ptr::null_mut(),
-        },
-        desired_access: 0x0000_0008, // PRINTER_ACCESS_USE
-    };
-
-    let mut handle = ptr::null_mut();
-    // SAFETY: pointers refer to valid NUL-terminated wide string and defaults.
-    let opened = unsafe {
-        OpenPrinterW(
-            printer_wide.as_ptr(),
-            &mut handle,
-            (&mut defaults as *mut PrinterDefaultsW).cast(),
-        )
-    };
-    if opened == 0 {
-        return Err(spooler_error("cannot open the selected Windows printer"));
-    }
-    let result = submit_open_printer(handle, &info, job);
-    // SAFETY: handle was returned successfully by OpenPrinterW.
-    unsafe {
-        ClosePrinter(handle);
-    }
-    result
-}
-
-fn submit_open_printer(
-    handle: *mut std::ffi::c_void,
-    info: &DocInfo1W,
-    job: &PrintJob,
-) -> Result<u32, AppError> {
-    // SAFETY: handle is an opened spooler handle; `info` and its strings stay alive during the call.
-    let job_id = unsafe { StartDocPrinterW(handle, 1, (info as *const DocInfo1W).cast()) };
-    if job_id == 0 {
-        return Err(spooler_error("cannot start a Windows printer job"));
-    }
-
-    let document = job.document();
-    let result = (|| {
-        // SAFETY: handle is a live printer handle.
-        if unsafe { StartPagePrinter(handle) } == 0 {
-            return Err(spooler_error("cannot start a Windows printer page"));
-        }
-        let mut written = 0u32;
-        // SAFETY: document bytes stay alive for the synchronous spooler call.
-        let wrote = unsafe {
-            WritePrinter(
-                handle,
-                document.as_ptr().cast(),
-                document.len() as u32,
-                &mut written,
-            )
-        };
-        if wrote == 0 || written as usize != document.len() {
-            return Err(spooler_error(
-                "Windows did not accept the complete print document",
-            ));
-        }
-        // SAFETY: page was started above.
-        if unsafe { EndPagePrinter(handle) } == 0 {
-            return Err(spooler_error("cannot finish the Windows printer page"));
-        }
-        Ok(())
-    })();
-    if let Err(error) = result {
-        // SAFETY: the job is still open; abort instead of submitting a partial document.
-        unsafe {
-            AbortPrinter(handle);
-        }
-        return Err(error);
-    }
-    // SAFETY: job was started above; all document writes succeeded.
-    if unsafe { EndDocPrinter(handle) } == 0 {
-        return Err(spooler_error("cannot finish the Windows printer job"));
-    }
-    Ok(job_id)
-}
-
-fn prepare_dev_mode(
+pub(super) fn prepare_dev_mode(
     handle: *mut std::ffi::c_void,
     printer_name: *const u16,
     settings: &crate::application::PrintSettings,
@@ -570,7 +465,7 @@ fn apply_settings_to_dev_mode(
     Ok(())
 }
 
-fn spooler_error(message: &str) -> AppError {
+pub(super) fn spooler_error(message: &str) -> AppError {
     let code = unsafe { GetLastError() };
     AppError::internal(format!("{message} (Windows error {code})"))
 }

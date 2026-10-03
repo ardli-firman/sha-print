@@ -24,7 +24,8 @@ application as the product path and lives beside the .NET projects while the tra
 - Server sharing: the user selects local Windows printer queues and starts or stops sharing
   explicitly. The IPPS endpoint answers `Get-Printers` and `Get-Printer-Attributes`, and accepts
   `Print-Job` only for a selected shared queue when the configured Network Channel matches.
-- Windows spooler submission preserves common media size, color, duplex, and copy settings. A fake
+- Windows submission decodes client PWG Raster pages and renders them through the installed local
+  printer driver, preserving common media size, color, duplex, and copy settings. A fake
   adapter exercises the real TLS/IPPS request path without printing during integration tests.
 - The server identity's SHA-256 fingerprint stays stable in app data. A client can manually enter a
   host or host:port, inspect the presented fingerprint without querying printers, explicitly approve
@@ -115,17 +116,20 @@ because a test machine usually cannot take port 5353 from whatever multicast DNS
 runs; the wire format, the query/answer exchange, the withdrawal, and the cache are the production
 ones.
 
-On Windows, two smoke tests are ignored by default because they need real spooler state. From
-`apps/desktop/src-tauri`, set a local PCL-capable queue and run:
+On Windows, smoke tests are ignored by default because they need real spooler state. From
+`apps/desktop/src-tauri`, set a local printer queue with its working manufacturer driver and run:
 
 ```powershell
 $env:SHAPRINT_WINDOWS_SMOKE_PRINTER = "Your local printer queue"
-cargo test --no-default-features --lib smoke_submits_a_print_ready_page_to_a_real_queue -- --ignored --nocapture
+cargo test --no-default-features --lib smoke_renders_a_raster_page_to_a_real_queue -- --ignored --nocapture
 ```
 
-Confirm the test passes and the printer produces the PCL smoke page. This covers the Windows spooler
-adapter; native app and physical-printer output still require a Windows machine with an installed
-PCL-capable printer.
+Confirm the test passes and the printer produces one A4 page with a 1-inch black square located
+1 inch from the top and left of the sheet. This uses the installed local driver and also works
+with USB inkjet queues such as Epson L3210. Compare a Windows Test Page printed directly through
+the original queue with one printed through the installed ShaPrint client queue; both must render
+normally, without raster headers or encoded data on extra pages. A successful spooler job alone
+does not prove correct physical output.
 
 For the native client queue, close any running ShaPrint instance (the test binds ports 8631 and 8632)
 and run it from an **elevated** prompt:
@@ -181,8 +185,14 @@ cross subnets, so the address field stays the path for a server on another netwo
 
 While server sharing runs, the endpoint listens on port 8631, answers IPP printer queries, and
 accepts `Print-Job` only when the request carries the configured Network Channel and targets a queue
-currently shared. It advertises and accepts only `application/octet-stream` printer-ready spool data;
-other document formats receive IPP `client-error-document-format-not-supported` without submission.
+currently shared. It advertises and accepts only `image/pwg-raster` in 8-bit sRGB or grayscale.
+The server decodes these pages and renders them through the selected queue's installed driver;
+PDF, OXPS, PCLm, and octet streams receive IPP `client-error-document-format-not-supported`
+without submission (ADR 0010). A client can print PDF or Word documents from its applications,
+because the native IPP driver converts those documents into the advertised raster format.
+After updating an older server, restart ShaPrint and manually remove and reinstall the ShaPrint
+client queue if Windows retained its previous document-format capabilities. Leave the original
+manufacturer queue installed on the server.
 The port is not 631: that belongs to Windows' own IPP service. Clients verify and explicitly approve
 the server certificate before querying printers; changed fingerprints block queries until explicit
 reapproval. Because the first connection from another computer has to pass the Windows firewall,

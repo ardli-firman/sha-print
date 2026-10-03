@@ -29,7 +29,7 @@ pub struct PrintSettings {
     pub orientation: Option<PrintOrientation>,
 }
 
-/// Printer-ready `application/octet-stream` bytes and requested settings for a shared queue.
+/// PWG Raster document and requested settings for a shared queue.
 pub struct PrintJob {
     body: Vec<u8>,
     document_start: usize,
@@ -37,7 +37,7 @@ pub struct PrintJob {
 }
 
 impl PrintJob {
-    /// Takes ownership of the IPP body after the endpoint validates its printer-ready document
+    /// Takes ownership of the IPP body after the endpoint validates its PWG Raster document
     /// format, retaining the document as a slice to avoid a second large allocation or copy.
     pub(crate) fn from_ipp_body(
         body: Vec<u8>,

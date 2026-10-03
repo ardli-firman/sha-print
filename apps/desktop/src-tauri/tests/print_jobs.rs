@@ -84,13 +84,7 @@ fn integer_attribute(body: &mut Vec<u8>, name: &str, value: i32) {
 }
 
 fn print_job(channel: Option<&str>, printer: &str, sides: &str, document: &[u8]) -> Vec<u8> {
-    print_job_with_format(
-        channel,
-        printer,
-        "application/octet-stream",
-        sides,
-        document,
-    )
+    print_job_with_format(channel, printer, "image/pwg-raster", sides, document)
 }
 
 fn print_job_with_format(
@@ -130,12 +124,7 @@ fn print_job_with_options(
     text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
     text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
     text_attribute(&mut body, 0x45, "printer-uri", printer);
-    text_attribute(
-        &mut body,
-        0x49,
-        "document-format",
-        "application/octet-stream",
-    );
+    text_attribute(&mut body, 0x49, "document-format", "image/pwg-raster");
     if let Some(channel) = channel {
         text_attribute(&mut body, 0x41, "network-channel", channel);
     }
@@ -170,6 +159,41 @@ fn validate_job(channel: Option<&str>, printer: &str) -> Vec<u8> {
     body.push(3);
     body
 }
+#[tokio::test]
+async fn formats_without_a_renderer_are_rejected_before_queue_submission() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    for format in [
+        "application/pdf",
+        "application/oxps",
+        "application/pclm",
+        "application/octet-stream",
+    ] {
+        let response = send(
+            &print_job_with_format(Some(&secret), OFFICE_PRINTER_URI, format, "one-sided", &[0]),
+            &shared,
+            &channel,
+            &submitter,
+        )
+        .await;
+        assert_eq!(
+            ipp_status(&response),
+            0x040A,
+            "unsupported format reached the RAW submission path: {format}"
+        );
+    }
+    assert!(submitter.0.lock().expect("reads submissions").is_empty());
+}
+
 #[tokio::test]
 async fn unsupported_document_format_is_rejected_before_queue_submission() {
     let shared = Shared(vec![
@@ -468,12 +492,7 @@ async fn landscape_orientation_and_legal_media_reach_the_printer_adapter_unchang
     text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
     text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
     text_attribute(&mut body, 0x45, "printer-uri", OFFICE_PRINTER_URI);
-    text_attribute(
-        &mut body,
-        0x49,
-        "document-format",
-        "application/octet-stream",
-    );
+    text_attribute(&mut body, 0x49, "document-format", "image/pwg-raster");
     text_attribute(&mut body, 0x41, "network-channel", &secret);
     body.push(0x02);
     text_attribute(&mut body, 0x44, "media", "na_legal_8.5x14in");

@@ -8,13 +8,14 @@ mod support;
 #[cfg(windows)]
 use std::process::Command;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use shaprint_desktop::adapters::ipps::{protocol, NetworkChannel};
+use shaprint_desktop::adapters::printers::raster::{decode_pwg, RasterPage};
 use shaprint_desktop::adapters::{
     client_connections::ClientConnections, client_queue_uri, ClientProxyService, IppsServer,
     ServerIdentity,
@@ -53,12 +54,22 @@ fn document_bytes() -> Vec<u8> {
 #[derive(Default)]
 struct FakeSubmitter {
     jobs: Mutex<Vec<(String, PrintJob)>>,
+    render: AtomicBool,
+    pages: Mutex<Vec<RasterPage>>,
     submitted: tokio::sync::Notify,
 }
 
 #[async_trait]
 impl PrintJobSubmitter for FakeSubmitter {
     async fn submit(&self, printer: &PrinterName, job: PrintJob) -> Result<u32, AppError> {
+        if self.render.load(Ordering::Relaxed) {
+            // Same decoder the real Windows adapter runs before invoking the installed driver.
+            let pages = decode_pwg(job.document())?;
+            self.pages
+                .lock()
+                .expect("records rendered pages")
+                .extend(pages);
+        }
         self.jobs
             .lock()
             .map_err(|_| AppError::internal("fake printer unavailable"))?
@@ -185,12 +196,7 @@ fn print_job(printer_uri: &str, document: &[u8]) -> Vec<u8> {
     text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
     text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
     text_attribute(&mut body, 0x45, "printer-uri", printer_uri);
-    text_attribute(
-        &mut body,
-        0x49,
-        "document-format",
-        "application/octet-stream",
-    );
+    text_attribute(&mut body, 0x49, "document-format", "image/pwg-raster");
     text_attribute(&mut body, 0x44, "media", "iso_a4_210x297mm");
     text_attribute(&mut body, 0x44, "print-color-mode", "color");
     text_attribute(&mut body, 0x44, "sides", "two-sided-long-edge");
@@ -313,6 +319,58 @@ async fn printer_attributes_keep_a_case_normalized_local_queue_uri() {
 }
 
 #[tokio::test]
+async fn client_raster_job_reaches_server_as_pixels_with_page_order_and_colors_preserved() {
+    let pair = RunningPair::start(true).await;
+    pair.submitter.render.store(true, Ordering::Relaxed);
+    let proxy_address = pair.proxy_address();
+    let uri = local_printer_uri(&proxy_address, &pair.server_address);
+    let mut document = b"RaS2".to_vec();
+    for colors in [3u32, 1] {
+        let mut header = vec![0; 1796];
+        for (offset, value) in [
+            (276, 300u32),
+            (280, 300),
+            (372, 2),
+            (376, 2),
+            (384, 8),
+            (388, colors * 8),
+            (392, 2 * colors),
+            (400, if colors == 3 { 19 } else { 18 }),
+            (420, colors),
+        ] {
+            header[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        document.extend(header);
+        if colors == 3 {
+            document.extend([1, 255, 255, 0, 0, 0, 0, 255]);
+        } else {
+            document.extend([1, 1, 64]);
+        }
+    }
+    let (http, response) = submit_to_local_queue(&proxy_address, &uri, &document).await;
+    assert_eq!((http, ipp_status(&response)), (200, 0));
+    {
+        let pages = pair.submitter.pages.lock().expect("reads rendered pages");
+        assert_eq!(pages.len(), 2);
+        assert_eq!(
+            (pages[0].width, pages[0].height, pages[0].dpi),
+            (2, 2, [300, 300])
+        );
+        assert_eq!(pages[0].pixels, [0, 0, 255, 0, 255, 0, 0, 0].repeat(2));
+        assert_eq!(pages[1].pixels, [64, 64, 64, 0].repeat(4));
+    }
+    // A truncated second page must not be accepted as a partially printable job.
+    document.pop();
+    let (_, response) = submit_to_local_queue(&proxy_address, &uri, &document).await;
+    assert_ne!(ipp_status(&response), 0);
+    assert_eq!(
+        pair.submitter.jobs.lock().expect("reads submissions").len(),
+        1
+    );
+    pair.stop().await;
+}
+
+#[tokio::test]
 async fn print_job_from_a_native_queue_reaches_the_selected_server_printer() {
     let pair = RunningPair::start(true).await;
     let proxy_address = pair.proxy_address();
@@ -354,12 +412,7 @@ async fn print_job_with_monochrome_simplex_and_custom_copies_reaches_server_prin
     text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
     text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
     text_attribute(&mut body, 0x45, "printer-uri", &uri);
-    text_attribute(
-        &mut body,
-        0x49,
-        "document-format",
-        "application/octet-stream",
-    );
+    text_attribute(&mut body, 0x49, "document-format", "image/pwg-raster");
     text_attribute(&mut body, 0x44, "media", "iso_a4_210x297mm");
     text_attribute(&mut body, 0x44, "print-color-mode", "monochrome");
     text_attribute(&mut body, 0x44, "sides", "one-sided");
