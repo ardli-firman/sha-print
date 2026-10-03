@@ -18,13 +18,28 @@ resolution; the printer's unprintable margins clip the sheet rather than shrinki
 Common job settings continue to use the queue's DEVMODE. This replaces the RAW submission and
 document-format portions of ADR 0003. It does not change IPPS authorization or certificate approval.
 
-An explicit standard media size replaces the queue's inherited custom paper length, width, and form
-name. The driver merges the updated public DEVMODE back into its private settings with
-`DocumentPropertiesW(DM_IN_BUFFER | DM_OUT_BUFFER)` before creating the drawing context. When
-the client omits job-level media or orientation, the first raster page supplies the known standard
-size and orientation from its physical dimensions. For example, an A4 page uses A4 even when the
-server queue defaults to an F4 form. The renderer uses the top of the sheet as its origin; any extra
-length of paper physically loaded in the printer belongs below the requested page. Application
+The server advertises and accepts `iso_a4_210x297mm`, `na_letter_8.5x11in`, `na_legal_8.5x14in`,
+`iso_a3_297x420mm`, `iso_a5_148x210mm`, `om_folio_210x330mm` (210×330 mm F4), and
+`na_foolscap_8.5x13in` (8.5×13 in / 215.9×330.2 mm Folio). When the client omits job-level media
+or orientation, the first raster page supplies the known standard size and orientation from its
+physical dimensions.
+
+When a shared printer's queue already has loaded media (either a custom form or a standard paper
+size) whose short and long dimensions are at least as large as the requested media (within a 0.5 mm
+rounding tolerance), the adapter preserves the queue's loaded media in `DEVMODE` rather than
+overwriting it with the smaller requested media. When a physical driver (such as an Epson L-series
+inkjet loaded with F4 paper) is told the paper is A4 (`210×297 mm`), its Portrait feed stops at
+297 mm and ejects the remaining ~33 mm at the bottom, whereas in Landscape its coordinate origin is
+anchored to the 297 mm width along the feed axis, leaving the ~33 mm blank margin at the trailing
+edge (the left side / start of the Landscape document) instead of the leading edge (the right side /
+end of the Landscape document). Preserving the larger loaded media keeps the driver's physical sheet
+coordinate system on the actual paper while `StretchDIBits` draws the requested page at 1:1 physical
+scale at the top-left origin (`-PHYSICALOFFSETX`, `-PHYSICALOFFSETY`). When the requested media does
+not fit within the queue's loaded media, or when the queue has no loaded media dimensions, the
+adapter selects the requested media (`DMPAPER_*` or explicit `dmPaperLength`/`dmPaperWidth` tenths of
+a millimeter for `om_folio_210x330mm`) and clears any smaller custom form. The driver merges the
+updated public `DEVMODE` back into its private settings with
+`DocumentPropertiesW(DM_IN_BUFFER | DM_OUT_BUFFER)` before creating the drawing context. Application
 margins remain part of the raster document.
 
 PDF, OXPS, PCLm, and opaque octet streams are rejected before submission because they have no

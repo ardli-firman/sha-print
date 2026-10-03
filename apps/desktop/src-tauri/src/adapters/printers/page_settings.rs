@@ -23,6 +23,8 @@ pub(super) fn settings_for_page(requested: &PrintSettings, page: &RasterPage) ->
             ("na_legal_8.5x14in", 215.9, 355.6),
             ("iso_a3_297x420mm", 297.0, 420.0),
             ("iso_a5_148x210mm", 148.0, 210.0),
+            ("om_folio_210x330mm", 210.0, 330.0),
+            ("na_foolscap_8.5x13in", 215.9, 330.2),
         ] {
             if (short_edge - width).abs() <= 0.5 && (long_edge - height).abs() <= 0.5 {
                 resolved.media = Some(media.to_owned());
@@ -106,5 +108,34 @@ mod tests {
         let resolved = settings_for_page(&PrintSettings::default(), &page);
         assert_eq!(resolved.media.as_deref(), Some("iso_a4_210x297mm"));
         assert_eq!(resolved.orientation, Some(PrintOrientation::Portrait));
+    }
+
+    #[test]
+    fn f4_and_folio_rasters_without_job_media_resolve_to_their_media_names() {
+        let f4_page = RasterPage {
+            width: 2480,
+            height: 3898,
+            dpi: [300, 300],
+            pixels: Vec::new(),
+        };
+        let resolved_f4 = settings_for_page(&PrintSettings::default(), &f4_page);
+        assert_eq!(resolved_f4.media.as_deref(), Some("om_folio_210x330mm"));
+        assert_eq!(resolved_f4.orientation, Some(PrintOrientation::Portrait));
+
+        let folio_page = RasterPage {
+            width: 3900,
+            height: 2550,
+            dpi: [300, 300],
+            pixels: Vec::new(),
+        };
+        let resolved_folio = settings_for_page(&PrintSettings::default(), &folio_page);
+        assert_eq!(
+            resolved_folio.media.as_deref(),
+            Some("na_foolscap_8.5x13in")
+        );
+        assert_eq!(
+            resolved_folio.orientation,
+            Some(PrintOrientation::Landscape)
+        );
     }
 }
