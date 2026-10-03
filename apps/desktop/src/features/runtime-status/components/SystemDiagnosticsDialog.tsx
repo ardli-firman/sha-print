@@ -1,4 +1,4 @@
-import { RefreshCw, Server, Wrench } from "lucide-react";
+import { RefreshCw, Server } from "lucide-react";
 
 import { printRecovery } from "@/api/availability";
 import type { ServiceId, ServiceState, ServiceStatus } from "@/api/types";
@@ -15,24 +15,24 @@ import type { RuntimeStatusController } from "../hooks/useRuntimeStatus";
 
 const SERVICE_LABELS: Record<ServiceId, { title: string; description: string }> = {
   "client-proxy": {
-    title: "Client Proxy",
-    description: "Accepts print jobs from Windows queues and tunnels them securely to the server.",
+    title: "Client proxy",
+    description: "Forwards print jobs from your installed queues to a trusted server.",
   },
   "server-sharing": {
-    title: "Server Sharing (IPPS)",
-    description: "Authenticates incoming print jobs via Network Channel and submits to local queues.",
+    title: "Server sharing",
+    description: "Shares the local printer queues you selected with other ShaPrint users.",
   },
   "server-discovery": {
-    title: "Server Discovery (mDNS)",
-    description: "Broadcasts and detects ShaPrint servers on the local subnet.",
+    title: "Server discovery",
+    description: "Finds ShaPrint servers on this network so you can review and connect to them.",
   },
 };
 
 const STATE_LABELS: Record<ServiceState, string> = {
   stopped: "Stopped",
-  starting: "Starting...",
+  starting: "Starting…",
   running: "Running",
-  stopping: "Stopping...",
+  stopping: "Stopping…",
   failed: "Failed",
 };
 
@@ -66,22 +66,23 @@ export function SystemDiagnosticsDialog({
   const { status, error, busy, unreachable, refresh, start, stop, dismissError } = runtime;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      ariaLabelledBy="diagnostics-title"
+      ariaDescribedBy="diagnostics-description"
+    >
       <DialogHeader>
-        <div className="flex items-center gap-2 text-primary font-semibold text-sm">
-          <Wrench size={18} />
-          <span>System Diagnostics</span>
-        </div>
-        <DialogTitle>Background Print Services</DialogTitle>
-        <DialogDescription>
-          ShaPrint automatically manages these services. You can inspect runtime health and
-          manually restart daemons here if network issues occur.
+        <DialogTitle id="diagnostics-title">Print service status</DialogTitle>
+        <DialogDescription id="diagnostics-description">
+          Check the client proxy and printer sharing here. The client proxy keeps installed queues
+          working; server sharing starts only when you turn it on.
         </DialogDescription>
       </DialogHeader>
 
       <div className="space-y-4 my-2">
         {error ? (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs flex items-center justify-between">
+          <div className="diagnostic-error" role="alert">
             <div>
               <span className="font-mono font-bold text-destructive mr-2">{error.code}</span>
               <span>{error.message}</span>
@@ -93,19 +94,19 @@ export function SystemDiagnosticsDialog({
         ) : null}
 
         {unreachable ? (
-          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-            <strong>Runtime Unreachable</strong>
+          <div className="runtime-unreachable" role="alert">
+            <strong>Runtime unavailable</strong>
             <p className="text-xs text-muted-foreground mt-1">
-              The ShaPrint desktop core is not responding. Please relaunch the application.
+              The ShaPrint runtime is not responding. Reopen the desktop app to reconnect.
             </p>
           </div>
         ) : null}
 
         {status === null && !unreachable ? (
-          <div className="py-8 text-center text-sm text-muted-foreground flex flex-col items-center gap-2">
-            <RefreshCw className="animate-spin size-5 text-primary" />
-            <span>Inspecting service statuses...</span>
-          </div>
+          <p className="diagnostic-loading" role="status">
+            <RefreshCw className="size-4 text-primary" aria-hidden="true" />
+            Checking print services…
+          </p>
         ) : null}
 
         {status ? (
@@ -117,37 +118,38 @@ export function SystemDiagnosticsDialog({
               const isBusy = busy === service.id;
 
               return (
-                <div
+                <section
                   key={service.id}
-                  className="rounded-lg border border-border bg-card p-3.5 shadow-2xs space-y-2.5"
+                  className="diagnostic-service service"
+                  data-service={service.id}
+                  data-state={service.state}
+                  aria-labelledby={`diagnostic-service-${service.id}`}
                 >
-                  <div className="flex items-start justify-between gap-3">
+                  <header className="service-header">
                     <div>
                       <div className="flex items-center gap-2">
-                        <Server size={15} className="text-muted-foreground" />
-                        <h4 className="font-semibold text-sm">{label?.title ?? service.id}</h4>
+                        <Server size={15} className="text-muted-foreground" aria-hidden="true" />
+                        <h4 id={`diagnostic-service-${service.id}`} className="font-semibold text-sm">
+                          {label?.title ?? service.id}
+                        </h4>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">{label?.description}</p>
+                      <p className="service-description">{label?.description}</p>
                     </div>
-                    <Badge variant={STATE_VARIANTS[service.state]}>
+                    <Badge variant={STATE_VARIANTS[service.state]} role="status">
                       {STATE_LABELS[service.state]}
                     </Badge>
-                  </div>
+                  </header>
 
-                  {service.detail ? (
-                    <div className="rounded bg-muted/60 px-2.5 py-1 text-[11px] font-mono text-muted-foreground break-all">
-                      {service.detail}
-                    </div>
-                  ) : null}
+                  {service.detail ? <p className="service-detail">{service.detail}</p> : null}
 
                   {recovery ? (
-                    <div className="rounded-md border border-warning/30 bg-warning/10 p-2 text-xs text-warning-foreground">
-                      <span className="font-bold block text-[11px]">Notice:</span>
+                    <p className="service-recovery" role="status">
+                      <span className="service-recovery-label">Printing affected</span>
                       {recovery}
-                    </div>
+                    </p>
                   ) : null}
 
-                  <div className="flex items-center justify-end gap-2 pt-1">
+                  <div className="service-actions">
                     <Button
                       size="sm"
                       variant="outline"
@@ -155,7 +157,9 @@ export function SystemDiagnosticsDialog({
                       disabled={isBusy || !controls.canStart}
                       onClick={() => void start(service.id)}
                     >
-                      {isBusy && service.state === "stopped" ? "Starting..." : "Start"}
+                      {service.state === "starting" || (isBusy && service.state === "stopped")
+                        ? "Starting…"
+                        : "Start"}
                     </Button>
                     <Button
                       size="sm"
@@ -164,10 +168,12 @@ export function SystemDiagnosticsDialog({
                       disabled={isBusy || !controls.canStop}
                       onClick={() => void stop(service.id)}
                     >
-                      {isBusy && service.state === "running" ? "Stopping..." : "Stop"}
+                      {service.state === "stopping" || (isBusy && service.state === "running")
+                        ? "Stopping…"
+                        : "Stop"}
                     </Button>
                   </div>
-                </div>
+                </section>
               );
             })}
           </div>

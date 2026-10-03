@@ -26,7 +26,7 @@ export function NetworkChannelPanel({ settings }: NetworkChannelPanelProps) {
   }
 
   return (
-    <section className="panel" aria-labelledby="network-channel-heading">
+    <section className="panel feature-panel network-channel-panel" aria-labelledby="network-channel-heading">
       <div className="panel-header flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -39,12 +39,12 @@ export function NetworkChannelPanel({ settings }: NetworkChannelPanelProps) {
               </h2>
               {configured !== null && (
                 <Badge variant={configured ? "success" : "warning"} className="text-[10px]">
-                  {configured ? "Active" : "Not Set"}
+                  {configured ? "Configured" : "Not set"}
                 </Badge>
               )}
             </div>
             <p className="hint text-xs mt-1 text-muted-foreground">
-              Shared secret authorizing print jobs across computers.
+              Used by the client and server to authorize print jobs.
             </p>
           </div>
         </div>
@@ -66,14 +66,23 @@ export function NetworkChannelPanel({ settings }: NetworkChannelPanelProps) {
         {configured === null
           ? "Checking Network Channel status…"
           : configured
-            ? "A Network Channel is configured. Enter a new value to replace it."
-            : "Configure a Network Channel before clients can submit print jobs."}
+            ? "Configured. Enter a new value to replace it; the saved value is never shown."
+            : "Set a Network Channel before clients can submit print jobs."}
       </p>
 
-      {error ? <p className="banner" role="alert">{error.message}</p> : null}
-      {saved ? <p className="hint text-xs text-emerald-600 dark:text-emerald-400 font-medium" role="status">Network Channel updated.</p> : null}
+      {error ? (
+        <p className="banner" role="alert">
+          <span className="banner-code">{error.code}</span>
+          <span className="banner-message">{error.message}</span>
+        </p>
+      ) : null}
+      {saved ? (
+        <p className="channel-saved" role="status">
+          Network Channel updated. The saved value has been cleared from this form.
+        </p>
+      ) : null}
 
-      <form onSubmit={(event) => void submit(event)} className="space-y-3 pt-1">
+      <form onSubmit={(event) => void submit(event)} className="network-channel-form space-y-3 pt-1">
         <div className="space-y-1.5">
           <label htmlFor="network-channel" className="text-xs font-semibold text-foreground block">
             Network Channel
@@ -83,7 +92,7 @@ export function NetworkChannelPanel({ settings }: NetworkChannelPanelProps) {
               id="network-channel"
               name="network-channel"
               autoComplete="new-password"
-              placeholder="Enter authorization secret..."
+              placeholder="Enter the shared Network Channel"
               value={value}
               onChange={(event) => setValue(event.currentTarget.value)}
               required
@@ -95,7 +104,7 @@ export function NetworkChannelPanel({ settings }: NetworkChannelPanelProps) {
               disabled={saving || value.trim().length === 0}
               className="text-xs h-9 px-4 shrink-0 font-medium"
             >
-              {saving ? "Saving…" : "Set Network Channel"}
+              {saving ? "Saving…" : "Save Network Channel"}
             </Button>
           </div>
         </div>

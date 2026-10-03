@@ -32,22 +32,18 @@ export function PrintFailuresPanel({ failures }: PrintFailuresPanelProps) {
 
   return (
     <Card
-      className={`panel print-problems-panel transition-all ${
-        hasProblem
-          ? "border-destructive/40 bg-destructive/5 shadow-xs p-4"
-          : "is-clear border-transparent bg-transparent py-1 px-1.5 shadow-none"
-      }`}
+      className={`panel feature-panel print-problems-panel ${hasProblem ? "has-problem" : "is-clear"}`}
       aria-labelledby="print-failures-heading"
     >
       <div className="panel-header flex items-center justify-between">
         <div className="flex items-center gap-2">
           {hasProblem ? (
             <div className="flex size-6 items-center justify-center rounded-full bg-destructive/10 text-destructive">
-              <AlertTriangle size={14} />
+              <AlertTriangle size={14} aria-hidden="true" />
             </div>
           ) : (
             <div className="flex size-4 items-center justify-center text-muted-foreground/60">
-              <CheckCircle size={13} />
+              <CheckCircle size={13} aria-hidden="true" />
             </div>
           )}
           <h2
@@ -97,8 +93,8 @@ export function PrintFailuresPanel({ failures }: PrintFailuresPanelProps) {
           <p className="failure-message text-sm text-foreground">{failure.message}</p>
 
           <div className="failure-recovery rounded-md bg-muted/60 p-2.5 text-xs text-foreground space-y-0.5 border border-border/60">
-            <strong className="text-primary font-semibold block text-[11px] uppercase tracking-wider">
-              Next step:
+            <strong className="text-primary font-semibold block text-xs">
+              Try this
             </strong>
             <p className="text-xs leading-relaxed">{failure.recovery}</p>
           </div>
@@ -110,8 +106,8 @@ export function PrintFailuresPanel({ failures }: PrintFailuresPanelProps) {
           </p>
         </article>
       ) : error ? null : (
-        <p className="hint text-xs text-muted-foreground">
-          No print problems reported. Jobs from installed queues print through the client proxy.
+        <p className="hint text-xs text-muted-foreground" role="status">
+          No recent print failures.
         </p>
       )}
     </Card>

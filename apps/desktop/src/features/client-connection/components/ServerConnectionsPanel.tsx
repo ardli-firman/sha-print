@@ -38,7 +38,7 @@ export function ServerConnectionsPanel({
   }
 
   return (
-    <section className="panel" aria-labelledby="client-connections-heading">
+    <section className="panel feature-panel server-address-panel" aria-labelledby="client-connections-heading">
       <div className="panel-header flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -46,18 +46,17 @@ export function ServerConnectionsPanel({
           </div>
           <div>
             <h2 id="client-connections-heading" className="text-base font-semibold leading-none">
-              Connect to a server
+              Add by address
             </h2>
             <p className="hint text-xs mt-1 text-muted-foreground">
-              Direct connection by IP address or hostname.
+              Use this for another subnet or when discovery finds nothing.
             </p>
           </div>
         </div>
       </div>
 
-      <p className="hint text-xs text-muted-foreground leading-relaxed">
-        Enter a server host or host:port (default port 8631). The first review reads its certificate
-        only; shared printers are not requested before you approve it.
+      <p className="hint connection-safety-note">
+        Enter a host or host:port. ShaPrint checks its fingerprint first; printers stay hidden until you approve it.
       </p>
 
       <form
@@ -105,19 +104,23 @@ export function ServerConnectionsPanel({
       ) : null}
 
       {review ? (
-        <div className="identity rounded-lg border border-border bg-card p-4 space-y-3" aria-live="polite">
+        <div
+          className="identity connection-review space-y-3"
+          data-trusted={review.trusted}
+          aria-live="polite"
+        >
           <div className="flex items-center justify-between">
             <p className="text-sm">
               <strong className="text-foreground">Server:</strong>{" "}
               <span className="font-mono text-muted-foreground">{review.address}</span>
             </p>
             <Badge variant={review.trusted ? "success" : "warning"}>
-              {review.trusted ? "Approved" : "Needs Review"}
+              {review.trusted ? "Approved" : "Review required"}
             </Badge>
           </div>
 
           {review.previous_fingerprint ? (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive space-y-1">
+            <div className="fingerprint-changed" role="alert">
               <div className="flex items-center gap-1.5 font-semibold">
                 <ShieldAlert size={14} />
                 <span>Previously approved fingerprint:</span>
@@ -198,7 +201,7 @@ export function ServerConnectionsPanel({
         <div aria-live="polite" className="space-y-3 pt-2">
           <div className="flex items-center gap-2">
             <Printer size={16} className="text-primary" />
-            <h3 className="text-sm font-semibold">Shared printers at {result.address}</h3>
+            <h3 className="text-sm font-semibold">Printers shared by {result.address}</h3>
           </div>
 
           {result.printers.length ? (
@@ -239,8 +242,8 @@ export function ServerConnectionsPanel({
 
       {installed ? (
         <p className="hint text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/20" role="status">
-          Installed <strong>{installed.queue_name}</strong>. It now appears in your Windows print
-          dialogs; start the client proxy before printing to {installed.printer_name}.
+          Installed <strong>{installed.queue_name}</strong>. It now appears in Windows print
+          dialogs. ShaPrint routes its jobs through the client proxy to {installed.printer_name}.
         </p>
       ) : null}
     </section>

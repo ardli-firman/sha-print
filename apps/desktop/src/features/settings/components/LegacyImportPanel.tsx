@@ -2,7 +2,6 @@ import { History, RefreshCw } from "lucide-react";
 
 import type { LegacyChannelOutcome } from "@/api/legacyImport";
 import type { LegacyImportController } from "../hooks/useLegacyImport";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 /** Short label for what happened to the previous app's Network Channel. */
@@ -26,18 +25,18 @@ export function LegacyImportPanel({ legacy }: LegacyImportPanelProps) {
   const { report, error, busy, checkAgain } = legacy;
 
   return (
-    <section className="panel" aria-labelledby="legacy-import-heading">
+    <section className="panel feature-panel legacy-import-panel" aria-labelledby="legacy-import-heading">
       <div className="panel-header flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <History size={16} />
+            <History size={16} aria-hidden="true" />
           </div>
           <div>
             <h2 id="legacy-import-heading" className="text-base font-semibold leading-none">
               Previous ShaPrint app
             </h2>
             <p className="hint text-xs mt-1 text-muted-foreground">
-              Migration status from the previous .NET ShaPrint installation.
+              What carried over from the earlier ShaPrint app.
             </p>
           </div>
         </div>
@@ -71,11 +70,13 @@ export function LegacyImportPanel({ legacy }: LegacyImportPanelProps) {
       ) : null}
 
       {report === null ? (
-        <p className="hint text-xs text-muted-foreground">Checking for settings from the previous ShaPrint app…</p>
+        <p className="hint text-xs text-muted-foreground" role="status">
+          Checking for settings from the previous ShaPrint app…
+        </p>
       ) : null}
 
       {report && !report.found ? (
-        <p className="hint text-xs text-muted-foreground">
+        <p className="hint text-xs text-muted-foreground" role="status">
           No settings from a previous ShaPrint app were found on this computer.
         </p>
       ) : null}
@@ -90,16 +91,14 @@ export function LegacyImportPanel({ legacy }: LegacyImportPanelProps) {
               <span className="channel-outcome-label font-semibold text-emerald-700 dark:text-emerald-400">
                 Network Channel: {CHANNEL_LABELS[report.channel] ?? report.channel}
               </span>
-              <Badge variant="success" className="text-[10px]">Migrated</Badge>
             </div>
             <p className="channel-outcome-note text-muted-foreground">{report.channel_note}</p>
           </div>
 
           {report.queues_need_reselection ? (
             <p className="reselect rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning-foreground" role="status" data-testid="reselect-queues">
-              <strong>Select your printers again.</strong> Choose the local queues to share in the
-              Shared printers panel, and install client queues again from this app. The previous
-              app&rsquo;s queue setup is not activated.
+              <strong>Select your printers again.</strong> Choose local queues on Share, and install
+              client queues again from Connect. The previous app&rsquo;s queue setup is not activated.
             </p>
           ) : null}
 

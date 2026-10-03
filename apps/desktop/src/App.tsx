@@ -36,15 +36,15 @@ type PageId = (typeof NAV_ITEMS)[number]["id"];
 const PAGE_CONTENT: Record<PageId, { title: string; description: string }> = {
   share: {
     title: "Share printers",
-    description: "Choose which local printer queues other ShaPrint users can print to.",
+    description: "Choose the printers this computer makes available over the network.",
   },
   connect: {
     title: "Connect to a server",
-    description: "Find a nearby server or enter its address, then review its identity before connecting.",
+    description: "Add a printer shared from another ShaPrint computer.",
   },
   settings: {
     title: "Settings",
-    description: "Manage print authorization, login startup, and settings from the previous app.",
+    description: "Set the Network Channel, startup behavior, and print services.",
   },
 };
 
@@ -69,6 +69,32 @@ function App() {
     runtime.status?.services.some((s) => s.state === "starting" || s.state === "stopping") ||
     runtime.busy !== null;
   const isUnreachable = runtime.unreachable;
+  const clientProxyState = runtime.status?.services.find((s) => s.id === "client-proxy")?.state;
+  const serverSharingState = runtime.status?.services.find((s) => s.id === "server-sharing")?.state;
+  const hasRunningPath = clientProxyState === "running" || serverSharingState === "running";
+  const statusLabel = isUnreachable
+    ? "Runtime unavailable"
+    : hasFailedService
+      ? "Service needs attention"
+      : isTransitioning
+        ? "Service changing"
+        : runtime.status === null
+          ? "Checking services"
+          : clientProxyState === "running" && serverSharingState === "running"
+            ? "Client + server ready"
+            : clientProxyState === "running"
+              ? "Client printing ready"
+              : serverSharingState === "running"
+                ? "Server sharing on"
+                : "Print paths stopped";
+  const statusTone =
+    isUnreachable || hasFailedService
+      ? "problem"
+      : isTransitioning || runtime.status === null
+        ? "busy"
+        : hasRunningPath
+          ? "ready"
+          : "idle";
 
   return (
     <div className="app-shell">
@@ -103,7 +129,7 @@ function App() {
 
         <div className="sidebar-note">
           <span className="sidebar-note-rule" aria-hidden="true" />
-          <p>Print from the Windows dialog. ShaPrint never opens your documents.</p>
+          <p>Print from the Windows dialog you already use.</p>
         </div>
       </aside>
 
@@ -119,26 +145,12 @@ function App() {
               type="button"
               onClick={() => setDiagnosticsOpen(true)}
               className="system-status-pill"
-              title="Open System Diagnostics"
+              data-tone={statusTone}
+              title="Open service diagnostics"
+              aria-label={`${statusLabel}. Open service diagnostics`}
             >
-              <span
-                className={`status-dot ${
-                  isUnreachable || hasFailedService
-                    ? "dot-failed"
-                    : isTransitioning
-                      ? "dot-busy"
-                      : "dot-ready"
-                }`}
-              />
-              <span className="status-label">
-                {isUnreachable
-                  ? "Runtime Offline"
-                  : hasFailedService
-                    ? "Service Degraded"
-                    : isTransitioning
-                      ? "Updating…"
-                      : "Services Active"}
-              </span>
+              <span className={`status-dot dot-${statusTone}`} aria-hidden="true" />
+              <span className="status-label">{statusLabel}</span>
               <Wrench size={13} className="status-icon" aria-hidden="true" />
             </button>
           </div>

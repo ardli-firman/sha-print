@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 import { Copy, Printer, RefreshCw, Search, ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
     sharing;
   const [copyMessage, setCopyMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const searchId = useId();
 
   const sharedCount = printers?.filter((printer) => printer.shared).length ?? 0;
   const changing = busy !== null || granting;
@@ -44,7 +45,11 @@ export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
   }
 
   return (
-    <Card className="panel sharing-panel" aria-labelledby="sharing-heading">
+    <Card
+      className="panel sharing-panel"
+      aria-labelledby="sharing-heading"
+      data-has-identity={identity ? "true" : "false"}
+    >
       <div className="panel-header flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -73,7 +78,7 @@ export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
       </div>
 
       {error ? (
-        <p className="banner" role="alert">
+        <p className="banner sharing-error" role="alert">
           <span className="banner-code">{error.code}</span>
           <span className="banner-message">{error.message}</span>
           <Button type="button" variant="ghost" size="sm" onClick={dismissError}>
@@ -82,70 +87,88 @@ export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
         </p>
       ) : null}
 
-      {printers === null ? <p className="hint text-xs text-muted-foreground">Reading the local printer queues…</p> : null}
-
-      {printers !== null && printers.length === 0 ? (
-        <div className="empty-state rounded-lg border border-dashed border-border/80 p-6 text-center text-xs">
-          <span className="empty-state-mark mx-auto mb-2 flex size-8 items-center justify-center rounded-lg bg-muted text-muted-foreground" aria-hidden="true">—</span>
-          <div>
-            <strong className="text-sm font-semibold text-foreground">No local printers found</strong>
-            <p className="hint mt-1 text-muted-foreground">Install a printer in Windows, then refresh this list.</p>
-          </div>
-        </div>
-      ) : null}
-
-      {printers !== null && printers.length > 0 ? (
-        <div className="space-y-3">
-          {printers.length > 5 && (
-            <div className="relative">
-              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Search printer queues..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 text-xs h-8"
-              />
-            </div>
-          )}
-
-          <div className="printer-list-heading flex items-center justify-between text-xs font-semibold text-muted-foreground border-b border-border/60 pb-1.5 px-1">
-            <span>Printer queue</span>
-            <span className="font-mono text-[11px] bg-muted px-2 py-0.5 rounded-full text-foreground">
-              {sharedCount} of {printers.length} shared
-            </span>
-          </div>
-
-          <ul className="printer-list divide-y divide-border/60">
-            {filteredPrinters.map((printer) => (
-              <li
-                key={printer.name}
-                className="printer flex items-center justify-between py-2 px-1 hover:bg-muted/30 rounded-md transition-colors"
-                data-printer={printer.name}
-                data-shared={printer.shared}
-              >
-                <div className="printer-choice flex items-center gap-3 select-none">
-                  <Checkbox
-                    aria-label={`Share ${printer.name}`}
-                    checked={printer.shared}
-                    disabled={changing}
-                    onCheckedChange={() => void toggle(printer.name)}
-                  />
-                  <span className="printer-name text-sm font-medium text-foreground">{printer.name}</span>
-                </div>
-                <Badge variant={printer.shared ? "success" : "muted"} className="text-xs">
-                  {printer.shared ? "Shared" : "Not shared"}
-                </Badge>
-              </li>
-            ))}
-          </ul>
-
-          <p className="sharing-count text-xs text-muted-foreground mt-1 px-1">
-            {sharedCount === 0
-              ? "Select at least one queue, then start server sharing."
-              : "Selected queues are available while server sharing is running."}
+      <div className="sharing-queue-area">
+        {printers === null ? (
+          <p className="hint text-xs text-muted-foreground" role="status">
+            Reading the local printer queues…
           </p>
-        </div>
-      ) : null}
+        ) : null}
+
+        {printers !== null && printers.length === 0 ? (
+          <div className="empty-state rounded-lg border border-dashed border-border/80 p-6 text-center text-xs">
+            <span className="empty-state-mark mx-auto mb-2 flex size-8 items-center justify-center rounded-lg bg-muted text-muted-foreground" aria-hidden="true">—</span>
+            <div>
+              <strong className="text-sm font-semibold text-foreground">No local printers found</strong>
+              <p className="hint mt-1 text-muted-foreground">Install a printer in Windows, then refresh this list.</p>
+            </div>
+          </div>
+        ) : null}
+
+        {printers !== null && printers.length > 0 ? (
+          <div className="sharing-printers space-y-3">
+            {printers.length > 5 && (
+              <div className="relative">
+                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <Input
+                  id={searchId}
+                  aria-label="Search printers"
+                  placeholder="Search printers"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8 text-xs h-8"
+                />
+              </div>
+            )}
+
+            <div className="printer-list-heading flex items-center justify-between text-xs font-semibold text-muted-foreground border-b border-border/60 pb-1.5 px-1">
+              <span>Printer queue</span>
+              <span className="font-mono text-[11px] bg-muted px-2 py-0.5 rounded-full text-foreground">
+                {sharedCount} of {printers.length} shared
+              </span>
+            </div>
+
+            {filteredPrinters.length > 0 ? (
+              <ul className="printer-list divide-y divide-border/60">
+                {filteredPrinters.map((printer, index) => {
+                  const printerId = `${searchId}-queue-${index}`;
+                  return (
+                    <li
+                      key={printer.name}
+                      className="printer flex items-center justify-between py-2 px-1 hover:bg-muted/30 rounded-md transition-colors"
+                      data-printer={printer.name}
+                      data-shared={printer.shared}
+                    >
+                      <div className="printer-choice flex items-center gap-3 select-none">
+                        <Checkbox
+                          id={printerId}
+                          aria-label={`Share ${printer.name}`}
+                          checked={printer.shared}
+                          disabled={changing}
+                          onCheckedChange={() => void toggle(printer.name)}
+                        />
+                        <span className="printer-name text-sm font-medium text-foreground">{printer.name}</span>
+                      </div>
+                      <Badge variant={printer.shared ? "success" : "muted"} className="text-xs">
+                        {printer.shared ? "Shared" : "Not shared"}
+                      </Badge>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="hint printer-filter-empty" role="status">
+                No printers match “{searchQuery}”.
+              </p>
+            )}
+
+            <p className="sharing-count text-xs text-muted-foreground mt-1 px-1">
+              {sharedCount === 0
+                ? "Select at least one queue, then start server sharing."
+                : "Selected queues are available while server sharing is running."}
+            </p>
+          </div>
+        ) : null}
+      </div>
 
       {identity ? (
         <div className="identity rounded-lg border border-border bg-card p-4 space-y-3 mt-2">

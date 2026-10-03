@@ -206,6 +206,58 @@ describe("workspace navigation", () => {
   });
 });
 
+describe("workspace service status", () => {
+  it("names the active client print path instead of implying every service is running", async () => {
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Client printing ready. Open service diagnostics",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("reports stopped print paths when neither service is running", async () => {
+    vi.mocked(ipc.getRuntimeStatus).mockResolvedValue(runtimeWith("stopped", "stopped"));
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Print paths stopped. Open service diagnostics",
+      }),
+    ).toBeTruthy();
+  });
+});
+
+describe("guided printer setup", () => {
+  it("shows the setup sequence and describes inspection as an identity review", async () => {
+    const review = {
+      address: "printer.example:8631",
+      current_fingerprint: IDENTITY.fingerprint,
+      previous_fingerprint: null,
+      trusted: false,
+    };
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
+    render(<App />);
+    navigateTo("Connect");
+    fireEvent.click(screen.getByRole("button", { name: "Guided setup" }));
+
+    expect(await screen.findByRole("dialog", { name: "Find a server" })).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Printer setup steps" })).toBeTruthy();
+    expect(screen.getByText("Server").closest("li")?.getAttribute("aria-current")).toBe("step");
+
+    fireEvent.change(screen.getByLabelText("Or enter a server address"), {
+      target: { value: "printer.example" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review identity" }));
+
+    expect(await screen.findByRole("heading", { name: "Check the server identity" })).toBeTruthy();
+    expect(screen.getByText("Identity").closest("li")?.getAttribute("aria-current")).toBe("step");
+    expect(screen.getByRole("button", { name: "Approve fingerprint" })).toBeTruthy();
+    expect(serverConnections.listServerConnectionPrinters).not.toHaveBeenCalled();
+  });
+});
+
 describe("runtime status panel", () => {
   it("shows the live state of the proxy and sharing services", async () => {
     const { container } = render(<App />);
@@ -355,7 +407,7 @@ describe("print problems panel", () => {
 
     const panel = await screen.findByRole("region", { name: "Print problems" });
     expect(await within(panel).findByRole("alert")).toBeTruthy();
-    expect(within(panel).queryByText(/No print problems reported/i)).toBeNull();
+    expect(within(panel).queryByText(/No recent print failures/i)).toBeNull();
   });
 
   it("dismisses a failure and returns to the calm state", async () => {
@@ -367,7 +419,7 @@ describe("print problems panel", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "Dismiss" }));
 
     await waitFor(() => expect(printFailures.dismissPrintFailure).toHaveBeenCalledTimes(1));
-    expect(await within(panel).findByText(/No print problems reported/i)).toBeTruthy();
+    expect(await within(panel).findByText(/No recent print failures/i)).toBeTruthy();
     expect(within(panel).queryByText(FAILURE.message)).toBeNull();
   });
 
@@ -375,7 +427,7 @@ describe("print problems panel", () => {
     render(<App />);
 
     const panel = await screen.findByRole("region", { name: "Print problems" });
-    expect(within(panel).getByText(/No print problems reported/i)).toBeTruthy();
+    expect(within(panel).getByText(/No recent print failures/i)).toBeTruthy();
     expect(within(panel).queryByRole("button", { name: "Dismiss" })).toBeNull();
   });
 });
@@ -392,6 +444,23 @@ describe("shared printers panel", () => {
     expect(printerRow(container, "Canon").dataset.shared).toBe("true");
     expect(within(printerRow(container, "Zebra")).getByText("Not shared")).toBeTruthy();
     expect(screen.getByText(/2 of 3 shared/)).toBeTruthy();
+  });
+
+  it("explains when a printer search has no matches", async () => {
+    vi.mocked(ipc.listLocalPrinters).mockResolvedValue({
+      printers: Array.from({ length: 6 }, (_, index) => ({
+        name: `Office printer ${index + 1}`,
+        shared: false,
+      })),
+    });
+    render(<App />);
+
+    const panel = await screen.findByRole("region", { name: "Local printers" });
+    fireEvent.change(within(panel).getByRole("textbox", { name: "Search printers" }), {
+      target: { value: "plotter" },
+    });
+
+    expect(await within(panel).findByText("No printers match “plotter”.")).toBeTruthy();
   });
 
   it("shares the queues the user selects", async () => {
@@ -643,9 +712,9 @@ describe("Network Channel panel", () => {
     const input = screen.getByLabelText("Network Channel") as HTMLInputElement;
     const value = `network-${Date.now()}-${Math.random()}`;
     fireEvent.change(input, { target: { value } });
-    fireEvent.click(screen.getByRole("button", { name: "Set Network Channel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Network Channel" }));
 
-    expect(await screen.findByText("Network Channel updated.")).toBeTruthy();
+    expect(await screen.findByText(/Network Channel updated\./)).toBeTruthy();
     expect(networkChannel.configureNetworkChannel).toHaveBeenCalledWith(value);
     expect(input.value).toBe("");
     expect(screen.queryByText(value)).toBeNull();
@@ -670,7 +739,7 @@ describe("nearby servers panel", () => {
     expect(within(panel).getByText("192.0.2.10:8631")).toBeTruthy();
     expect(within(panel).getByText(/Shares: Zebra/)).toBeTruthy();
 
-    fireEvent.click(within(panel).getByRole("button", { name: "Review certificate" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Review identity" }));
 
     // Reviewing a discovered server goes through the same inspection as a typed address, and the
     // address field shows what is being reviewed.
@@ -705,7 +774,7 @@ describe("nearby servers panel", () => {
 
     const panel = await screen.findByRole("region", { name: "Nearby servers" });
     expect(
-      await within(panel).findByText(/No ShaPrint server has advertised itself/i),
+      await within(panel).findByText(/Nothing found on this network/i),
     ).toBeTruthy();
     // The manual path is untouched by an empty discovery list.
     expect(screen.getByLabelText("Server address")).toBeTruthy();

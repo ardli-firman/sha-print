@@ -7,9 +7,17 @@ interface DialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: ReactNode;
+  ariaLabelledBy?: string;
+  ariaDescribedBy?: string;
 }
 
-export function Dialog({ open, onOpenChange, children }: DialogProps) {
+export function Dialog({
+  open,
+  onOpenChange,
+  children,
+  ariaLabelledBy,
+  ariaDescribedBy,
+}: DialogProps) {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape" && open) {
@@ -30,20 +38,22 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in-0"
+      className="dialog-backdrop fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/55 animate-in fade-in-0"
       onClick={() => onOpenChange(false)}
       role="dialog"
       aria-modal="true"
+      aria-labelledby={ariaLabelledBy}
+      aria-describedby={ariaDescribedBy}
     >
       <div
-        className="relative w-full max-w-lg rounded-xl border border-border bg-card p-6 text-card-foreground shadow-2xl duration-200 animate-in zoom-in-95 max-h-[90vh] overflow-y-auto"
+        className="dialog-surface relative w-full max-w-xl rounded-md border border-border bg-card p-6 text-card-foreground shadow-xl duration-200 animate-in zoom-in-95 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {children}
         <button
           type="button"
           onClick={() => onOpenChange(false)}
-          className="absolute right-4 top-4 rounded-sm p-1 text-muted-foreground opacity-70 transition-opacity hover:opacity-100 hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          className="dialog-close absolute right-4 top-4 rounded-sm p-1 text-muted-foreground opacity-70 transition-opacity hover:opacity-100 hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           aria-label="Close"
         >
           <X size={16} />
@@ -68,28 +78,32 @@ export function DialogHeader({
 }
 
 export function DialogTitle({
+  id,
   className,
   children,
 }: {
+  id?: string;
   className?: string;
   children: ReactNode;
 }) {
   return (
-    <h2 className={cn("text-lg font-semibold leading-none tracking-tight", className)}>
+    <h2 id={id} className={cn("text-lg font-semibold leading-none tracking-tight", className)}>
       {children}
     </h2>
   );
 }
 
 export function DialogDescription({
+  id,
   className,
   children,
 }: {
+  id?: string;
   className?: string;
   children: ReactNode;
 }) {
   return (
-    <p className={cn("text-sm text-muted-foreground mt-1.5 leading-relaxed", className)}>
+    <p id={id} className={cn("text-sm text-muted-foreground mt-1.5 leading-relaxed", className)}>
       {children}
     </p>
   );

@@ -23,7 +23,7 @@ export function NearbyServersPanel({
   const { servers, error, dismissError } = nearby;
 
   return (
-    <section className="panel" aria-labelledby="nearby-servers-heading">
+    <section className="panel feature-panel nearby-servers-panel" aria-labelledby="nearby-servers-heading">
       <div className="panel-header flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -34,7 +34,7 @@ export function NearbyServersPanel({
               Nearby servers
             </h2>
             <p className="hint text-xs mt-1 text-muted-foreground">
-              ShaPrint servers advertising themselves on this network.
+              Found on this local network.
             </p>
           </div>
         </div>
@@ -47,14 +47,13 @@ export function NearbyServersPanel({
             className="gap-1.5 text-xs font-semibold shadow-xs"
           >
             <Plus size={15} />
-            <span>Add Printer Wizard</span>
+            <span>Guided setup</span>
           </Button>
         )}
       </div>
 
-      <p className="hint text-xs text-muted-foreground leading-relaxed">
-        ShaPrint servers that advertise themselves on this network. Reviewing one shows its
-        certificate fingerprint; shared printers are not requested before you approve it.
+      <p className="hint discovery-scope">
+        Discovery only reaches this subnet. Enter a server address below to connect across networks.
       </p>
 
       {error ? (
@@ -74,15 +73,16 @@ export function NearbyServersPanel({
       ) : null}
 
       {servers.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border/80 p-5 text-center text-xs text-muted-foreground">
-          <p className="font-medium text-foreground">No servers found yet</p>
-          <p className="mt-1">
-            No ShaPrint server has advertised itself on this network yet. You can still connect by
-            entering a server address below.
-          </p>
+        <div className="connection-empty" role="status">
+          <strong>Nothing found on this network.</strong>
+          <p>Enter a server address below to continue. Manual entry works across subnets.</p>
         </div>
       ) : (
-        <ul className="nearby-list divide-y divide-border/60">
+        <ul
+          className="nearby-list divide-y divide-border/60"
+          aria-label="Nearby ShaPrint servers"
+          aria-live="polite"
+        >
           {servers.map((server) => (
             <li key={server.address} className="py-3 first:pt-1 last:pb-1">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -92,8 +92,8 @@ export function NearbyServersPanel({
                     <strong className="font-semibold text-sm text-foreground truncate">
                       {server.name}
                     </strong>
-                    <Badge variant="muted" className="text-[10px] font-mono px-1.5 py-0">
-                      {server.printers.length} shared
+                    <Badge variant="muted" className="text-[10px]">
+                      {server.printers.length} shared {server.printers.length === 1 ? "printer" : "printers"}
                     </Badge>
                   </div>
                   <p className="hint mt-1 text-xs text-muted-foreground">
@@ -122,7 +122,7 @@ export function NearbyServersPanel({
                       <span>Reviewing…</span>
                     </>
                   ) : (
-                    "Review certificate"
+                    "Review identity"
                   )}
                 </Button>
               </div>

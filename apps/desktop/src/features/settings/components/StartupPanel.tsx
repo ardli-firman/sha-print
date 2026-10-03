@@ -15,7 +15,7 @@ export function StartupPanel({ startup }: StartupPanelProps) {
   const { status, error, busy, setEnabled } = startup;
 
   return (
-    <section className="panel" aria-labelledby="startup-heading">
+    <section className="panel feature-panel startup-panel" aria-labelledby="startup-heading">
       <div className="panel-header flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -26,7 +26,7 @@ export function StartupPanel({ startup }: StartupPanelProps) {
               Startup
             </h2>
             <p className="hint text-xs mt-1 text-muted-foreground">
-              Run ShaPrint automatically on Windows sign-in.
+              Start ShaPrint when you sign in to Windows.
             </p>
           </div>
         </div>
@@ -39,7 +39,11 @@ export function StartupPanel({ startup }: StartupPanelProps) {
         </p>
       ) : null}
 
-      {status === null ? <p className="hint text-xs text-muted-foreground">Reading the login setting…</p> : null}
+      {status === null ? (
+        <p className="hint text-xs text-muted-foreground" role="status">
+          Checking the login setting…
+        </p>
+      ) : null}
 
       {status && !status.supported ? (
         <p className="hint text-xs text-muted-foreground">
@@ -63,18 +67,16 @@ export function StartupPanel({ startup }: StartupPanelProps) {
                 Start ShaPrint when I sign in to Windows
               </span>
               <span className="text-xs text-muted-foreground mt-0.5">
-                Keeps the client proxy active so your installed printer queues can always print.
+                Starts ShaPrint in the notification area so installed printer queues can keep using the client proxy.
               </span>
             </div>
           </label>
 
           {status.command ? (
-            <p className="startup-command text-xs text-muted-foreground">
-              Windows runs{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground break-all">
-                {status.command}
-              </code>
-            </p>
+            <details className="startup-details">
+              <summary>View Windows startup entry</summary>
+              <code className="startup-command">{status.command}</code>
+            </details>
           ) : (
             <p className="hint text-xs text-muted-foreground">
               ShaPrint cannot locate its program, so it cannot register itself to start at login.

@@ -14,11 +14,13 @@ export function RuntimeStatusPanel({ runtime }: RuntimeStatusPanelProps) {
   const { status, error, busy, unreachable, dismissError } = runtime;
 
   return (
-    <Card className="panel runtime-panel" aria-labelledby="services-heading">
+    <Card className="panel feature-panel runtime-panel" aria-labelledby="services-heading">
       <div className="panel-header">
         <div>
           <h2 id="services-heading">Print services</h2>
-          <p className="hint">Client proxy and server sharing can run independently.</p>
+          <p className="hint">
+            The client proxy carries your installed queues. Server sharing stays off until you start it.
+          </p>
         </div>
         <Button
           type="button"
@@ -43,13 +45,15 @@ export function RuntimeStatusPanel({ runtime }: RuntimeStatusPanelProps) {
       ) : null}
 
       {unreachable ? (
-        <p className="hint">
-          The ShaPrint runtime is not reachable from this window. Start the desktop app to see and
+        <p className="runtime-unreachable" role="alert">
+          The ShaPrint runtime is not reachable from this window. Reopen the desktop app to see and
           control its services.
         </p>
       ) : null}
 
-      {status === null && !unreachable ? <p className="hint">Reading service status…</p> : null}
+      {status === null && !unreachable ? (
+        <p className="hint" role="status">Reading service status…</p>
+      ) : null}
 
       {status ? (
         <ul className="service-list">

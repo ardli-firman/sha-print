@@ -5,8 +5,8 @@ import {
   Copy,
   KeyRound,
   Laptop,
-  Plus,
   Printer,
+  Radio,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
@@ -49,6 +49,8 @@ interface AddPrinterDialogProps {
 
 type WizardStep = "servers" | "verify" | "printers" | "channel" | "success";
 
+const WIZARD_STEPS = ["Server", "Identity", "Printer"] as const;
+
 export function AddPrinterDialog({
   open,
   onOpenChange,
@@ -65,6 +67,7 @@ export function AddPrinterDialog({
   const [copyStatus, setCopyStatus] = useState(false);
 
   const { review, result, installed, busy, error } = connections;
+  const currentStepIndex = step === "servers" ? 0 : step === "verify" ? 1 : 2;
 
   // Reset dialog state when opened
   useEffect(() => {
@@ -140,6 +143,7 @@ export function AddPrinterDialog({
 
     const saved = await networkChannel.save(channelInput);
     if (saved) {
+      setChannelInput("");
       await connections.install(selectedPrinter);
     }
   }
@@ -156,39 +160,63 @@ export function AddPrinterDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <div className="flex items-center gap-2 text-primary font-semibold text-xs tracking-wider uppercase">
-          <Plus size={14} />
-          <span>Add Remote Printer</span>
-        </div>
-        <DialogTitle>
-          {step === "servers" && "Find or Connect to a Server"}
-          {step === "verify" && "Verify Server Security Identity"}
-          {step === "printers" && "Choose a Shared Printer"}
-          {step === "channel" && "Set Network Channel"}
-          {step === "success" && "Printer Installed Successfully"}
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      ariaLabelledBy="add-printer-title"
+      ariaDescribedBy="add-printer-description"
+    >
+      <DialogHeader className="printer-wizard-header">
+        <DialogTitle id="add-printer-title">
+          {step === "servers" && "Find a server"}
+          {step === "verify" && "Check the server identity"}
+          {step === "printers" && "Choose a printer"}
+          {step === "channel" && "Set the Network Channel"}
+          {step === "success" && "Printer installed"}
         </DialogTitle>
-        <DialogDescription>
+        <DialogDescription id="add-printer-description">
           {step === "servers" &&
-            "Select a ShaPrint server detected on your local network, or enter an IP address directly."}
+            "Choose a nearby ShaPrint server or enter its address. Printers stay hidden until you approve its fingerprint."}
           {step === "verify" &&
-            "Confirm the server certificate fingerprint to establish a trusted, encrypted link."}
+            "Compare this fingerprint with the server owner before approving it. Approval lets ShaPrint list the shared printers."}
           {step === "printers" &&
-            `Select which printer from ${review?.address ?? "the server"} you want to install on your computer.`}
+            `Choose a printer shared by ${review?.address ?? "this server"}.`}
           {step === "channel" &&
-            "A shared Network Channel is required so the server recognizes your print requests."}
+            "This server requires a Network Channel to authorize print jobs. Use the same value configured on the server."}
           {step === "success" &&
-            "The Windows print queue has been created and is ready to accept print jobs."}
+            "The Windows printer queue is installed. Choose it from any Windows print dialog."}
         </DialogDescription>
       </DialogHeader>
 
+      <ol className="wizard-progress" aria-label="Printer setup steps">
+        {WIZARD_STEPS.map((label, index) => {
+          const complete = step === "success" || index < currentStepIndex;
+          const current = step !== "success" && index === currentStepIndex;
+          return (
+            <li
+              key={label}
+              className={`wizard-step${complete ? " is-complete" : ""}${current ? " is-current" : ""}`}
+              aria-current={current ? "step" : undefined}
+            >
+              <span className="wizard-step-marker" aria-hidden="true">
+                {complete ? <Check size={12} /> : index + 1}
+              </span>
+              <span>{label}</span>
+            </li>
+          );
+        })}
+      </ol>
+
       {error ? (
-        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs flex items-center justify-between text-destructive">
-          <div>
-            <span className="font-mono font-bold mr-2">{error.code}:</span>
-            <span>{error.message}</span>
-          </div>
+        <div className="wizard-error" role="alert">
+          <span className="banner-code">{error.code}</span>
+          <span>{error.message}</span>
+        </div>
+      ) : null}
+      {step === "channel" && networkChannel.error ? (
+        <div className="wizard-error" role="alert">
+          <span className="banner-code">{networkChannel.error.code}</span>
+          <span>{networkChannel.error.message}</span>
         </div>
       ) : null}
 
@@ -196,31 +224,27 @@ export function AddPrinterDialog({
       {step === "servers" && (
         <div className="space-y-4 my-2">
           <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                </span>
-                <span>Nearby Servers on Local Network</span>
+            <div className="wizard-section-heading">
+              <span className="wizard-section-title">
+                <Radio size={15} aria-hidden="true" />
+                Nearby servers
               </span>
-              <span>{nearby.servers.length} found</span>
+              <span className="wizard-server-count" role="status">
+                {nearby.servers.length} {nearby.servers.length === 1 ? "server" : "servers"} found
+              </span>
             </div>
 
             {nearby.servers.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
-                <Laptop className="mx-auto size-8 text-muted-foreground/50 mb-2" />
-                <p className="font-medium text-foreground">No servers detected yet</p>
-                <p className="mt-1">
-                  Ensure the server PC has ShaPrint open and printer sharing turned on.
-                </p>
+              <div className="connection-empty wizard-empty" role="status">
+                <strong>No servers found on this network.</strong>
+                <p>Enter a server address below. Discovery does not cross subnets.</p>
               </div>
             ) : (
               <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
                 {nearby.servers.map((server: NearbyServer) => (
                   <div
                     key={server.address}
-                    className="flex items-center justify-between p-3 rounded-lg border border-border bg-card hover:border-primary/50 hover:bg-accent/40 transition-colors"
+                    className="wizard-server-option"
                   >
                     <div className="min-w-0 pr-2">
                       <div className="flex items-center gap-2">
@@ -242,8 +266,8 @@ export function AddPrinterDialog({
                       disabled={busy !== null}
                     >
                       {busy === "inspect" && connections.address === server.address
-                        ? "Connecting..."
-                        : "Connect"}
+                        ? "Reviewing…"
+                        : "Review identity"}
                     </Button>
                   </div>
                 ))}
@@ -251,19 +275,21 @@ export function AddPrinterDialog({
             )}
           </div>
 
-          <div className="relative border-t border-border pt-4">
-            <span className="text-xs font-semibold text-muted-foreground block mb-2">
-              Or connect by IP address / Hostname:
-            </span>
+          <div className="manual-server-entry">
+            <label htmlFor="wizard-server-address" className="wizard-field-label">
+              Or enter a server address
+            </label>
             <form onSubmit={(e) => void handleManualSubmit(e)} className="flex gap-2">
               <Input
-                placeholder="e.g. 192.168.1.50:8631"
+                id="wizard-server-address"
+                placeholder="printer.local or 192.168.1.50:8631"
                 value={manualAddress}
                 onChange={(e) => setManualAddress(e.target.value)}
+                autoComplete="off"
                 disabled={busy !== null}
               />
               <Button type="submit" disabled={busy !== null || !manualAddress.trim()}>
-                {busy === "inspect" ? "Checking..." : "Connect"}
+                {busy === "inspect" ? "Reviewing…" : "Review identity"}
               </Button>
             </form>
           </div>
@@ -274,38 +300,38 @@ export function AddPrinterDialog({
       {step === "verify" && review && (
         <div className="space-y-4 my-2">
           {review.previous_fingerprint ? (
-            <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive flex gap-2">
-              <ShieldAlert size={18} className="shrink-0 mt-0.5" />
+            <div className="wizard-trust-warning" role="alert">
+              <ShieldAlert size={18} className="shrink-0" aria-hidden="true" />
               <div>
-                <strong>Warning: Server Identity Changed!</strong>
-                <p className="mt-0.5 text-muted-foreground">
-                  The security certificate presented by this server does not match the previously
-                  approved fingerprint. Verify this change with the server owner.
+                <strong>Server identity has changed.</strong>
+                <p>
+                  This fingerprint does not match the one you approved before. Verify the change
+                  with the server owner over a trusted channel before reapproving.
                 </p>
               </div>
             </div>
           ) : (
-            <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground flex gap-2">
-              <ShieldCheck size={18} className="shrink-0 text-primary mt-0.5" />
+            <div className="wizard-trust-note" role="status">
+              <ShieldCheck size={18} className="shrink-0 text-primary" aria-hidden="true" />
               <div>
-                <strong className="text-foreground">First-Time Connection</strong>
-                <p className="mt-0.5">
-                  ShaPrint encrypts all communications with TLS. Compare this fingerprint with the
-                  code shown on the server computer.
+                <strong>New server</strong>
+                <p>
+                  Compare this fingerprint with the code shown on the server computer. Printers
+                  remain hidden until you approve the match.
                 </p>
               </div>
             </div>
           )}
 
-          <div className="rounded-lg border border-border bg-card p-3 space-y-2">
+          <div className="wizard-fingerprint">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Server Address:</span>
+              <span>Server address</span>
               <span className="font-mono font-semibold text-foreground">{review.address}</span>
             </div>
 
             <div>
-              <span className="text-xs text-muted-foreground block mb-1">SHA-256 Fingerprint:</span>
-              <div className="rounded bg-muted/70 p-2.5 font-mono text-xs text-foreground tracking-wider break-all flex items-center justify-between gap-2">
+              <span className="wizard-field-label block mb-1">Server fingerprint (SHA-256)</span>
+              <div className="wizard-fingerprint-value">
                 <span>{chunkFingerprint(review.current_fingerprint)}</span>
                 <Button
                   size="sm"
@@ -314,7 +340,9 @@ export function AddPrinterDialog({
                   onClick={() => void handleCopyFingerprint()}
                 >
                   {copyStatus ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} />}
-                  <span className="text-[11px] ml-1">{copyStatus ? "Copied" : "Copy"}</span>
+                  <span className="text-[11px] ml-1" aria-live="polite">
+                    {copyStatus ? "Copied" : "Copy"}
+                  </span>
                 </Button>
               </div>
             </div>
@@ -336,7 +364,11 @@ export function AddPrinterDialog({
               onClick={() => void handleApproveAndContinue()}
               disabled={busy !== null}
             >
-              {busy === "approve" ? "Trusting..." : "Trust Server & Continue"}
+              {busy === "approve"
+                ? "Saving approval…"
+                : review.previous_fingerprint
+                  ? "Reapprove fingerprint"
+                  : "Approve fingerprint"}
             </Button>
           </div>
         </div>
@@ -345,36 +377,30 @@ export function AddPrinterDialog({
       {/* STEP 3: Choose Printer */}
       {step === "printers" && (
         <div className="space-y-4 my-2">
-          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2.5 text-xs text-emerald-700 dark:text-emerald-400 flex items-center justify-between">
-            <span className="flex items-center gap-1.5 font-medium">
-              <ShieldCheck size={15} />
-              <span>Connected to {connections.address}</span>
-            </span>
-            <Badge variant="success">Trusted</Badge>
+          <div className="wizard-approved-server" role="status">
+            <span>Approved server: {connections.address}</span>
+            <Badge variant="success">Fingerprint approved</Badge>
           </div>
 
           <div className="space-y-2">
-            <span className="text-xs font-semibold text-muted-foreground block">
-              Printers Available for Installation:
-            </span>
+            <h3 className="wizard-section-title">Shared printers</h3>
 
             {busy === "printers" ? (
-              <div className="py-8 text-center text-xs text-muted-foreground flex flex-col items-center gap-2">
-                <RefreshCw className="animate-spin size-4 text-primary" />
-                <span>Loading available queues...</span>
-              </div>
+              <p className="wizard-loading" role="status">
+                <RefreshCw className="size-4 text-primary" aria-hidden="true" />
+                Loading shared printers…
+              </p>
             ) : !result || result.printers.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
-                <Printer className="mx-auto size-7 text-muted-foreground/40 mb-1" />
-                <p className="font-semibold text-foreground">No printers shared</p>
-                <p className="mt-0.5">The server owner has not shared any local printer queues yet.</p>
+              <div className="connection-empty" role="status">
+                <strong>No printers shared yet.</strong>
+                <p>Ask the server owner to select local printer queues on their Share page.</p>
               </div>
             ) : (
               <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                 {result.printers.map((name: string) => (
                   <div
                     key={name}
-                    className="flex items-center justify-between p-3 rounded-lg border border-border bg-card hover:border-primary/40 transition-colors"
+                    className="wizard-printer-option"
                   >
                     <div className="flex items-center gap-2.5">
                       <Printer size={17} className="text-primary shrink-0" />
@@ -387,10 +413,10 @@ export function AddPrinterDialog({
                     </div>
                     <Button
                       size="sm"
-                      disabled={busy === "install"}
+                      disabled={busy !== null}
                       onClick={() => void handleInstallPrinter(name)}
                     >
-                      {busy === "install" && selectedPrinter === name ? "Installing..." : "Install"}
+                      {busy === "install" && selectedPrinter === name ? "Installing…" : "Install"}
                     </Button>
                   </div>
                 ))}
@@ -403,21 +429,25 @@ export function AddPrinterDialog({
       {/* STEP 4: Network Channel Prompt */}
       {step === "channel" && (
         <form onSubmit={(e) => void handleSaveChannelAndInstall(e)} className="space-y-4 my-2">
-          <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning-foreground flex gap-2">
-            <KeyRound size={18} className="shrink-0 text-warning mt-0.5" />
+          <div className="wizard-channel-note">
+            <KeyRound size={18} className="shrink-0 text-warning" aria-hidden="true" />
             <div>
-              <strong>Network Channel Required</strong>
-              <p className="mt-0.5 text-muted-foreground">
-                The Network Channel authorizes print jobs between ShaPrint computers. Enter the same
-                shared secret that is configured on the server.
+              <strong>Network Channel required</strong>
+              <p>
+                Enter the same value configured on the server. It authorizes print jobs between
+                these computers.
               </p>
             </div>
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-foreground">Network Channel Secret:</label>
+            <label htmlFor="wizard-network-channel" className="wizard-field-label">
+              Network Channel
+            </label>
             <PasswordInput
-              placeholder="Enter shared secret..."
+              id="wizard-network-channel"
+              autoComplete="new-password"
+              placeholder="Enter the shared Network Channel"
               value={channelInput}
               onChange={(e) => setChannelInput(e.target.value)}
               required
@@ -440,7 +470,7 @@ export function AddPrinterDialog({
               size="sm"
               disabled={networkChannel.saving || !channelInput.trim() || busy !== null}
             >
-              {networkChannel.saving ? "Saving..." : "Save & Install Printer"}
+              {networkChannel.saving ? "Saving…" : "Save Network Channel and install"}
             </Button>
           </div>
         </form>
@@ -448,37 +478,27 @@ export function AddPrinterDialog({
 
       {/* STEP 5: Success */}
       {step === "success" && installed && (
-        <div className="space-y-4 my-4 text-center">
-          <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-            <CheckCircle2 size={28} />
-          </div>
-
-          <div className="space-y-1">
-            <h3 className="font-semibold text-base text-foreground">
-              {installed.queue_name} is Ready!
-            </h3>
-            <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-              Your Windows print queue has been created and routes through ShaPrint. You can now select
-              this printer in any document or application.
-            </p>
-          </div>
-
-          <div className="rounded-lg border border-border bg-muted/40 p-3 text-left text-xs space-y-1.5 max-w-sm mx-auto">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Queue Name:</span>
-              <span className="font-semibold text-foreground">{installed.queue_name}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Server Printer:</span>
-              <span className="font-medium text-foreground">{installed.printer_name}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Server Address:</span>
-              <span className="font-mono text-foreground">{installed.server_address}</span>
+        <div className="wizard-success">
+          <div className="wizard-success-heading" role="status">
+            <CheckCircle2 size={22} aria-hidden="true" />
+            <div>
+              <h3>{installed.queue_name}</h3>
+              <p>Installed. Choose this printer from any Windows print dialog.</p>
             </div>
           </div>
 
-          <div className="pt-2 flex justify-center gap-2">
+          <dl className="wizard-install-details" aria-label="Installed printer details">
+            <div>
+              <dt>Shared printer</dt>
+              <dd>{installed.printer_name}</dd>
+            </div>
+            <div>
+              <dt>Server</dt>
+              <dd>{installed.server_address}</dd>
+            </div>
+          </dl>
+
+          <div className="wizard-success-actions">
             <Button
               variant="outline"
               size="sm"
@@ -486,7 +506,7 @@ export function AddPrinterDialog({
                 setStep("printers");
               }}
             >
-              Install Another Printer
+              Install another
             </Button>
             <Button size="sm" onClick={() => onOpenChange(false)}>
               Done

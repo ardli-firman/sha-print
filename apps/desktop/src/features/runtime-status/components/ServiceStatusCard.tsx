@@ -54,14 +54,25 @@ export interface ServiceStatusCardProps {
 /** One service with its live state and the controls that own its lifecycle. */
 export function ServiceStatusCard({ service, busy, onStart, onStop }: ServiceStatusCardProps) {
   const label = SERVICE_LABELS[service.id];
+  const serviceName = label?.title ?? service.id;
+  const headingId = `${service.id}-service-heading`;
   const controls = CONTROLS[service.state];
   const recovery = printRecovery(service);
+  const startLabel =
+    service.state === "starting" || (busy && service.state === "stopped") ? "Starting…" : "Start";
+  const stopLabel =
+    service.state === "stopping" || (busy && service.state === "running") ? "Stopping…" : "Stop";
 
   return (
-    <section className="service" data-service={service.id} data-state={service.state}>
+    <section
+      className="service"
+      data-service={service.id}
+      data-state={service.state}
+      aria-labelledby={headingId}
+    >
       <header className="service-header">
         <div>
-          <h3>{label?.title ?? service.id}</h3>
+          <h3 id={headingId}>{serviceName}</h3>
           {label ? <p className="service-description">{label.description}</p> : null}
         </div>
         <Badge className="service-state-badge" variant={STATE_VARIANTS[service.state]} role="status">
@@ -80,7 +91,7 @@ export function ServiceStatusCard({ service, busy, onStart, onStop }: ServiceSta
 
       <div className="service-actions">
         <Button type="button" size="sm" onClick={onStart} disabled={busy || !controls.canStart}>
-          Start
+          {startLabel}
         </Button>
         <Button
           type="button"
@@ -89,7 +100,7 @@ export function ServiceStatusCard({ service, busy, onStart, onStop }: ServiceSta
           onClick={onStop}
           disabled={busy || !controls.canStop}
         >
-          Stop
+          {stopLabel}
         </Button>
       </div>
     </section>
