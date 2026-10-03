@@ -4,7 +4,6 @@
 //! sharing endpoint, providing a drain guard that prevents update restarts or lifecycle interruptions
 //! from cutting off documents mid-transfer or while the Windows spooler is flushing data.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::time::Instant;
@@ -29,23 +28,23 @@ impl Drop for JobLease {
 
 #[derive(Debug)]
 struct TrackerState {
+    active_jobs: usize,
     last_completed_at: Option<Instant>,
     last_busy_at: Instant,
 }
 
 #[derive(Debug)]
 struct PrintJobTrackerInner {
-    active_jobs: AtomicUsize,
     state: RwLock<TrackerState>,
 }
 
 impl PrintJobTrackerInner {
     fn release(&self) {
-        let prev = self.active_jobs.fetch_sub(1, Ordering::SeqCst);
-        if prev == 1 {
-            // Last active job just completed or dropped
-            let now = Instant::now();
-            if let Ok(mut state) = self.state.write() {
+        if let Ok(mut state) = self.state.write() {
+            state.active_jobs = state.active_jobs.saturating_sub(1);
+            if state.active_jobs == 0 {
+                // Last active job just completed or dropped
+                let now = Instant::now();
                 state.last_completed_at = Some(now);
                 state.last_busy_at = now;
             }
@@ -70,8 +69,8 @@ impl PrintJobTracker {
         let now = Instant::now();
         Self {
             inner: Arc::new(PrintJobTrackerInner {
-                active_jobs: AtomicUsize::new(0),
                 state: RwLock::new(TrackerState {
+                    active_jobs: 0,
                     last_completed_at: None,
                     last_busy_at: now,
                 }),
@@ -81,13 +80,19 @@ impl PrintJobTracker {
 
     /// Number of active print jobs currently in flight.
     pub fn active_count(&self) -> usize {
-        self.inner.active_jobs.load(Ordering::SeqCst)
+        self.inner
+            .state
+            .read()
+            .map(|state| state.active_jobs)
+            .unwrap_or(0)
     }
 
     /// Acquires a lease for a newly arrived print job.
     /// The lease automatically decrements active jobs and updates completion timestamp on drop.
     pub fn acquire_job(&self) -> JobLease {
-        self.inner.active_jobs.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut state) = self.inner.state.write() {
+            state.active_jobs += 1;
+        }
         JobLease {
             tracker: Arc::clone(&self.inner),
         }
@@ -101,14 +106,16 @@ impl PrintJobTracker {
 
     /// Reports whether it is currently safe to restart given a custom cooldown duration.
     pub fn is_restart_safe_with_cooldown(&self, cooldown: Duration) -> bool {
-        if self.active_count() > 0 {
+        let state = match self.inner.state.read() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        if state.active_jobs > 0 {
             return false;
         }
-        if let Ok(state) = self.inner.state.read() {
-            if let Some(completed_at) = state.last_completed_at {
-                if completed_at.elapsed() < cooldown {
-                    return false;
-                }
+        if let Some(completed_at) = state.last_completed_at {
+            if completed_at.elapsed() < cooldown {
+                return false;
             }
         }
         true
@@ -121,14 +128,14 @@ impl PrintJobTracker {
 
     /// Reports whether the application has been continuously idle of print jobs for the specified duration.
     pub fn is_idle_for(&self, duration: Duration) -> bool {
-        if self.active_count() > 0 {
+        let state = match self.inner.state.read() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        if state.active_jobs > 0 {
             return false;
         }
-        if let Ok(state) = self.inner.state.read() {
-            state.last_busy_at.elapsed() >= duration
-        } else {
-            false
-        }
+        state.last_busy_at.elapsed() >= duration
     }
 }
 

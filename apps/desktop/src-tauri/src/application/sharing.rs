@@ -202,6 +202,11 @@ impl Sharing {
 
         if changed {
             let selection = SharedPrinters::new(updated_selection);
+            if selection.is_empty() {
+                if let Ok(mut enabled) = self.enabled.write() {
+                    *enabled = false;
+                }
+            }
             {
                 let mut current = self
                     .selection

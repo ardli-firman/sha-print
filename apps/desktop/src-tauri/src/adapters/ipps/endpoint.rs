@@ -108,24 +108,24 @@ pub async fn answer_job(
         );
     }
 
-    let active_job_guard = if operation == OPERATION_PRINT_JOB {
-        Some(tracker.acquire_job())
-    } else {
-        None
-    };
-
     let Some(candidate) = request.value("network-channel") else {
         return (
             response(request_id, version, Status::NotAuthorized, &[]),
-            active_job_guard,
+            None,
         );
     };
     if !channel.authorizes(candidate) {
         return (
             response(request_id, version, Status::NotAuthorized, &[]),
-            active_job_guard,
+            None,
         );
     }
+
+    let active_job_guard = if operation == OPERATION_PRINT_JOB {
+        Some(tracker.acquire_job())
+    } else {
+        None
+    };
     if !submitter.is_available() {
         // Reported only after authorization, so an anonymous caller cannot fill the server user's
         // screen with failures it has no way to act on.
