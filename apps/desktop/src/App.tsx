@@ -1,7 +1,7 @@
-import { Network, Printer, Settings2, ShieldAlert } from "lucide-react";
+import { Network, Printer, Settings2, ShieldAlert, Wrench } from "lucide-react";
 import { useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { AddPrinterDialog } from "@/components/AddPrinterDialog";
 import { LegacyImportPanel } from "@/components/LegacyImportPanel";
 import { NearbyServersPanel } from "@/components/NearbyServersPanel";
 import { NetworkChannelPanel } from "@/components/NetworkChannelPanel";
@@ -10,6 +10,8 @@ import { PrinterSharingPanel } from "@/components/PrinterSharingPanel";
 import { RuntimeStatusPanel } from "@/components/RuntimeStatusPanel";
 import { ServerConnectionsPanel } from "@/components/ServerConnectionsPanel";
 import { StartupPanel } from "@/components/StartupPanel";
+import { SystemDiagnosticsDialog } from "@/components/SystemDiagnosticsDialog";
+import { Button } from "@/components/ui/button";
 import { useLegacyImport } from "@/hooks/useLegacyImport";
 import { useNearbyServers } from "@/hooks/useNearbyServers";
 import { useNetworkChannel } from "@/hooks/useNetworkChannel";
@@ -45,6 +47,9 @@ const PAGE_CONTENT: Record<PageId, { title: string; description: string }> = {
 
 function App() {
   const [page, setPage] = useState<PageId>("share");
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [addPrinterOpen, setAddPrinterOpen] = useState(false);
+
   const runtime = useRuntimeStatus();
   const failures = usePrintFailures();
   const startup = useStartup();
@@ -54,6 +59,13 @@ function App() {
   const connections = useServerConnections();
   const nearby = useNearbyServers();
   const pageContent = PAGE_CONTENT[page];
+
+  const hasFailedService =
+    runtime.status?.services.some((s) => s.state === "failed") || runtime.error !== null;
+  const isTransitioning =
+    runtime.status?.services.some((s) => s.state === "starting" || s.state === "stopping") ||
+    runtime.busy !== null;
+  const isUnreachable = runtime.unreachable;
 
   return (
     <div className="app-shell">
@@ -98,6 +110,35 @@ function App() {
             <h1>{pageContent.title}</h1>
             <p className="page-description">{pageContent.description}</p>
           </div>
+
+          <div className="workspace-header-actions">
+            <button
+              type="button"
+              onClick={() => setDiagnosticsOpen(true)}
+              className="system-status-pill"
+              title="Open System Diagnostics"
+            >
+              <span
+                className={`status-dot ${
+                  isUnreachable || hasFailedService
+                    ? "dot-failed"
+                    : isTransitioning
+                      ? "dot-busy"
+                      : "dot-ready"
+                }`}
+              />
+              <span className="status-label">
+                {isUnreachable
+                  ? "Runtime Offline"
+                  : hasFailedService
+                    ? "Service Degraded"
+                    : isTransitioning
+                      ? "Updating…"
+                      : "Services Active"}
+              </span>
+              <Wrench size={13} className="status-icon" aria-hidden="true" />
+            </button>
+          </div>
         </header>
 
         <div className="workspace-content">
@@ -125,7 +166,11 @@ function App() {
 
             {page === "connect" ? (
               <>
-                <NearbyServersPanel nearby={nearby} connections={connections} />
+                <NearbyServersPanel
+                  nearby={nearby}
+                  connections={connections}
+                  onOpenWizard={() => setAddPrinterOpen(true)}
+                />
                 <ServerConnectionsPanel connections={connections} />
               </>
             ) : null}
@@ -144,6 +189,27 @@ function App() {
           Documents stay on your devices. ShaPrint never displays or logs print-job content.
         </footer>
       </main>
+
+      {/* Wizard and Diagnostics Dialogs */}
+      <AddPrinterDialog
+        open={addPrinterOpen}
+        onOpenChange={setAddPrinterOpen}
+        nearby={nearby}
+        connections={connections}
+        networkChannel={networkChannel}
+        onEnsureProxyRunning={() => {
+          const proxy = runtime.status?.services.find((s) => s.id === "client-proxy");
+          if (proxy && proxy.state !== "running") {
+            void runtime.start("client-proxy");
+          }
+        }}
+      />
+
+      <SystemDiagnosticsDialog
+        open={diagnosticsOpen}
+        onOpenChange={setDiagnosticsOpen}
+        runtime={runtime}
+      />
     </div>
   );
 }

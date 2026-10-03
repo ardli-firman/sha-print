@@ -5,6 +5,7 @@ import { defineConfig } from "vitest/config";
 
 // Unit tests run against jsdom; the shell itself is loaded by Tauri, so tests mock the IPC module.
 export default defineConfig({
+  mode: "development",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -13,6 +14,9 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    env: {
+      NODE_ENV: "development",
+    },
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     restoreMocks: true,
   },

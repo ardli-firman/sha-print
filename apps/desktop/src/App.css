@@ -297,11 +297,81 @@
 .workspace-header {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 1rem;
-  padding: 1.65rem 2.25rem 1.35rem;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.5rem 2.25rem 1.25rem;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--card) 78%, var(--background));
+}
+
+.workspace-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.system-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 150ms ease;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+
+.system-status-pill:hover {
+  border-color: var(--primary);
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.status-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.dot-ready {
+  background-color: #10b981;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #10b981 25%, transparent);
+}
+
+.dot-busy {
+  background-color: #f59e0b;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #f59e0b 25%, transparent);
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.dot-failed {
+  background-color: #ef4444;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #ef4444 25%, transparent);
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.status-label {
+  line-height: 1;
+}
+
+.status-icon {
+  opacity: 0.7;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: .5;
+  }
 }
 
 .page-heading {
@@ -986,8 +1056,16 @@
   }
 
   .workspace-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.85rem;
     padding-top: 1.15rem;
     padding-bottom: 1rem;
+  }
+
+  .workspace-header-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .workspace-content {

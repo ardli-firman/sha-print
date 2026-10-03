@@ -22,3 +22,8 @@ A shared secret configured by ShaPrint installations to authorize print jobs bet
 **Nearby server**:
 A server a client has seen advertise itself on the local network, as opposed to an address entered by
 hand. A nearby server is a hint to review, never a trusted server.
+
+**Client queue**:
+A native Windows print queue installed on a client computer that routes print jobs through ShaPrint's
+local client proxy to a server's shared printer.
+
