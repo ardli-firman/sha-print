@@ -106,7 +106,7 @@ impl UpdateInstaller for PluginUpdateInstaller {
         let Some(installer_data) = package.installer_data else {
             return Err("The downloaded update was unavailable.".into());
         };
-        let (update, bytes) = installer_data
+        let (update, bytes) = *installer_data
             .downcast::<(Update, Vec<u8>)>()
             .map_err(|_| "The downloaded update was invalid.".to_owned())?;
         update
@@ -204,7 +204,7 @@ pub fn forward_status(app: AppHandle, updates: Arc<UpdateCoordinator>) {
     let mut changed = updates.subscribe();
     tauri::async_runtime::spawn(async move {
         while changed.changed().await.is_ok() {
-            let payload = UpdateStatusDto::from(&changed.borrow_and_update());
+            let payload = UpdateStatusDto::from(&*changed.borrow_and_update());
             if let Some(action) = app.try_state::<crate::UpdateTrayAction>() {
                 let ready = matches!(&payload.update, UpdateStateDto::ReadyToRestart { .. });
                 let label = match &payload.update {

@@ -518,8 +518,7 @@ fn start_update_workers(
                         manager.coordinator.fail(
                             "ShaPrint could not stop its print services cleanly. No update was installed.".to_owned(),
                         );
-                        restore_services_after_failed_update(runtime.as_ref(), sharing.as_ref())
-                            .await;
+                        restore_services_after_failed_update(Some(runtime), sharing.as_ref()).await;
                         continue;
                     }
                 }
