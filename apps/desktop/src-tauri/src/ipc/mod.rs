@@ -6,3 +6,4 @@ pub mod discovery;
 pub mod dto;
 pub mod emitter;
 pub mod server_settings;
+pub mod updates;

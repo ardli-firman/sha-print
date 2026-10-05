@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -10,6 +10,8 @@ import * as networkChannel from "./api/networkChannel";
 import * as printFailures from "./api/printFailures";
 import * as serverConnections from "./api/serverConnections";
 import * as startupApi from "./api/startup";
+import * as updatesApi from "./api/updates";
+import type { UpdateStatus } from "./api/updates";
 import type {
   LocalPrinters,
   NearbyServers,
@@ -17,6 +19,13 @@ import type {
   RuntimeStatus,
   ServerIdentity,
 } from "./api/types";
+
+vi.mock("./api/updates", () => ({
+  getUpdateStatus: vi.fn(),
+  checkForUpdates: vi.fn(),
+  applyUpdateAndRestart: vi.fn(),
+  onUpdateStatus: vi.fn(),
+}));
 
 vi.mock("./api/ipc", () => ({
   RUNTIME_STATUS_EVENT: "runtime://status",
@@ -132,6 +141,22 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(ipc.onRuntimeStatus).mockResolvedValue(() => {});
+  vi.mocked(updatesApi.getUpdateStatus).mockResolvedValue({
+    current_version: "3.1.1",
+    update: { state: "idle" },
+    waiting_for_jobs: false,
+  });
+  vi.mocked(updatesApi.onUpdateStatus).mockResolvedValue(() => {});
+  vi.mocked(updatesApi.checkForUpdates).mockResolvedValue({
+    current_version: "3.1.1",
+    update: { state: "idle" },
+    waiting_for_jobs: false,
+  });
+  vi.mocked(updatesApi.applyUpdateAndRestart).mockResolvedValue({
+    current_version: "3.1.1",
+    update: { state: "ready_to_restart", version: "3.2.0", restart_requested: true },
+    waiting_for_jobs: false,
+  });
   vi.mocked(ipc.getRuntimeStatus).mockResolvedValue(runtimeWith("running", "stopped"));
   vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith());
   vi.mocked(ipc.getServerIdentity).mockResolvedValue(IDENTITY);
@@ -186,6 +211,64 @@ const FAILURE: PrintFailure = {
     "Check that the printer is switched on and reachable from this computer, then print again.",
   observed_at_ms: Date.UTC(2026, 0, 2, 3, 4, 5),
 };
+
+describe("updater", () => {
+  it("shows a ready update banner and queues restart while jobs drain", async () => {
+    let publish: ((status: UpdateStatus) => void) | undefined;
+    vi.mocked(updatesApi.onUpdateStatus).mockImplementation(async (handler) => {
+      publish = handler;
+      return () => {};
+    });
+    render(<App />);
+    await waitFor(() => expect(publish).toBeDefined());
+
+    publish?.({
+      current_version: "3.1.1",
+      update: { state: "ready_to_restart", version: "3.2.0", restart_requested: false },
+      waiting_for_jobs: true,
+    });
+
+    expect(await screen.findByText("ShaPrint 3.2.0 is ready")).toBeTruthy();
+    expect(screen.getByText(/restart is queued.*printing and spooler cleanup finish/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Restart queued" }));
+    await waitFor(() => expect(updatesApi.applyUpdateAndRestart).toHaveBeenCalledTimes(1));
+  });
+
+  it("reports manual update-check failures in plain language", async () => {
+    vi.mocked(updatesApi.checkForUpdates).mockRejectedValue({
+      message: "GitHub Releases could not be reached. Check your internet connection and try again.",
+    });
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for Updates" }));
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(/GitHub Releases could not be reached/);
+  });
+
+  it("clears a previous update error when a later status event succeeds", async () => {
+    let publish: ((status: UpdateStatus) => void) | undefined;
+    vi.mocked(updatesApi.onUpdateStatus).mockImplementation(async (handler) => {
+      publish = handler;
+      return () => {};
+    });
+    render(<App />);
+    await waitFor(() => expect(publish).toBeDefined());
+
+    await act(async () => publish?.({
+      current_version: "3.1.1",
+      update: { state: "failed", message: "Check failed." },
+      waiting_for_jobs: false,
+    }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Check failed.");
+
+    await act(async () => publish?.({
+      current_version: "3.1.1",
+      update: { state: "idle" },
+      waiting_for_jobs: false,
+    }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+});
 
 describe("workspace navigation", () => {
   it("starts on Share and keeps Connect and Settings workflows in their own sections", async () => {
@@ -803,13 +886,13 @@ describe("nearby servers panel", () => {
           name: "DESKTOP-MATCH",
           address: "192.0.2.10:8631",
           printers: ["Zebra"],
-          version: "3.0.0",
+          version: "3.1.1",
         },
         {
           name: "DESKTOP-NEWER",
           address: "192.0.2.11:8631",
           printers: ["Canon"],
-          version: "3.1.0",
+          version: "3.2.0",
         },
         {
           name: "DESKTOP-LEGACY",
@@ -834,14 +917,14 @@ describe("nearby servers panel", () => {
 
     // Matching version server displays version badge without drift badge
     expect(await within(panel).findByText("DESKTOP-MATCH")).toBeTruthy();
-    expect(within(panel).getByText("v3.0.0")).toBeTruthy();
+    expect(within(panel).getByText("v3.1.1")).toBeTruthy();
 
     // Legacy server displays without version badge or drift badge
     expect(await within(panel).findByText("DESKTOP-LEGACY")).toBeTruthy();
 
     // Newer server displays version badge AND version-drift advisory badge
     expect(await within(panel).findByText("DESKTOP-NEWER")).toBeTruthy();
-    expect(within(panel).getByText("v3.1.0")).toBeTruthy();
+    expect(within(panel).getByText("v3.2.0")).toBeTruthy();
     const driftBadge = within(panel).getByText(/Newer server release/);
     expect(driftBadge).toBeTruthy();
 

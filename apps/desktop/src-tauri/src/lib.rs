@@ -254,6 +254,14 @@ struct ShellLifecycle {
     tray_ready: bool,
 }
 
+#[cfg(feature = "desktop")]
+#[derive(Clone)]
+pub(crate) struct UpdateTrayAction {
+    pub(crate) item: tauri::menu::MenuItem<tauri::Wry>,
+    pub(crate) menu: tauri::menu::Menu<tauri::Wry>,
+    pub(crate) inserted: Arc<std::sync::Mutex<bool>>,
+}
+
 /// Runs the desktop app until the user quits it.
 ///
 /// `background` is set by a login launch: the proxy and discovery come up, the tray icon appears,
@@ -294,6 +302,9 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ipc::server_settings::get_network_channel_status,
             ipc::discovery::list_nearby_servers,
             ipc::commands::get_drain_status,
+            ipc::updates::get_update_status,
+            ipc::updates::check_for_updates,
+            ipc::updates::apply_update_and_restart,
         ])
         .setup(move |app| {
             use tauri::Manager;
@@ -320,7 +331,16 @@ pub fn run(background: bool) -> Result<(), AppError> {
             app.manage(shell.startup());
             app.manage(shell.legacy_import());
             app.manage(shell.queue_installation());
-            app.manage(shell.job_tracker());
+            let job_tracker = shell.job_tracker();
+            app.manage(Arc::clone(&job_tracker));
+            let updates = Arc::new(ipc::updates::UpdateManager::new(
+                app.handle().clone(),
+                env!("CARGO_PKG_VERSION"),
+                Arc::clone(&job_tracker),
+            ));
+            ipc::updates::forward_status(app.handle().clone(), Arc::clone(&updates.coordinator));
+            app.manage(Arc::clone(&updates));
+            start_update_workers(app.handle().clone(), updates, Arc::clone(&job_tracker));
 
             // The tray is what makes the app reachable after its window is closed, so its
             // availability decides what closing the window means.
@@ -439,6 +459,108 @@ pub fn run(background: bool) -> Result<(), AppError> {
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
+fn start_update_workers(
+    app: tauri::AppHandle,
+    updates: Arc<ipc::updates::UpdateManager>,
+    jobs: Arc<PrintJobTracker>,
+) {
+    use application::{
+        UpdateState, INITIAL_CHECK_DELAY, RESTART_POLL_INTERVAL, UPDATE_CHECK_INTERVAL,
+    };
+    use tauri::Manager;
+
+    let polling_manager = Arc::clone(&updates);
+    drop(tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(INITIAL_CHECK_DELAY).await;
+        loop {
+            if let Err(error) = polling_manager
+                .check(application::CheckKind::Background)
+                .await
+            {
+                log::warn!("background update check failed; ShaPrint will retry later");
+                let _ = error;
+            }
+            tokio::time::sleep(UPDATE_CHECK_INTERVAL).await;
+        }
+    }));
+
+    let restart_app = app.clone();
+    let manager = Arc::clone(&updates);
+    let runtime = app
+        .try_state::<Arc<RuntimeCoordinator>>()
+        .map(|state| Arc::clone(state.inner()));
+    let sharing = app
+        .try_state::<Arc<Sharing>>()
+        .map(|state| Arc::clone(state.inner()));
+    drop(tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(RESTART_POLL_INTERVAL).await;
+            let hidden = restart_app
+                .get_webview_window("main")
+                .and_then(|window| window.is_visible().ok())
+                .is_some_and(|visible| !visible);
+            manager
+                .coordinator
+                .request_auto_restart_if_idle(hidden, application::QUIET_WINDOW);
+            if matches!(
+                manager.coordinator.status().state,
+                UpdateState::ReadyToRestart {
+                    restart_requested: true,
+                    ..
+                }
+            ) {
+                let Some(_restart_permit) = jobs.try_begin_restart() else {
+                    continue;
+                };
+                if let Some(runtime) = &runtime {
+                    if let Err(_error) = runtime.shutdown().await {
+                        manager.coordinator.fail(
+                            "ShaPrint could not stop its print services cleanly. No update was installed.".to_owned(),
+                        );
+                        restore_services_after_failed_update(Some(runtime), sharing.as_ref()).await;
+                        continue;
+                    }
+                }
+                match manager.install_if_requested().await {
+                    Ok(true) => restart_app.restart(),
+                    Ok(false) => {
+                        manager.coordinator.fail(
+                            "The update was not installed. ShaPrint attempted to restore its print services.".to_owned(),
+                        );
+                        restore_services_after_failed_update(runtime.as_ref(), sharing.as_ref())
+                            .await;
+                    }
+                    Err(_error) => {
+                        manager.coordinator.fail(
+                            "The verified update could not be installed. ShaPrint's print services were restarted.".to_owned(),
+                        );
+                        restore_services_after_failed_update(runtime.as_ref(), sharing.as_ref())
+                            .await;
+                    }
+                }
+            }
+        }
+    }));
+}
+
+#[cfg(feature = "desktop")]
+async fn restore_services_after_failed_update(
+    runtime: Option<&Arc<RuntimeCoordinator>>,
+    sharing: Option<&Arc<Sharing>>,
+) {
+    if let Some(sharing) = sharing {
+        if sharing.restore().await.is_err() {
+            log::warn!("server sharing could not be restored after updater failure");
+        }
+    }
+    if let Some(runtime) = runtime {
+        if runtime.start_autostart().await.is_err() {
+            log::warn!("print services could not be restored after updater failure");
+        }
+    }
+}
+
 /// Brings the main window back, creating nothing if it was closed.
 #[cfg(feature = "desktop")]
 fn show_main_window(app: &tauri::AppHandle) {
@@ -465,6 +587,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 fn install_tray(app: &tauri::AppHandle) -> bool {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    use tauri::Manager;
 
     // Without a bundled icon the tray entry would be invisible on Windows, which is worse than no
     // tray: the user could not find the app again after closing its window.
@@ -475,8 +598,21 @@ fn install_tray(app: &tauri::AppHandle) -> bool {
 
     let build_menu = || -> Result<Menu<tauri::Wry>, tauri::Error> {
         let open = MenuItem::with_id(app, "open", "Open ShaPrint", true, None::<&str>)?;
+        let update = MenuItem::with_id(
+            app,
+            "restart-update",
+            "Restart to Update",
+            true,
+            None::<&str>,
+        )?;
         let quit = MenuItem::with_id(app, "quit", "Quit ShaPrint", true, None::<&str>)?;
-        Menu::with_items(app, &[&open, &quit])
+        let menu = Menu::with_items(app, &[&open, &quit])?;
+        app.manage(UpdateTrayAction {
+            item: update,
+            menu: menu.clone(),
+            inserted: Arc::new(std::sync::Mutex::new(false)),
+        });
+        Ok(menu)
     };
     let menu = match build_menu() {
         Ok(menu) => menu,
@@ -494,6 +630,11 @@ fn install_tray(app: &tauri::AppHandle) -> bool {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().0.as_str() {
             "open" => show_main_window(app),
+            "restart-update" => {
+                if let Some(updates) = app.try_state::<ipc::updates::SharedUpdates>() {
+                    updates.request_restart();
+                }
+            }
             "quit" => app.exit(0),
             other => log::warn!("unknown tray menu action={other}"),
         })

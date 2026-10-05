@@ -32,6 +32,14 @@ use support::FakeCatalog;
 
 const TEST_QUEUE: &str = "Tracked-Printer";
 
+fn print_job(tracker: &PrintJobTracker) -> shaprint_desktop::application::RequestLease {
+    let mut lease = tracker
+        .try_acquire_request()
+        .expect("tracker accepts requests");
+    assert!(lease.mark_print_job());
+    lease
+}
+
 /// A submitter whose completion can be delayed to hold a job in-flight deterministically.
 struct BlockingSubmitter {
     started_notify: Arc<tokio::sync::Notify>,
@@ -189,7 +197,7 @@ async fn aborted_or_dropped_jobs_release_lease_without_leaking_counters() {
     assert_eq!(tracker.active_count(), 0);
 
     {
-        let _lease = tracker.acquire_job();
+        let _lease = print_job(&tracker);
         assert_eq!(tracker.active_count(), 1);
         assert!(!tracker.is_restart_safe());
         // Simulating aborted / dropped connection: lease drops here
@@ -211,7 +219,7 @@ async fn quiet_window_exposes_continuous_idle_duration() {
     assert!(tracker.is_idle_for(short_quiet_window));
 
     // Active print job resets idle state
-    let lease = tracker.acquire_job();
+    let lease = print_job(&tracker);
     assert!(!tracker.is_idle_for(short_quiet_window));
 
     drop(lease);

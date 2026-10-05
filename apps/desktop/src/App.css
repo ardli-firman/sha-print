@@ -1607,6 +1607,24 @@
   }
 }
 
+.update-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 32%, var(--border));
+  border-left: 3px solid var(--primary);
+  background: color-mix(in srgb, var(--primary) 5%, var(--card));
+  color: var(--foreground);
+}
+
+.update-copy { min-width: 0; }
+.update-copy strong { font-size: 0.88rem; font-weight: 650; }
+.update-copy p { margin: 0.12rem 0 0; color: var(--muted-foreground); font-size: 0.82rem; }
+.update-actions { display: flex; flex: 0 0 auto; gap: 0.5rem; }
+.update-primary { border-color: var(--primary) !important; background: var(--primary) !important; color: var(--primary-foreground) !important; }
+
 /* Feature surfaces: details and state are styled by purpose, not as identical cards. */
 .feature-panel {
   min-width: 0;
