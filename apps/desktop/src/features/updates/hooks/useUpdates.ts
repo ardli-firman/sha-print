@@ -19,7 +19,7 @@ export function useUpdates() {
     void onUpdateStatus((next) => {
       if (active) {
         setStatus(next);
-        if (next.update.state === "failed") setError(next.update.message);
+        setError(next.update.state === "failed" ? next.update.message : null);
       }
     }).then((stop) => {
       unsubscribe = stop;

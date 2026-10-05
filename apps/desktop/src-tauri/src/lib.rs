@@ -524,7 +524,13 @@ fn start_update_workers(
                 }
                 match manager.install_if_requested().await {
                     Ok(true) => restart_app.restart(),
-                    Ok(false) => {}
+                    Ok(false) => {
+                        manager.coordinator.fail(
+                            "The update was not installed. ShaPrint attempted to restore its print services.".to_owned(),
+                        );
+                        restore_services_after_failed_update(runtime.as_ref(), sharing.as_ref())
+                            .await;
+                    }
                     Err(_error) => {
                         manager.coordinator.fail(
                             "The verified update could not be installed. ShaPrint's print services were restarted.".to_owned(),

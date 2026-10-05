@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -243,6 +243,30 @@ describe("updater", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check for Updates" }));
 
     expect((await screen.findByRole("alert")).textContent).toMatch(/GitHub Releases could not be reached/);
+  });
+
+  it("clears a previous update error when a later status event succeeds", async () => {
+    let publish: ((status: UpdateStatus) => void) | undefined;
+    vi.mocked(updatesApi.onUpdateStatus).mockImplementation(async (handler) => {
+      publish = handler;
+      return () => {};
+    });
+    render(<App />);
+    await waitFor(() => expect(publish).toBeDefined());
+
+    await act(async () => publish?.({
+      current_version: "3.1.1",
+      update: { state: "failed", message: "Check failed." },
+      waiting_for_jobs: false,
+    }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Check failed.");
+
+    await act(async () => publish?.({
+      current_version: "3.1.1",
+      update: { state: "idle" },
+      waiting_for_jobs: false,
+    }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 });
 

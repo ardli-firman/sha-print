@@ -29,15 +29,10 @@ export function UpdateNotice({ status, error, checking, onCheck, onRestart }: Up
             <strong>Update could not finish</strong>
             <p role="alert">{failure}</p>
           </>
-        ) : update?.state === "checking" || checking ? (
+        ) : (
           <>
             <strong>Checking for updates</strong>
             <p>ShaPrint will keep printing available while it checks.</p>
-          </>
-        ) : (
-          <>
-            <strong>ShaPrint updates</strong>
-            <p>{status ? `Current version ${status.current_version}` : "Check for the latest release."}</p>
           </>
         )}
       </div>

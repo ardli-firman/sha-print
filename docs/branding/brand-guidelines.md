@@ -135,8 +135,8 @@ The application icon uses the symbol placed on a dark slate rounded squircle til
 > The source graphics, SVG masters, and testing boards are maintained locally in the design workspace directory `assets/branding/` (which is kept untracked and excluded from git commits).
 >
 > The production application icons and web assets are committed directly into their respective project folders:
-> * Desktop app icons: [`apps/desktop/src-tauri/icons/`](file:///home/almaver/orca/workspaces/sha-print/feat-logo/apps/desktop/src-tauri/icons)
-> * Webview and PWA assets: [`apps/desktop/public/`](file:///home/almaver/orca/workspaces/sha-print/feat-logo/apps/desktop/public)
+> * Desktop app icons: [`apps/desktop/src-tauri/icons/`](../../apps/desktop/src-tauri/icons/)
+> * Webview and PWA assets: [`apps/desktop/public/`](../../apps/desktop/public/)
 
 The structure of the local design workspace `assets/branding/`:
 

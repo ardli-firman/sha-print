@@ -130,6 +130,11 @@ impl UpdateCoordinator {
         kind: CheckKind,
     ) -> Result<UpdateStatus, String> {
         let _check_guard = self.check_gate.lock().await;
+        if let Ok(state) = self.state.lock() {
+            if matches!(&state.status.state, UpdateState::ReadyToRestart { .. }) {
+                return Ok(state.status.clone());
+            }
+        }
         self.set_state(UpdateState::Checking, false);
         let result: Result<Option<UpdatePackage>, String> = async {
             let Some(release) = source.check().await? else {
@@ -217,6 +222,23 @@ impl UpdateCoordinator {
         &self,
         installer: &dyn UpdateInstaller,
     ) -> Result<bool, String> {
+        let restart_requested = self
+            .state
+            .lock()
+            .map(|state| {
+                matches!(
+                    &state.status.state,
+                    UpdateState::ReadyToRestart {
+                        restart_requested: true,
+                        ..
+                    }
+                )
+            })
+            .unwrap_or(false);
+        if !restart_requested {
+            self.update_waiting_flag(false);
+            return Ok(false);
+        }
         if !self.jobs.is_restart_safe() {
             self.update_waiting_flag(true);
             return Ok(false);
@@ -283,6 +305,9 @@ impl UpdateCoordinator {
             let Ok(mut state) = self.state.lock() else {
                 return;
             };
+            if state.status.waiting_for_jobs == waiting {
+                return;
+            }
             state.status.waiting_for_jobs = waiting;
             state.status.clone()
         };
@@ -374,6 +399,47 @@ mod tests {
         let installer = Installer::default();
         assert!(!coordinator.install_if_requested(&installer).await.unwrap());
         assert_eq!(installer.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn install_without_restart_intent_does_not_mark_jobs_as_waiting() {
+        let jobs = Arc::new(PrintJobTracker::new());
+        let coordinator = UpdateCoordinator::new("3.1.1", Arc::clone(&jobs));
+        let mut lease = jobs
+            .try_acquire_request()
+            .expect("tracker accepts requests");
+        assert!(lease.mark_print_job());
+
+        assert!(!coordinator
+            .install_if_requested(&Installer::default())
+            .await
+            .unwrap());
+        assert!(!coordinator.status().waiting_for_jobs);
+    }
+
+    #[tokio::test]
+    async fn background_check_preserves_a_ready_update_and_queued_restart() {
+        let jobs = Arc::new(PrintJobTracker::new());
+        let coordinator = UpdateCoordinator::new("3.1.1", Arc::clone(&jobs));
+        coordinator
+            .check(&Source::new(Ok(Some(release()))), CheckKind::Background)
+            .await
+            .unwrap();
+        coordinator.request_restart();
+        let queued_status = coordinator.status();
+
+        let status_after_check = coordinator
+            .check(
+                &Source::new(Err("GitHub is unreachable".into())),
+                CheckKind::Background,
+            )
+            .await
+            .unwrap();
+        assert_eq!(status_after_check, queued_status);
+
+        let installer = Installer::default();
+        assert!(coordinator.install_if_requested(&installer).await.unwrap());
+        assert_eq!(installer.0.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
