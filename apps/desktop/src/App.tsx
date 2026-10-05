@@ -11,6 +11,7 @@ import {
 } from "@/features/client-connection";
 import { NetworkChannelPanel, useNetworkChannel } from "@/features/network-channel";
 import { PrintFailuresPanel, usePrintFailures } from "@/features/print-failures";
+import { UpdateNotice, useUpdates } from "@/features/updates";
 import { PrinterSharingPanel, usePrinterSharing } from "@/features/printer-sharing";
 import {
   RuntimeStatusPanel,
@@ -61,6 +62,7 @@ function App() {
   const networkChannel = useNetworkChannel();
   const connections = useServerConnections();
   const nearby = useNearbyServers();
+  const updates = useUpdates();
   const pageContent = PAGE_CONTENT[page];
 
   const hasFailedService =
@@ -141,6 +143,9 @@ function App() {
           </div>
 
           <div className="workspace-header-actions">
+            <Button type="button" variant="outline" onClick={() => void updates.check()} disabled={updates.checking}>
+              {updates.checking ? "Checking…" : "Check for Updates"}
+            </Button>
             <button
               type="button"
               onClick={() => setDiagnosticsOpen(true)}
@@ -157,6 +162,13 @@ function App() {
         </header>
 
         <div className="workspace-content">
+          <UpdateNotice
+            status={updates.status}
+            error={updates.error}
+            checking={updates.checking}
+            onCheck={() => void updates.check()}
+            onRestart={() => void updates.restart()}
+          />
           <PrintFailuresPanel failures={failures} />
 
           <section className="page-stack" aria-label={pageContent.title}>

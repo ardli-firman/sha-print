@@ -208,6 +208,13 @@ async fn serve_client(
         write_http(&mut write, "400 Bad Request", &[]).await?;
         return Ok(());
     }
+    let mut request_lease = match tracker.try_acquire_request() {
+        Some(lease) => lease,
+        None => {
+            write_http(&mut write, "503 Service Unavailable", &[]).await?;
+            return Ok(());
+        }
+    };
     if head.expects_continue {
         trace_issue34("sending 100-continue");
         write
@@ -304,8 +311,15 @@ async fn serve_client(
     };
     trace_issue34("route=accepted");
     let _job_lease = if operation == protocol::OPERATION_PRINT_JOB {
-        Some(tracker.acquire_job())
+        if !request_lease.mark_print_job() {
+            let response =
+                protocol::response(request_id, version, protocol::Status::NotAcceptingJobs, &[]);
+            write_http(&mut write, "200 OK", &response).await?;
+            return Ok(());
+        }
+        Some(request_lease)
     } else {
+        drop(request_lease);
         None
     };
     let remote_uri = format!(

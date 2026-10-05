@@ -233,6 +233,11 @@ where
         }
     };
 
+    let request_lease = match tracker.try_acquire_request() {
+        Some(lease) => lease,
+        None => return respond(&mut write, "503 Service Unavailable", "text/plain", &[]).await,
+    };
+
     if head.expects_continue() {
         http::send_continue(&mut write).await.map_err(write_error)?;
     }
@@ -250,7 +255,13 @@ where
         }
     };
     let (answer, _active_job_guard) = endpoint::answer_job(
-        body, authority, directory, channel, submitter, failures, tracker,
+        body,
+        authority,
+        directory,
+        channel,
+        submitter,
+        failures,
+        request_lease,
     )
     .await;
     respond(&mut write, "200 OK", http::IPP_CONTENT_TYPE, &answer).await
