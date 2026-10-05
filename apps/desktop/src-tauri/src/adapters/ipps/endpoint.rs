@@ -14,8 +14,8 @@ use super::protocol::{
 
 use crate::adapters::ipps::NetworkChannel;
 use crate::application::{
-    DuplexMode, JobLease, PrintFailures, PrintJob, PrintJobSubmitter, PrintJobTracker,
-    PrintOrientation, PrintSettings,
+    DuplexMode, PrintFailures, PrintJob, PrintJobSubmitter, PrintOrientation, PrintSettings,
+    RequestLease,
 };
 
 #[cfg(test)]
@@ -81,8 +81,8 @@ pub async fn answer_job(
     channel: &NetworkChannel,
     submitter: &dyn PrintJobSubmitter,
     failures: &PrintFailures,
-    tracker: &PrintJobTracker,
-) -> (Vec<u8>, Option<JobLease>) {
+    mut request_lease: RequestLease,
+) -> (Vec<u8>, Option<RequestLease>) {
     let request = match Request::parse(&bytes) {
         Ok(request) => request,
         Err(_) => return (response(0, IPP_VERSION_1_1, Status::BadRequest, &[]), None),
@@ -122,7 +122,13 @@ pub async fn answer_job(
     }
 
     let active_job_guard = if operation == OPERATION_PRINT_JOB {
-        Some(tracker.acquire_job())
+        if !request_lease.mark_print_job() {
+            return (
+                response(request_id, version, Status::NotAcceptingJobs, &[]),
+                None,
+            );
+        }
+        Some(request_lease)
     } else {
         None
     };
