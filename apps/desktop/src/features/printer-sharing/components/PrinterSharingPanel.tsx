@@ -12,16 +12,15 @@ export interface PrinterSharingPanelProps {
   sharing: PrinterSharingController;
 }
 
-/** The server side of sharing: local queues, certificate identity, and firewall access. */
+/** The server side of sharing: local queues and certificate identity. */
 export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
-  const { printers, identity, busy, granting, error, toggle, allowAccess, refresh, dismissError } =
-    sharing;
+  const { printers, identity, busy, error, toggle, refresh, dismissError } = sharing;
   const [copyMessage, setCopyMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const searchId = useId();
 
   const sharedCount = printers?.filter((printer) => printer.shared).length ?? 0;
-  const changing = busy !== null || granting;
+  const changing = busy !== null;
 
   const filteredPrinters = useMemo(() => {
     if (!printers) return [];
@@ -212,26 +211,6 @@ export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
             </p>
           ) : null}
 
-          <div className="firewall-action flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-border/70">
-            <div>
-              <strong className="text-xs font-semibold text-foreground block">
-                Let clients reach this computer
-              </strong>
-              <p className="hint text-xs text-muted-foreground mt-0.5">
-                Windows asks for administrator permission once to open the sharing port.
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void allowAccess()}
-              disabled={changing}
-              className="shrink-0 text-xs h-8 font-medium self-start sm:self-center"
-            >
-              Allow client connections
-            </Button>
-          </div>
         </div>
       ) : null}
     </Card>

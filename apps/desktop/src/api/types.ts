@@ -102,12 +102,6 @@ export interface NearbyServers {
   servers: NearbyServer[];
 }
 
-/** What a setup action did. */
-export interface SetupOutcome {
-  /** Whether administrator permission was requested for the action. */
-  elevated: boolean;
-}
-
 /** A native Windows queue the shell installed for a shared printer. */
 export interface ClientQueue {
   /** Queue name as it appears in Windows print dialogs. */

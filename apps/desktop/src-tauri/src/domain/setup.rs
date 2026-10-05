@@ -243,7 +243,13 @@ impl SetupFailure {
             self.kind.error_code(),
             match action {
                 SetupAction::AllowInboundSharing => {
-                    format!("Could not let clients through the Windows firewall: {advice}")
+                    let firewall_advice = match self.kind {
+                        SetupFailureKind::Other | SetupFailureKind::TimedOut => {
+                            "the firewall rules could not be checked or applied. Check Windows Firewall settings."
+                        }
+                        _ => advice,
+                    };
+                    format!("Clients cannot connect through the Windows firewall: {firewall_advice} Try starting Server Sharing again after resolving this.")
                 }
                 SetupAction::InstallPrinter => {
                     format!("Could not install the Windows printer queue: {advice}")

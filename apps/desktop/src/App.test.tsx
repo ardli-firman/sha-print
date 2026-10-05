@@ -36,7 +36,6 @@ vi.mock("./api/ipc", () => ({
   listLocalPrinters: vi.fn(),
   setSharedPrinters: vi.fn(),
   getServerIdentity: vi.fn(),
-  allowSharingAccess: vi.fn(),
 }));
 
 vi.mock("./api/networkChannel", () => ({
@@ -391,6 +390,26 @@ describe("runtime status panel", () => {
     expect(ipc.startService).toHaveBeenCalledWith("server-sharing");
   });
 
+  it("explains denied Client access and offers Start again", async () => {
+    vi.mocked(ipc.startService)
+      .mockRejectedValueOnce({ code: "unsupported", message: "Clients cannot connect through the Windows firewall: administrator permission was not granted. Approve the Windows prompt, then try again." })
+      .mockResolvedValueOnce(runtimeWith("running", "running"));
+    const { container } = render(<App />);
+    navigateTo("Settings");
+    const server = await screen.findByRole("region", { name: "Print services" });
+    const sharing = serviceCard(container, "server-sharing");
+
+    fireEvent.click(within(sharing).getByRole("button", { name: "Start" }));
+    const alert = await within(server).findByRole("alert");
+    expect(alert.textContent).toContain("Clients cannot connect");
+    expect(sharing.dataset.state).toBe("stopped");
+
+    fireEvent.click(within(sharing).getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(sharing.dataset.state).toBe("running"));
+    expect(ipc.startService).toHaveBeenCalledTimes(2);
+    expect(within(server).queryByRole("alert")).toBeNull();
+  });
+
   it("shows the stable error code when a lifecycle action is rejected", async () => {
     vi.mocked(ipc.getRuntimeStatus).mockResolvedValue(runtimeWith("stopped", "stopped"));
     vi.mocked(ipc.startService).mockRejectedValue({
@@ -591,19 +610,18 @@ describe("shared printers panel", () => {
     }
   });
 
-  it("asks for administrator permission only when the user opens client access", async () => {
-    vi.mocked(ipc.allowSharingAccess).mockResolvedValue({ elevated: true });
-    vi.mocked(ipc.setSharedPrinters).mockResolvedValue(printersWith("Zebra"));
+  it("starts Server Sharing without a separate firewall action", async () => {
+    vi.mocked(ipc.startService).mockResolvedValue(runtimeWith("running", "running"));
     const { container } = render(<App />);
-
     await sharingPanel(container);
-    fireEvent.click(within(printerRow(container, "Zebra")).getByRole("checkbox"));
-    await waitFor(() => expect(printerRow(container, "Zebra").dataset.shared).toBe("true"));
-    expect(ipc.allowSharingAccess).not.toHaveBeenCalled();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Allow client connections" }));
+    expect(screen.queryByRole("button", { name: "Allow client connections" })).toBeNull();
+    navigateTo("Settings");
+    const server = serviceCard(container, "server-sharing");
+    fireEvent.click(within(server).getByRole("button", { name: "Start" }));
 
-    await waitFor(() => expect(ipc.allowSharingAccess).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(server.dataset.state).toBe("running"));
+    expect(ipc.startService).toHaveBeenCalledWith("server-sharing");
   });
 
   it("shows the stable error code when a change is rejected and re-reads the queues", async () => {
@@ -972,7 +990,6 @@ describe("startup panel", () => {
     await waitFor(() => expect(startupApi.setStartupEnabled).toHaveBeenCalledWith(false));
     await waitFor(() => expect(toggle.checked).toBe(false));
     // Enabling or disabling login startup never elevates.
-    expect(ipc.allowSharingAccess).not.toHaveBeenCalled();
   });
 
   it("says when this platform cannot register login startup", async () => {
@@ -1054,6 +1071,5 @@ describe("previous app panel", () => {
 
     await waitFor(() => expect(legacyApi.importLegacySettings).toHaveBeenCalledTimes(1));
     expect(await within(panel).findByText(LEGACY_REPORT.channel_note)).toBeTruthy();
-    expect(ipc.allowSharingAccess).not.toHaveBeenCalled();
   });
 });

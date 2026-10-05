@@ -11,7 +11,7 @@ application as the product path and lives beside the .NET projects while the tra
 - Lifecycle: the app registers itself for the current user's Windows login (per-user `Run` key, no
   elevation), starts without a window from that launch, and closing its window hides it to the
   notification area. An explicit **Quit ShaPrint** in the tray menu stops the background services and
-  exits; server sharing still only starts when the user starts it. The window turns login startup on
+  exits; previously enabled Server Sharing is restored at login. The window turns login startup on
   or off (ADR 0006).
 - Print problems: one surface explains the latest failed job with a stable code, a message derived
   from that code and the queue, and the single action that resolves it. A record holds no field a
@@ -49,10 +49,10 @@ application as the product path and lives beside the .NET projects while the tra
   client browses for nearby servers and lists them live. Acting on a discovered server only fills in
   the address and starts the same certificate review; a discovered server is never trusted on the
   strength of its advertisement, and manual address entry keeps working where discovery cannot reach.
-- Two elevated setup actions: letting clients reach the endpoint through the Windows firewall, and
-  installing a printer queue. Every other action — selecting queues, start/stop, fingerprint review,
-  discovery, channel configuration, login startup, and the import from the previous app — runs
-  unprivileged.
+- Two machine-wide setup actions may request administrator approval: starting Server Sharing when
+  inbound IPPS or discovery access is missing, and installing a client printer queue. Starting again
+  with complete firewall rules needs no prompt; selecting queues, stopping sharing, fingerprint
+  review, discovery, channel configuration, login startup, and import run unprivileged (ADR 0013).
 - Typed IPC: commands and status events use serializable DTOs, and failures carry stable codes
   (`invalid-input`, `unknown-service`, `invalid-state`, `timeout`, `unsupported`,
   `server-unavailable`, `server-untrusted`, `server-identity-changed`, `not-authorized`,
@@ -165,8 +165,8 @@ src-tauri/src/
   ipc/               Tauri command adapters, serializable DTOs, status event bridge
 ```
 
-Boundaries follow ADR 0002. ADR 0003 records how the IPPS endpoint, its identity, and the elevated
-firewall action work; ADR 0004 records server discovery; ADR 0005 records how a native client queue
+Boundaries follow ADR 0002. ADR 0003 records the IPPS endpoint and its identity; ADR 0013 records
+inbound access on Server Sharing start. ADR 0004 records server discovery; ADR 0005 records how a native client queue
 is named, created, and reported when it fails, ADR 0006 the login/tray lifecycle, ADR 0007 the
 migration from the .NET app, and ADR 0008 how print failures reach the window. Command handlers only
 validate, translate, and
@@ -184,8 +184,9 @@ takes multicast DNS port 5353 when it is free and 5354 otherwise; a client asks 
 operating system's own multicast DNS responder usually holds 5353.
 
 A browsing client needs nothing from the firewall: it asks from its own port and only hears the
-answer. A server has to accept the query, so the sharing panel's single administrator action allows
-inbound UDP on the discovery ports as well as inbound TCP on the endpoint's port. Discovery does not
+answer. A server has to accept the query, so starting Server Sharing checks inbound UDP on both discovery
+ports as well as inbound TCP on the endpoint's port and requests administrator permission only if
+access is missing. Discovery does not
 cross subnets, so the address field stays the path for a server on another network.
 
 ## Sharing over IPPS
@@ -202,9 +203,9 @@ client queue if Windows retained its previous document-format capabilities. Leav
 manufacturer queue installed on the server.
 The port is not 631: that belongs to Windows' own IPP service. Clients verify and explicitly approve
 the server certificate before querying printers; changed fingerprints block queries until explicit
-reapproval. Because the first connection from another computer has to pass the Windows firewall,
-letting clients in is one of the two server-side actions that ask for administrator permission; the
-other is installing a client queue, described next.
+reapproval. Before Server Sharing starts, ShaPrint checks Windows Firewall access and requests administrator
+approval to add the required rules only if they are missing. Declining approval keeps sharing stopped
+with a clear retry path; the other elevated action is installing a client queue, described next.
 
 ## Client queues
 

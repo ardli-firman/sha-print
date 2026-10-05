@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
-  allowSharingAccess,
   getServerIdentity,
   listLocalPrinters,
   setSharedPrinters,
@@ -21,12 +20,9 @@ export interface PrinterSharingController {
   identity: ServerIdentity | null;
   /** Queue whose sharing state is being changed, if any. */
   busy: string | null;
-  /** True while administrator permission is being requested. */
-  granting: boolean;
   /** Most recent failure worth showing the user. */
   error: AppError | null;
   toggle: (name: string) => Promise<void>;
-  allowAccess: () => Promise<void>;
   refresh: () => Promise<void>;
   dismissError: () => void;
 }
@@ -41,7 +37,6 @@ export function usePrinterSharing(): PrinterSharingController {
   const [printers, setPrinters] = useState<LocalPrinter[] | null>(null);
   const [identity, setIdentity] = useState<ServerIdentity | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [granting, setGranting] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
 
   const load = useCallback(async () => {
@@ -81,18 +76,6 @@ export function usePrinterSharing(): PrinterSharingController {
     [load, printers],
   );
 
-  const allowAccess = useCallback(async () => {
-    setGranting(true);
-    setError(null);
-    try {
-      await allowSharingAccess();
-    } catch (cause) {
-      setError(toAppError(cause));
-    } finally {
-      setGranting(false);
-    }
-  }, []);
-
   const dismissError = useCallback(() => {
     setError(null);
   }, []);
@@ -101,10 +84,8 @@ export function usePrinterSharing(): PrinterSharingController {
     printers,
     identity,
     busy,
-    granting,
     error,
     toggle,
-    allowAccess,
     refresh: load,
     dismissError,
   };

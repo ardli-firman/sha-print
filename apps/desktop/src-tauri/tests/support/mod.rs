@@ -22,9 +22,12 @@ use shaprint_desktop::adapters::discovery::MdnsAdvertiser;
 use shaprint_desktop::adapters::ipps::NetworkChannel;
 use shaprint_desktop::adapters::{IppsServer, ServerIdentity, ServerSharingService};
 use shaprint_desktop::application::{
-    LocalPrinterCatalog, PrintFailures, PrintJob, PrintJobSubmitter, Sharing,
+    ElevationBroker, LocalPrinterCatalog, PrintFailures, PrintJob, PrintJobSubmitter, Setup,
+    Sharing,
 };
-use shaprint_desktop::domain::{AppError, PrinterName};
+use shaprint_desktop::domain::{
+    AppError, ClientQueueRequest, PrinterName, SetupAction, SetupFailure,
+};
 
 /// A catalog over a fixed set of queues, standing in for the Windows spooler.
 pub struct FakeCatalog {
@@ -132,12 +135,34 @@ pub fn free_port() -> u16 {
         .expect("a free port")
 }
 
+/// A test host whose inbound Client access is already available.
+pub fn allowed_inbound_setup() -> Arc<Setup> {
+    struct Allowed;
+    impl ElevationBroker for Allowed {
+        fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+            Ok(true)
+        }
+        fn elevate(&self, _action: SetupAction) -> Result<(), SetupFailure> {
+            panic!("existing access must not prompt")
+        }
+        fn install_queue(&self, _request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+            panic!("the test did not request queue installation")
+        }
+    }
+    Arc::new(Setup::new(Arc::new(Allowed)))
+}
+
 /// The sharing runtime over `sharing` and `endpoint`.
 ///
 /// The advertiser binds an ephemeral discovery port, so tests never compete with the machine's own
 /// multicast DNS responder and one test cannot take the port another test needs.
 pub fn sharing_service(sharing: Arc<Sharing>, endpoint: Arc<IppsServer>) -> ServerSharingService {
-    ServerSharingService::new(sharing, endpoint, Arc::new(MdnsAdvertiser::on(vec![0])))
+    ServerSharingService::new(
+        sharing,
+        endpoint,
+        Arc::new(MdnsAdvertiser::on(vec![0])),
+        allowed_inbound_setup(),
+    )
 }
 
 /// Names of the queues the tests share through the fake catalog.

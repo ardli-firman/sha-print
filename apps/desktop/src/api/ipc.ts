@@ -13,7 +13,6 @@ import type {
   RuntimeStatus,
   ServerIdentity,
   ServiceId,
-  SetupOutcome,
 } from "./types";
 
 /** Event emitted whenever the shell publishes a new status snapshot. */
@@ -43,11 +42,6 @@ export function setSharedPrinters(printers: string[]): Promise<LocalPrinters> {
 /** The certificate fingerprint clients approve, and the port they connect to. */
 export function getServerIdentity(): Promise<ServerIdentity> {
   return invoke<ServerIdentity>("get_server_identity");
-}
-
-/** Asks Windows for the one permission that needs administrator rights: inbound access. */
-export function allowSharingAccess(): Promise<SetupOutcome> {
-  return invoke<SetupOutcome>("allow_sharing_access");
 }
 
 /** Subscribes to live status changes; resolve the returned function to unsubscribe. */

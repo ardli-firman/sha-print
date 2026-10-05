@@ -57,7 +57,6 @@ pub struct Shell {
     runtime: Arc<RuntimeCoordinator>,
     sharing: Arc<Sharing>,
     endpoint: Arc<IppsServer>,
-    setup: Arc<Setup>,
     startup: Arc<Startup>,
     legacy_import: Arc<LegacyImport>,
     client_connections: Arc<ClientConnections>,
@@ -105,7 +104,14 @@ impl Shell {
 
         // The client proxy and discovery opt into autostart (ADR 0001: installed queues must reach
         // the proxy during normal use, and nearby servers must appear without being asked for).
-        // Server sharing stays stopped until the user starts it.
+        // Restored Server Sharing may autostart if the user previously left it enabled; every
+        // start checks inbound access before the endpoint becomes reachable.
+        let server_sharing = ServerSharingService::new(
+            Arc::clone(&sharing),
+            Arc::clone(&endpoint),
+            advertiser,
+            Arc::clone(&setup),
+        );
         let runtime = Arc::new(RuntimeCoordinator::new(vec![
             Arc::new(ClientProxyService::new(
                 Arc::clone(&client_connections),
@@ -113,11 +119,7 @@ impl Shell {
                 Arc::clone(&print_failures),
                 Arc::clone(&job_tracker),
             )),
-            Arc::new(ServerSharingService::new(
-                Arc::clone(&sharing),
-                Arc::clone(&endpoint),
-                advertiser,
-            )),
+            Arc::new(server_sharing),
             Arc::new(DiscoveryService::new(Arc::clone(&discovery), browser)),
         ]));
 
@@ -135,7 +137,6 @@ impl Shell {
             runtime,
             sharing,
             endpoint,
-            setup,
             startup,
             legacy_import,
             client_connections,
@@ -157,10 +158,6 @@ impl Shell {
 
     pub fn endpoint(&self) -> Arc<IppsServer> {
         Arc::clone(&self.endpoint)
-    }
-
-    pub fn setup(&self) -> Arc<Setup> {
-        Arc::clone(&self.setup)
     }
 
     pub fn startup(&self) -> Arc<Startup> {
@@ -289,7 +286,6 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ipc::commands::list_local_printers,
             ipc::commands::set_shared_printers,
             ipc::commands::get_server_identity,
-            ipc::commands::allow_sharing_access,
             ipc::commands::get_startup_status,
             ipc::commands::set_startup_enabled,
             ipc::commands::get_legacy_import_report,
@@ -323,7 +319,6 @@ pub fn run(background: bool) -> Result<(), AppError> {
             app.manage(shell.runtime());
             app.manage(shell.sharing());
             app.manage(shell.endpoint());
-            app.manage(shell.setup());
             app.manage(shell.client_connections());
             app.manage(shell.network_channel());
             app.manage(shell.discovery());
@@ -370,7 +365,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
             // Start the always-on services in the background: the window paints immediately, then
             // follows their status through the event stream. A service that cannot start is left
             // `failed` for the user to retry instead of taking the shell down. Server sharing is
-            // not an autostart service, so a login launch never starts sharing on its own.
+            // restored when it was previously enabled; the firewall check runs before it starts.
             //
             // The import runs first, so the client proxy already has the Network Channel the user
             // brought over from the previous application (#41).

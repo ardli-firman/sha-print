@@ -10,6 +10,14 @@ use crate::domain::{AppError, ClientQueueRequest, SetupAction, SetupFailure};
 /// The adapter is platform-specific: Windows raises a UAC prompt for the action, other platforms
 /// report that they cannot (ADR 0001 keeps Linux a later phase).
 pub trait ElevationBroker: Send + Sync + 'static {
+    /// Checks whether all inbound IPPS and discovery rules currently allow clients in.
+    fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+        Err(SetupFailure::new(
+            crate::domain::SetupFailureKind::Unsupported,
+            "inbound access checks are unavailable on this platform",
+        ))
+    }
+
     /// Performs `action` elevated. Callers check [`SetupAction::requires_elevation`] first.
     fn elevate(&self, action: SetupAction) -> Result<(), SetupFailure>;
 
@@ -56,6 +64,31 @@ impl Setup {
             failure.for_action(action)
         })?;
         Ok(SetupOutcome::Elevated)
+    }
+
+    /// Ensures clients can reach Server Sharing before its endpoint is opened.
+    /// An existing allowance never prompts; a newly approved change is checked again.
+    pub fn ensure_inbound_sharing(&self) -> Result<(), AppError> {
+        let action = SetupAction::AllowInboundSharing;
+        if self
+            .broker
+            .inbound_sharing_allowed()
+            .map_err(|failure| failure.for_action(action))?
+        {
+            return Ok(());
+        }
+        self.request(action)?;
+        if self
+            .broker
+            .inbound_sharing_allowed()
+            .map_err(|failure| failure.for_action(action))?
+        {
+            Ok(())
+        } else {
+            Err(AppError::invalid_state(
+                "Clients cannot connect: Windows firewall access is still unavailable. Check the firewall rules, then try starting Server Sharing again.",
+            ))
+        }
     }
 
     /// Installs (or repairs) the native Windows queue for `request`.

@@ -161,6 +161,20 @@ impl SystemElevation {
 }
 
 impl ElevationBroker for SystemElevation {
+    fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+        #[cfg(windows)]
+        {
+            windows::inbound_sharing_allowed()
+        }
+        #[cfg(not(windows))]
+        {
+            Err(SetupFailure::new(
+                SetupFailureKind::Unsupported,
+                "inbound firewall access is only supported on Windows",
+            ))
+        }
+    }
+
     fn elevate(&self, action: SetupAction) -> Result<(), SetupFailure> {
         if !action.requires_elevation() {
             // Defensive: the use case filters these out, and running a routine action here would
@@ -397,6 +411,183 @@ mod windows {
         }
     }
 
+    struct InboundRule {
+        name: String,
+        protocol: &'static str,
+        port: u16,
+    }
+
+    fn inbound_rules() -> Vec<InboundRule> {
+        let mut rules = vec![InboundRule {
+            name: format!("ShaPrint ({DEFAULT_PORT})"),
+            protocol: "TCP",
+            port: DEFAULT_PORT,
+        }];
+        rules.extend(DISCOVERY_PORTS.iter().map(|port| InboundRule {
+            name: format!("ShaPrint discovery ({port})"),
+            protocol: "UDP",
+            port: *port,
+        }));
+        rules
+    }
+
+    /// Reads effective firewall policy, including rules installed by an administrator under a
+    /// different name. A restricted rule is not proof that LAN Clients can reach ShaPrint.
+    pub(super) fn inbound_sharing_allowed() -> Result<bool, SetupFailure> {
+        let checks = inbound_rules()
+            .iter()
+            .map(|rule| {
+                format!(
+                    "if (-not (AccessForPort '{protocol}' '{port}')) {{ exit 2 }};",
+                    protocol = rule.protocol,
+                    port = rule.port
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        // Inspect the active policy rather than netsh's localized text. A blocking rule takes
+        // precedence over any allowance; requiring unrestricted address/program/interface scope
+        // prevents an unrelated app's or loopback-only rule from passing as Client access.
+        let script = format!(
+            r#"
+$ErrorActionPreference = 'Stop'
+function PortMatches($entry, $protocol, $port) {{
+  foreach ($filter in $entry.Ports) {{
+    if (($filter.Protocol.ToString() -eq $protocol -or $filter.Protocol.ToString() -eq 'Any') -and
+        (@($filter.LocalPort) -contains $port -or @($filter.LocalPort) -contains 'Any') -and
+        (@($filter.RemotePort) -contains 'Any')) {{ return $true }}
+  }}
+  return $false
+}}
+function RuleProfiles($rule) {{
+  return @($rule.Profile.ToString().Split(',') | ForEach-Object {{ $_.Trim() }})
+}}
+function OverlapsActiveProfile($rule) {{
+  $profiles = @(RuleProfiles $rule)
+  if ($profiles -contains 'Any') {{ return $true }}
+  foreach ($profile in $profiles) {{ if ($needed.ContainsKey($profile) -and $needed[$profile]) {{ return $true }} }}
+  return $false
+}}
+function Unrestricted($rule) {{
+  $address = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  $application = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  $service = Get-NetFirewallServiceFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  $interface = Get-NetFirewallInterfaceFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  $type = Get-NetFirewallInterfaceTypeFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  $security = Get-NetFirewallSecurityFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  return ((@($address.LocalAddress) -contains 'Any') -and (@($address.RemoteAddress) -contains 'Any') -and
+          $application.Program -eq 'Any' -and (-not $application.Package -or $application.Package -eq 'Any') -and
+          $service.Service -eq 'Any' -and (@($interface.InterfaceAlias) -contains 'Any') -and
+          $type.InterfaceType -eq 'Any' -and $security.Authentication -eq 'NotRequired')
+}}
+function BlocksClients($rule) {{
+  if (-not (OverlapsActiveProfile $rule)) {{ return $false }}
+  $application = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  if ($application.Program -ne 'Any' -and
+      [Environment]::ExpandEnvironmentVariables($application.Program) -ine $env:SHAPRINT_FIREWALL_EXE) {{ return $false }}
+  if ($application.Package -and $application.Package -ne 'Any') {{ return $false }}
+  $service = Get-NetFirewallServiceFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  if ($service.Service -ne 'Any') {{ return $false }}
+  $address = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  if (@($address.RemoteAddress) -contains '127.0.0.1' -or @($address.RemoteAddress) -contains '::1') {{
+    if (@($address.RemoteAddress) -notcontains 'Any' -and @($address.RemoteAddress).Count -eq 1) {{ return $false }}
+  }}
+  return $true
+}}
+function AccessForPort($protocol, $port) {{
+  if (-not ($needed.Domain -or $needed.Private -or $needed.Public)) {{ return $true }}
+  $covered = @{{ Domain = $defaults.Domain; Private = $defaults.Private; Public = $defaults.Public }}
+  foreach ($entry in $rules) {{
+    $rule = $entry.Rule
+    if ($rule.Action -eq 'Block' -and (PortMatches $entry $protocol $port) -and (BlocksClients $rule)) {{ return $false }}
+  }}
+  foreach ($entry in $rules) {{
+    $rule = $entry.Rule
+    if ($rule.Action -ne 'Allow' -or -not (PortMatches $entry $protocol $port)) {{ continue }}
+    if (-not (Unrestricted $rule)) {{ continue }}
+    $profiles = @(RuleProfiles $rule)
+    if ($profiles -contains 'Any') {{ return $true }}
+    foreach ($profile in $profiles) {{ if ($covered.ContainsKey($profile)) {{ $covered[$profile] = $true }} }}
+  }}
+  return ((-not $needed.Domain -or $covered.Domain) -and
+          (-not $needed.Private -or $covered.Private) -and
+          (-not $needed.Public -or $covered.Public))
+}}
+try {{
+  $needed = @{{ Domain = $false; Private = $false; Public = $false }}
+  $defaults = @{{ Domain = $false; Private = $false; Public = $false }}
+  foreach ($profile in @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop)) {{
+    if ($profile.Enabled -eq 'True') {{
+      if ($profile.AllowInboundRules -eq 'False') {{ exit 2 }}
+      $needed[$profile.Name] = $true
+      $defaults[$profile.Name] = ($profile.DefaultInboundAction -eq 'Allow')
+    }}
+  }}
+  $rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+    Where-Object {{ $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and
+                    ($_.Action -eq 'Allow' -or $_.Action -eq 'Block') }} |
+    ForEach-Object {{ [pscustomobject]@{{ Rule = $_; Ports = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $_ -ErrorAction Stop) }} }})
+  {checks}
+  exit 0
+}} catch {{ exit 3 }}
+"#
+        );
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let executable = std::env::current_exe().map_err(|error| {
+            SetupFailure::new(
+                SetupFailureKind::Other,
+                format!("cannot locate ShaPrint: {error}"),
+            )
+        })?;
+        let mut child = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .env("SHAPRINT_FIREWALL_EXE", executable)
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|error| {
+                SetupFailure::new(
+                    SetupFailureKind::Other,
+                    format!("cannot check Windows firewall: {error}"),
+                )
+            })?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    return match status.code() {
+                        Some(0) => Ok(true),
+                        Some(2) => Ok(false),
+                        _ => Err(SetupFailure::new(
+                            SetupFailureKind::Other,
+                            "cannot read Windows firewall rules",
+                        )),
+                    }
+                }
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(SetupFailure::new(
+                        SetupFailureKind::TimedOut,
+                        "Windows firewall access check timed out",
+                    ));
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(SetupFailure::new(
+                        SetupFailureKind::Other,
+                        format!("cannot wait for Windows firewall check: {error}"),
+                    ));
+                }
+            }
+        }
+    }
+
     /// Lets clients reach this server through the Windows firewall.
     ///
     /// Two things have to get in: the IPPS requests a client sends to the endpoint's port, and the
@@ -405,36 +596,12 @@ mod windows {
     /// Every rule is removed first: re-running setup must repair a rule that changed, and `netsh`
     /// refuses to create a duplicate name.
     fn allow_inbound_sharing() -> Result<(), SetupFailure> {
-        let endpoint_rule = format!("ShaPrint ({DEFAULT_PORT})");
-        let discovery_rules: Vec<(String, String)> = DISCOVERY_PORTS
-            .iter()
-            .map(|port| (format!("ShaPrint discovery ({port})"), port.to_string()))
-            .collect();
-
-        remove_rule(&endpoint_rule);
-        for (name, _) in &discovery_rules {
-            remove_rule(name);
+        let rules = inbound_rules();
+        for rule in &rules {
+            remove_rule(&rule.name);
         }
 
-        run(
-            "netsh",
-            &[
-                "advfirewall",
-                "firewall",
-                "add",
-                "rule",
-                &format!("name={endpoint_rule}"),
-                "dir=in",
-                "action=allow",
-                "protocol=TCP",
-                &format!("localport={DEFAULT_PORT}"),
-                "profile=any",
-            ],
-        )?;
-
-        // A client never has to be allowed in: it asks from its own port and only hears the answer,
-        // which Windows lets back in as the reply to a request this machine started.
-        for (name, port) in &discovery_rules {
+        for rule in &rules {
             run(
                 "netsh",
                 &[
@@ -442,11 +609,11 @@ mod windows {
                     "firewall",
                     "add",
                     "rule",
-                    &format!("name={name}"),
+                    &format!("name={}", rule.name),
                     "dir=in",
                     "action=allow",
-                    "protocol=UDP",
-                    &format!("localport={port}"),
+                    &format!("protocol={}", rule.protocol),
+                    &format!("localport={}", rule.port),
                     "profile=any",
                 ],
             )?;
