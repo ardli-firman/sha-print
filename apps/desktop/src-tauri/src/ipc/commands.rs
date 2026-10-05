@@ -7,7 +7,7 @@
 //!
 //! `start_service`/`stop_service` are the shell's generic lifecycle actions for every supervised
 //! service. The sharing commands cover what a server user configures: which local queues are
-//! shared, the identity clients approve, and the setup actions that need administrator permission.
+//! shared and the identity clients approve. Inbound access is checked inside Server Sharing start.
 //! `install_printer_queue` is the client counterpart: it creates the Windows queue a shared printer
 //! prints through (issue #35).
 
@@ -17,13 +17,13 @@ use tauri::State;
 
 use crate::adapters::IppsServer;
 use crate::application::{
-    LegacyImport, PrintFailures, PrintJobTracker, QueueInstallation, RuntimeCoordinator, Setup,
-    SetupOutcome, Sharing, Startup,
+    LegacyImport, PrintFailures, PrintJobTracker, QueueInstallation, RuntimeCoordinator, Sharing,
+    Startup,
 };
-use crate::domain::{AppError, PrinterName, ServiceId, SetupAction};
+use crate::domain::{AppError, PrinterName, ServiceId};
 use crate::ipc::dto::{
     AppErrorDto, ClientQueueDto, LegacyImportReportDto, LocalPrintersDto, PrintFailureDto,
-    RuntimeStatusDto, ServerIdentityDto, SetupOutcomeDto, StartupStatusDto,
+    RuntimeStatusDto, ServerIdentityDto, StartupStatusDto,
 };
 
 /// Runtime state shared by every command.
@@ -34,9 +34,6 @@ pub type SharedSharing = Arc<Sharing>;
 
 /// The IPPS endpoint clients connect to.
 pub type SharedEndpoint = Arc<IppsServer>;
-
-/// Setup actions that may need administrator permission.
-pub type SharedSetup = Arc<Setup>;
 
 /// The latest failed print attempt, as the window reports it.
 pub type SharedPrintFailures = Arc<PrintFailures>;
@@ -286,48 +283,6 @@ pub async fn set_startup_enabled(
         Err(error) => {
             log::warn!(
                 "command=set_startup_enabled code={} message={}",
-                error.code_str(),
-                error
-            );
-            Err(AppErrorDto::from(&error))
-        }
-    }
-}
-
-/// Lets clients reach the sharing endpoint through the Windows firewall.
-///
-/// One of the two actions the shell asks the operating system for that need administrator permission
-/// (ADR 0001, ADR 0005); everything else a user does while running the app stays unprivileged.
-#[tauri::command]
-pub async fn allow_sharing_access(
-    setup: State<'_, SharedSetup>,
-) -> Result<SetupOutcomeDto, AppErrorDto> {
-    let setup = Arc::clone(setup.inner());
-    // The prompt and the helper run for as long as the user takes to decide, so they stay off the
-    // async runtime.
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
-        setup.request(SetupAction::AllowInboundSharing)
-    })
-    .await
-    .map_err(|error| {
-        AppErrorDto::from(&AppError::internal(format!(
-            "the setup action did not finish: {error}"
-        )))
-    })?;
-
-    match outcome {
-        Ok(outcome) => {
-            log::info!(
-                "command=allow_sharing_access elevated={} code=ok",
-                outcome == SetupOutcome::Elevated
-            );
-            Ok(SetupOutcomeDto {
-                elevated: outcome == SetupOutcome::Elevated,
-            })
-        }
-        Err(error) => {
-            log::warn!(
-                "command=allow_sharing_access code={} message={}",
                 error.code_str(),
                 error
             );

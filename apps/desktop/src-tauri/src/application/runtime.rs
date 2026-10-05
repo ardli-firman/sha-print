@@ -113,6 +113,11 @@ pub trait RuntimeService: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Completes potentially interactive startup prerequisites before the service start deadline.
+    async fn prepare(&self) -> Result<(), AppError> {
+        Ok(())
+    }
+
     /// Runs the service until cancelled, reporting readiness through the context.
     async fn run(&self, context: ServiceContext) -> Result<(), AppError>;
 

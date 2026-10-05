@@ -129,6 +129,7 @@ pub struct RuntimeCoordinator {
     registry: Arc<StatusRegistry>,
     services: BTreeMap<ServiceId, Arc<dyn RuntimeService>>,
     running: Mutex<BTreeMap<ServiceId, RunningService>>,
+    start_gates: BTreeMap<ServiceId, tokio::sync::Mutex<()>>,
     start_timeout: Duration,
     shutdown_timeout: Duration,
 }
@@ -150,6 +151,11 @@ impl RuntimeCoordinator {
 
         Self {
             registry: Arc::new(StatusRegistry::new(&ids)),
+            start_gates: ids
+                .iter()
+                .copied()
+                .map(|id| (id, tokio::sync::Mutex::new(())))
+                .collect(),
             services: supervised,
             running: Mutex::new(BTreeMap::new()),
             start_timeout: START_TIMEOUT,
@@ -211,9 +217,25 @@ impl RuntimeCoordinator {
     /// Starts one service and waits until it reports ready.
     pub async fn start(&self, id: ServiceId) -> Result<(), AppError> {
         let service = self.service(id)?;
+        // Reject a second start while the first is deciding at UAC, rather than queueing another
+        // prompt after a denial. An unrelated service may still start in the meantime.
+        let gate = self.start_gates.get(&id).ok_or_else(|| {
+            AppError::unknown_service(format!("unknown service '{}'", id.as_str()))
+        })?;
+        let _start_guard = gate.try_lock().map_err(|_| {
+            AppError::invalid_state(format!("service '{}' is already starting", id.as_str()))
+        })?;
+        if self.state(id)?.is_live() {
+            return Err(AppError::invalid_state(format!(
+                "service '{}' is already active",
+                id.as_str()
+            )));
+        }
 
         // A precondition the user can still fix (no shared printers selected, for example) is
         // reported with its own code and leaves the lifecycle untouched.
+        service.preflight()?;
+        service.prepare().await?;
         service.preflight()?;
 
         // A failed service is reset first, so a retry from the UI is a single action.

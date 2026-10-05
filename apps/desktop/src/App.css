@@ -640,8 +640,7 @@
   font-size: 1.15rem;
 }
 
-.empty-state strong,
-.firewall-action strong {
+.empty-state strong {
   font-size: 0.86rem;
   font-weight: 650;
 }
@@ -650,21 +649,18 @@
   margin-top: 0.1rem;
 }
 
-.identity-heading,
-.firewall-action {
+.identity-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
 }
 
-.identity-heading > div,
-.firewall-action > div {
+.identity-heading > div {
   min-width: 0;
 }
 
-.identity-heading .hint,
-.firewall-action .hint {
+.identity-heading .hint {
   margin-top: 0.2rem;
 }
 
@@ -679,12 +675,6 @@
   margin: -0.25rem 0 0;
   color: var(--success);
   font-size: 0.78rem;
-}
-
-.firewall-action {
-  align-items: center;
-  padding-top: 0.8rem;
-  border-top: 1px solid var(--border);
 }
 
 .identity {

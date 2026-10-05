@@ -142,13 +142,6 @@ pub struct ServerIdentityDto {
     pub port: u16,
 }
 
-/// What a setup action did. Never carries credentials or permission tokens.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SetupOutcomeDto {
-    /// Whether administrator permission was requested for the action.
-    pub elevated: bool,
-}
-
 /// Whether ShaPrint starts with this user's Windows login.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartupStatusDto {
@@ -336,12 +329,6 @@ mod tests {
             payload,
             serde_json::json!({ "fingerprint": "AA:BB", "port": 8631 })
         );
-    }
-
-    #[test]
-    fn setup_outcome_payload_shape_is_stable() {
-        let payload = serde_json::to_value(SetupOutcomeDto { elevated: true }).expect("serializes");
-        assert_eq!(payload, serde_json::json!({ "elevated": true }));
     }
 
     #[test]

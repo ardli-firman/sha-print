@@ -1,6 +1,7 @@
 # IPPS sharing endpoint and server identity
 
 The document-format and RAW spooler submission decisions below are replaced by ADR 0010.
+The separate inbound-firewall action and unprivileged start described below are replaced by ADR 0013.
 
 ---
 status: accepted

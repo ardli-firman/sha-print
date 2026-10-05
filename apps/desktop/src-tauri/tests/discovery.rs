@@ -21,7 +21,10 @@ use shaprint_desktop::application::{
     Discovery, DiscoveryBrowser, DiscoveryService, RuntimeCoordinator, ServerAdvertiser,
 };
 use shaprint_desktop::domain::{NearbyServer, PrinterName, ServiceId};
-use support::{free_port, free_udp_port, printer_names, sharing_runtime_on, temporary_directory};
+use support::{
+    allowed_inbound_setup, free_port, free_udp_port, printer_names, sharing_runtime_on,
+    temporary_directory,
+};
 
 /// How long the test advertisement stays valid.
 ///
@@ -96,6 +99,7 @@ async fn start_server(
             sharing,
             Arc::clone(&endpoint),
             Arc::clone(&advertiser) as Arc<dyn ServerAdvertiser>,
+            allowed_inbound_setup(),
         ),
     )]));
     runtime

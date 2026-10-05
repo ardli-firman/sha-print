@@ -5,8 +5,8 @@
 //! (#31, #32; ADR 0003). While it runs it also advertises the same queues on the local network, so
 //! a client can find the server without being told its address (#36; ADR 0004).
 //!
-//! Sharing never starts on its own: the user controls it through the shell's lifecycle commands,
-//! and the endpoint only exists while the service runs.
+//! The user starts sharing explicitly; a previously enabled service is restored at login.
+//! The endpoint only exists while the service runs.
 
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ use async_trait::async_trait;
 
 use crate::adapters::ipps::IppsServer;
 use crate::application::{
-    RuntimeService, ServerAdvertiser, ServiceContext, SharedPrinterSource, Sharing,
+    RuntimeService, ServerAdvertiser, ServiceContext, Setup, SharedPrinterSource, Sharing,
 };
 use crate::domain::{AppError, ServiceId};
 
@@ -23,6 +23,7 @@ pub struct ServerSharingService {
     sharing: Arc<Sharing>,
     endpoint: Arc<IppsServer>,
     advertiser: Arc<dyn ServerAdvertiser>,
+    setup: Arc<Setup>,
 }
 
 impl ServerSharingService {
@@ -30,11 +31,13 @@ impl ServerSharingService {
         sharing: Arc<Sharing>,
         endpoint: Arc<IppsServer>,
         advertiser: Arc<dyn ServerAdvertiser>,
+        setup: Arc<Setup>,
     ) -> Self {
         Self {
             sharing,
             endpoint,
             advertiser,
+            setup,
         }
     }
 }
@@ -70,6 +73,14 @@ impl RuntimeService for ServerSharingService {
                 "select at least one printer to share before starting",
             ));
         }
+        Ok(())
+    }
+
+    async fn prepare(&self) -> Result<(), AppError> {
+        let setup = Arc::clone(&self.setup);
+        tokio::task::spawn_blocking(move || setup.ensure_inbound_sharing())
+            .await
+            .map_err(|_| AppError::internal("Clients cannot connect: the inbound access check did not finish. Try starting Server Sharing again."))??;
         Ok(())
     }
 
@@ -146,10 +157,10 @@ mod tests {
     use crate::adapters::identity::ServerIdentity;
     use crate::adapters::ipps::NetworkChannel;
     use crate::application::{
-        Advertisement, LocalPrinterCatalog, PrintFailures, PrintJob, PrintJobSubmitter,
-        RuntimeCoordinator,
+        Advertisement, ElevationBroker, LocalPrinterCatalog, PrintFailures, PrintJob,
+        PrintJobSubmitter, RuntimeCoordinator,
     };
-    use crate::domain::{PrinterName, ServiceState};
+    use crate::domain::{ClientQueueRequest, PrinterName, ServiceState, SetupAction, SetupFailure};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     use std::time::Duration;
@@ -270,6 +281,23 @@ mod tests {
         }
     }
 
+    struct AllowedAccess;
+    impl ElevationBroker for AllowedAccess {
+        fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+            Ok(true)
+        }
+        fn elevate(&self, _action: SetupAction) -> Result<(), SetupFailure> {
+            panic!("already allowed")
+        }
+        fn install_queue(&self, _request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+            panic!("not installing")
+        }
+    }
+
+    fn allowed_setup() -> Arc<Setup> {
+        Arc::new(Setup::new(Arc::new(AllowedAccess)))
+    }
+
     /// The coordinator, the sharing configuration, and what the network was told.
     fn coordinator(
         queues: &[&str],
@@ -291,6 +319,7 @@ mod tests {
             Arc::clone(&sharing),
             Arc::clone(&endpoint),
             advertiser,
+            allowed_setup(),
         ))]);
         (runtime, sharing, endpoint)
     }
@@ -331,7 +360,7 @@ mod tests {
         }
     }
 
-    fn service(queues: &[&str]) -> (ServerSharingService, Arc<Sharing>) {
+    fn service(queues: &[&str], setup: Arc<Setup>) -> (ServerSharingService, Arc<Sharing>) {
         let catalog = Arc::new(FakeCatalog(
             queues
                 .iter()
@@ -350,9 +379,286 @@ mod tests {
         ));
         let (advertiser, _recorded) = FakeAdvertiser::available();
         (
-            ServerSharingService::new(Arc::clone(&sharing), endpoint, advertiser),
+            ServerSharingService::new(Arc::clone(&sharing), endpoint, advertiser, setup),
             sharing,
         )
+    }
+
+    #[tokio::test]
+    async fn starting_sharing_with_existing_client_access_does_not_request_administrator_permission(
+    ) {
+        use crate::application::{ElevationBroker, Setup};
+        use crate::domain::{ClientQueueRequest, SetupAction, SetupFailure};
+
+        struct AllowedBroker(AtomicUsize);
+        impl ElevationBroker for AllowedBroker {
+            fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+                Ok(true)
+            }
+            fn elevate(&self, _action: SetupAction) -> Result<(), SetupFailure> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            fn install_queue(&self, _request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+                Ok(())
+            }
+        }
+
+        let broker = Arc::new(AllowedBroker(AtomicUsize::new(0)));
+        let (service, sharing) = service(
+            &["HP LaserJet"],
+            Arc::new(Setup::new(Arc::clone(&broker) as Arc<dyn ElevationBroker>)),
+        );
+        sharing
+            .set_shared(vec![name("HP LaserJet")])
+            .await
+            .expect("selects queue");
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(service)]);
+
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("sharing starts");
+        assert_eq!(broker.0.load(Ordering::SeqCst), 0);
+        runtime.stop(ServiceId::ServerSharing).await.expect("stops");
+    }
+
+    #[tokio::test]
+    async fn starting_sharing_requests_missing_access_then_allows_clients_to_connect() {
+        use crate::application::{ElevationBroker, Setup};
+        use crate::domain::{ClientQueueRequest, SetupAction, SetupFailure};
+
+        struct Broker {
+            allowed: std::sync::atomic::AtomicBool,
+            prompts: AtomicUsize,
+        }
+        impl ElevationBroker for Broker {
+            fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+                Ok(self.allowed.load(Ordering::SeqCst))
+            }
+            fn elevate(&self, action: SetupAction) -> Result<(), SetupFailure> {
+                assert_eq!(action, SetupAction::AllowInboundSharing);
+                self.prompts.fetch_add(1, Ordering::SeqCst);
+                self.allowed.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+            fn install_queue(&self, _request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+                Ok(())
+            }
+        }
+        let broker = Arc::new(Broker {
+            allowed: std::sync::atomic::AtomicBool::new(false),
+            prompts: AtomicUsize::new(0),
+        });
+        let (service, sharing) = service(
+            &["HP LaserJet"],
+            Arc::new(Setup::new(Arc::clone(&broker) as Arc<dyn ElevationBroker>)),
+        );
+        sharing
+            .set_shared(vec![name("HP LaserJet")])
+            .await
+            .expect("selects queue");
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(service)]);
+
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("sharing starts after approval");
+        assert_eq!(broker.prompts.load(Ordering::SeqCst), 1);
+        runtime.stop(ServiceId::ServerSharing).await.expect("stops");
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("sharing restarts without prompt");
+        assert_eq!(broker.prompts.load(Ordering::SeqCst), 1);
+        runtime.stop(ServiceId::ServerSharing).await.expect("stops");
+    }
+
+    #[tokio::test]
+    async fn denied_inbound_access_keeps_sharing_stopped_and_can_be_retried() {
+        use crate::application::{ElevationBroker, Setup};
+        use crate::domain::{
+            ClientQueueRequest, ErrorCode, SetupAction, SetupFailure, SetupFailureKind,
+        };
+
+        struct Broker {
+            allowed: std::sync::atomic::AtomicBool,
+            prompts: AtomicUsize,
+        }
+        impl ElevationBroker for Broker {
+            fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+                Ok(self.allowed.load(Ordering::SeqCst))
+            }
+            fn elevate(&self, _action: SetupAction) -> Result<(), SetupFailure> {
+                if self.prompts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(SetupFailure::new(
+                        SetupFailureKind::PermissionDenied,
+                        "declined",
+                    ));
+                }
+                self.allowed.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+            fn install_queue(&self, _request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+                Ok(())
+            }
+        }
+        let broker = Arc::new(Broker {
+            allowed: std::sync::atomic::AtomicBool::new(false),
+            prompts: AtomicUsize::new(0),
+        });
+        let (service, sharing) = service(
+            &["HP LaserJet"],
+            Arc::new(Setup::new(Arc::clone(&broker) as Arc<dyn ElevationBroker>)),
+        );
+        sharing
+            .set_shared(vec![name("HP LaserJet")])
+            .await
+            .expect("selects queue");
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(service)]);
+
+        let error = runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect_err("denied");
+        assert_eq!(error.code(), ErrorCode::Unsupported);
+        assert!(error.message().contains("Clients cannot connect"));
+        assert_eq!(
+            runtime
+                .status()
+                .service(ServiceId::ServerSharing)
+                .unwrap()
+                .state(),
+            ServiceState::Stopped
+        );
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("retry starts after approval");
+        assert_eq!(broker.prompts.load(Ordering::SeqCst), 2);
+        runtime.stop(ServiceId::ServerSharing).await.expect("stops");
+    }
+
+    #[tokio::test]
+    async fn concurrent_starts_do_not_open_two_administrator_prompts() {
+        use crate::domain::{ErrorCode, SetupFailureKind};
+        use std::sync::mpsc;
+
+        struct WaitingBroker {
+            attempts: AtomicUsize,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+        impl ElevationBroker for WaitingBroker {
+            fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+                Ok(false)
+            }
+            fn elevate(&self, _action: SetupAction) -> Result<(), SetupFailure> {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
+                self.release
+                    .lock()
+                    .expect("release lock")
+                    .recv()
+                    .expect("released");
+                Err(SetupFailure::new(
+                    SetupFailureKind::PermissionDenied,
+                    "declined",
+                ))
+            }
+            fn install_queue(&self, _request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+                panic!("not installing a printer queue")
+            }
+        }
+        let (release, receiver) = mpsc::channel();
+        let broker = Arc::new(WaitingBroker {
+            attempts: AtomicUsize::new(0),
+            release: Mutex::new(receiver),
+        });
+        let (service, sharing) = service(
+            &["HP LaserJet"],
+            Arc::new(Setup::new(Arc::clone(&broker) as Arc<dyn ElevationBroker>)),
+        );
+        sharing
+            .set_shared(vec![name("HP LaserJet")])
+            .await
+            .expect("selects queue");
+        let runtime = Arc::new(RuntimeCoordinator::new(vec![Arc::new(service)]));
+        let first = tokio::spawn({
+            let runtime = Arc::clone(&runtime);
+            async move { runtime.start(ServiceId::ServerSharing).await }
+        });
+        until(|| broker.attempts.load(Ordering::SeqCst) == 1).await;
+
+        let duplicate = runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect_err("already starting");
+        assert_eq!(duplicate.code(), ErrorCode::InvalidState);
+        assert_eq!(broker.attempts.load(Ordering::SeqCst), 1);
+        release.send(()).expect("releases first prompt");
+        first
+            .await
+            .expect("first task joins")
+            .expect_err("first prompt denied");
+        assert_eq!(broker.attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_firewall_setup_does_not_start_sharing_and_allows_retry() {
+        use crate::application::{ElevationBroker, Setup};
+        use crate::domain::{ClientQueueRequest, ErrorCode, SetupAction, SetupFailure};
+
+        struct Broker {
+            allowed: std::sync::atomic::AtomicBool,
+            attempts: AtomicUsize,
+        }
+        impl ElevationBroker for Broker {
+            fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+                Ok(self.allowed.load(Ordering::SeqCst))
+            }
+            fn elevate(&self, _action: SetupAction) -> Result<(), SetupFailure> {
+                if self.attempts.fetch_add(1, Ordering::SeqCst) > 0 {
+                    self.allowed.store(true, Ordering::SeqCst);
+                }
+                Ok(())
+            }
+            fn install_queue(&self, _request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+                Ok(())
+            }
+        }
+        let broker = Arc::new(Broker {
+            allowed: std::sync::atomic::AtomicBool::new(false),
+            attempts: AtomicUsize::new(0),
+        });
+        let (service, sharing) = service(
+            &["HP LaserJet"],
+            Arc::new(Setup::new(Arc::clone(&broker) as Arc<dyn ElevationBroker>)),
+        );
+        sharing
+            .set_shared(vec![name("HP LaserJet")])
+            .await
+            .expect("selects queue");
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(service)]);
+
+        let error = runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect_err("rules still missing");
+        assert_eq!(error.code(), ErrorCode::InvalidState);
+        assert!(error.message().contains("Clients cannot connect"));
+        assert_eq!(
+            runtime
+                .status()
+                .service(ServiceId::ServerSharing)
+                .unwrap()
+                .state(),
+            ServiceState::Stopped
+        );
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("retry repairs firewall");
+        assert_eq!(broker.attempts.load(Ordering::SeqCst), 2);
+        runtime.stop(ServiceId::ServerSharing).await.expect("stops");
     }
 
     #[tokio::test]
@@ -488,7 +794,7 @@ mod tests {
 
     #[tokio::test]
     async fn sharing_cannot_start_before_the_user_selects_a_queue() {
-        let (service, sharing) = service(&["HP LaserJet"]);
+        let (service, sharing) = service(&["HP LaserJet"], allowed_setup());
 
         let error = service.preflight().expect_err("rejected");
 
