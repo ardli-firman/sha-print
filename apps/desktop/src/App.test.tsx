@@ -590,6 +590,21 @@ describe("guided printer setup", () => {
     expect(await screen.findByRole("heading", { name: "Printer installed" })).toBeTruthy();
     expect(screen.getByText("Office Laser (ShaPrint 192.0.2.10-8631)")).toBeTruthy();
     expect(screen.getByText(/Choose this printer from any Windows print dialog/)).toBeTruthy();
+
+    // Verifies listRecognisedClientQueues was automatically refreshed upon installation
+    expect(serverConnections.listRecognisedClientQueues).toHaveBeenCalled();
+
+    // When the user clicks Done and closes the dialog, the newly installed queue is visible in My printers
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([
+      {
+        queue_name: "Office Laser (ShaPrint 192.0.2.10-8631)",
+        server_address: review.address,
+        printer_name: "Office Laser",
+      },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(await screen.findByText("Office Laser (ShaPrint 192.0.2.10-8631)")).toBeTruthy();
   });
 
   it("skips repeat approval when server identity matches saved approval (trusted repeat run)", async () => {
