@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import {
   AddPrinterDialog,
   NearbyServersPanel,
-  ServerConnectionsPanel,
   useNearbyServers,
   useServerConnections,
 } from "@/features/client-connection";
@@ -191,14 +190,16 @@ function App() {
             ) : null}
 
             {page === "connect" ? (
-              <>
-                <NearbyServersPanel
-                  nearby={nearby}
-                  connections={connections}
-                  onOpenWizard={() => setAddPrinterOpen(true)}
-                />
-                <ServerConnectionsPanel connections={connections} />
-              </>
+              <NearbyServersPanel
+                nearby={nearby}
+                connections={connections}
+                onOpenWizard={(address) => {
+                  setAddPrinterOpen(true);
+                  if (address) {
+                    void connections.reviewAddress(address);
+                  }
+                }}
+              />
             ) : null}
 
             {page === "settings" ? (
