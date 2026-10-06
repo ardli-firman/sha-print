@@ -1,5 +1,5 @@
 import { useId, useMemo, useState } from "react";
-import { Copy, Printer, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { Copy, KeyRound, Play, Printer, RefreshCw, Search, ShieldCheck, Square } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,20 +7,39 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import type { PrinterSharingController } from "../hooks/usePrinterSharing";
+import type { RuntimeStatusController } from "@/features/runtime-status/hooks/useRuntimeStatus";
+import type { NetworkChannelController } from "@/features/network-channel/hooks/useNetworkChannel";
 
 export interface PrinterSharingPanelProps {
   sharing: PrinterSharingController;
+  runtime?: RuntimeStatusController;
+  networkChannel?: NetworkChannelController;
 }
 
-/** The server side of sharing: local queues and certificate identity. */
-export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
+/** The server side of sharing: local queues, start/stop intent, and certificate identity. */
+export function PrinterSharingPanel({
+  sharing,
+  runtime,
+  networkChannel,
+}: PrinterSharingPanelProps) {
   const { printers, identity, busy, error, toggle, refresh, dismissError } = sharing;
   const [copyMessage, setCopyMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [showChannelPrompt, setShowChannelPrompt] = useState(false);
+  const [channelInput, setChannelInput] = useState("");
+  const [channelError, setChannelError] = useState<string | null>(null);
   const searchId = useId();
 
   const sharedCount = printers?.filter((printer) => printer.shared).length ?? 0;
   const changing = busy !== null;
+
+  const serverSharingService = runtime?.status?.services.find(
+    (s: { id: string }) => s.id === "server-sharing",
+  );
+  const isSharingRunning = serverSharingService?.state === "running";
+  const isTransitioning =
+    serverSharingService?.state === "starting" ||
+    serverSharingService?.state === "stopping";
 
   const filteredPrinters = useMemo(() => {
     if (!printers) return [];
@@ -43,9 +62,46 @@ export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
     }
   }
 
+  async function handleStartSharingClick() {
+    if (!runtime) return;
+
+    if (networkChannel && networkChannel.configured === false) {
+      setShowChannelPrompt(true);
+      return;
+    }
+
+    await runtime.start("server-sharing");
+  }
+
+  async function handleStopSharingClick() {
+    if (!runtime) return;
+    await runtime.stop("server-sharing");
+  }
+
+  async function handleSaveChannelAndStartSharing(e: React.FormEvent) {
+    e.preventDefault();
+    if (!channelInput.trim() || !networkChannel || !runtime) return;
+
+    setChannelError(null);
+    const saved = await networkChannel.save(channelInput.trim());
+    if (saved) {
+      setChannelInput("");
+      setShowChannelPrompt(false);
+      await runtime.start("server-sharing");
+    } else {
+      setChannelError("Could not save Network Channel. Check error details below.");
+    }
+  }
+
+  function handleCancelChannelPrompt() {
+    setChannelInput("");
+    setChannelError(null);
+    setShowChannelPrompt(false);
+  }
+
   return (
     <Card
-      className="panel sharing-panel"
+      className="panel sharing-panel space-y-4"
       aria-labelledby="sharing-heading"
       data-has-identity={identity ? "true" : "false"}
     >
@@ -63,18 +119,97 @@ export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
             </p>
           </div>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => void refresh()}
-          disabled={changing}
-          className="text-xs h-8"
-        >
-          <RefreshCw size={14} className={changing ? "animate-spin mr-1.5" : "mr-1.5"} aria-hidden="true" />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {runtime ? (
+            isSharingRunning ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void handleStopSharingClick()}
+                disabled={isTransitioning}
+                aria-label="Stop sharing"
+                className="text-xs h-8 text-destructive hover:text-destructive"
+              >
+                <Square size={13} className="mr-1 fill-destructive" aria-hidden="true" />
+                Stop sharing
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                onClick={() => void handleStartSharingClick()}
+                disabled={isTransitioning || sharedCount === 0}
+                aria-label="Start sharing"
+                className="text-xs h-8"
+              >
+                <Play size={13} className="mr-1 fill-current" aria-hidden="true" />
+                Start sharing
+              </Button>
+            )
+          ) : null}
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => void refresh()}
+            disabled={changing}
+            className="text-xs h-8"
+            aria-label="Refresh local printers"
+          >
+            <RefreshCw size={14} className={changing ? "animate-spin mr-1.5" : "mr-1.5"} aria-hidden="true" />
+            Refresh
+          </Button>
+        </div>
       </div>
+
+      {showChannelPrompt ? (
+        <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3" role="region" aria-label="Set Network Channel before sharing">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <KeyRound size={16} className="text-primary" />
+            <span>Set Network Channel before sharing</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            A shared Network Channel is required so only authorised clients can submit print jobs.
+          </p>
+          {channelError ? (
+            <p className="text-xs text-destructive font-medium">{channelError}</p>
+          ) : null}
+          <form onSubmit={(e) => void handleSaveChannelAndStartSharing(e)} className="space-y-3">
+            <Input
+              type="password"
+              placeholder="Enter shared secret"
+              value={channelInput}
+              onChange={(e) => setChannelInput(e.target.value)}
+              aria-label="Network Channel secret"
+              className="text-xs h-8"
+              autoFocus
+            />
+            <div className="flex items-center gap-2 justify-end">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleCancelChannelPrompt}
+                className="text-xs h-8"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="default"
+                size="sm"
+                disabled={!channelInput.trim()}
+                className="text-xs h-8"
+              >
+                Save & Start sharing
+              </Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       {error ? (
         <p className="banner sharing-error" role="alert">
@@ -163,7 +298,9 @@ export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
             <p className="sharing-count text-xs text-muted-foreground mt-1 px-1">
               {sharedCount === 0
                 ? "Select at least one queue, then start server sharing."
-                : "Selected queues are available while server sharing is running."}
+                : isSharingRunning
+                  ? "Selected queues are actively being shared with clients."
+                  : "Selected queues will be shared when you click Start sharing."}
             </p>
           </div>
         ) : null}
@@ -210,7 +347,6 @@ export function PrinterSharingPanel({ sharing }: PrinterSharingPanelProps) {
               {copyMessage}
             </p>
           ) : null}
-
         </div>
       ) : null}
     </Card>

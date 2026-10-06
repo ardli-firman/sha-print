@@ -19,7 +19,10 @@ pub use error::{AppError, ErrorCode};
 pub use failure::{JobPath, PrintFailure};
 pub use identity::CertificateFingerprint;
 pub use printer::{PrinterName, SharedPrinters};
-pub use queue::{ClientQueueName, ClientQueueRequest};
+pub use queue::{
+    ClientQueueName, ClientQueueRequest, RecognisedClientQueue, SpoolerRecord,
+    SpoolerRecordClassification,
+};
 pub use service::{RuntimeStatus, ServiceId, ServiceState, ServiceStatus};
 pub use setup::{SetupAction, SetupFailure, SetupFailureKind};
 

@@ -323,6 +323,45 @@ pub async fn install_printer_queue(
     }
 }
 
+/// Opens Windows Printers & scanners settings or control panel through a constrained desktop action.
+#[tauri::command]
+pub async fn open_printers_settings() -> Result<(), AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(|| {
+        #[cfg(windows)]
+        {
+            use std::process::Command;
+            // First try modern Windows Settings uri
+            let modern = Command::new("cmd")
+                .args(["/c", "start", "ms-settings:printers"])
+                .status();
+            if let Ok(status) = modern {
+                if status.success() {
+                    return Ok(());
+                }
+            }
+            // Fallback to classic control panel printers folder
+            let classic = Command::new("control.exe")
+                .arg("printers")
+                .status()
+                .map_err(|e| AppError::internal(format!("cannot open Windows printers: {e}")))?;
+            if classic.success() {
+                Ok(())
+            } else {
+                Err(AppError::internal("cannot open Windows printers dialog"))
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            Err(AppError::unsupported(
+                "Windows settings is only available on Windows",
+            ))
+        }
+    })
+    .await
+    .map_err(|e| AppErrorDto::from(&AppError::internal(format!("task panicked: {e}"))))?
+    .map_err(|e| AppErrorDto::from(&e))
+}
+
 /// Turns IPC strings into validated printer names.
 fn parse_names(printers: &[String]) -> Result<Vec<PrinterName>, AppError> {
     printers

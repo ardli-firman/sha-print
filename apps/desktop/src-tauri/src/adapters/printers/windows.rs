@@ -2,36 +2,32 @@
 //!
 //! `EnumPrintersW` and spooler submission are blocking calls, so they run on blocking workers.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use windows_sys::Win32::Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER};
-use windows_sys::Win32::Graphics::Printing::{EnumPrintersW, PRINTER_ENUM_LOCAL, PRINTER_INFO_4W};
+use windows_sys::Win32::Graphics::Printing::{EnumPrintersW, PRINTER_ENUM_LOCAL, PRINTER_INFO_2W};
 
-use crate::application::LocalPrinterCatalog;
-use crate::domain::{AppError, PrinterName};
+use crate::application::{DestinationAwarePrinterCatalog, LocalPrinterCatalog, SpoolerReader};
+use crate::domain::{AppError, PrinterName, RecognisedClientQueue, SpoolerRecord};
 
 use crate::application::{PrintJob, PrintJobSubmitter};
 
-/// Spooler level 4 returns queue names; the driver and port details the MVP does not use would need
-/// level 2 and a much larger buffer.
-const PRINTER_INFO_LEVEL: u32 = 4;
+/// Spooler level 2 returns queue names, driver, and port/destination details needed to
+/// distinguish native ShaPrint client queues from eligible local queues.
+const PRINTER_INFO_LEVEL: u32 = 2;
 
 /// Upper bound on the spooler's answer, so a corrupt size cannot make the shell allocate wildly.
 const MAX_ENUMERATION_BYTES: u32 = 1 << 20;
 
-/// Lists the local printer queues the spooler reports.
+/// Reads raw records directly from the Windows print spooler using Level 2 enumeration.
 #[derive(Debug, Default)]
-pub struct WindowsPrinterCatalog;
-
-impl WindowsPrinterCatalog {
-    pub fn new() -> Self {
-        Self
-    }
-}
+pub struct WindowsSpoolerReader;
 
 #[async_trait]
-impl LocalPrinterCatalog for WindowsPrinterCatalog {
-    async fn local_printers(&self) -> Result<Vec<PrinterName>, AppError> {
-        tokio::task::spawn_blocking(enumerate_local_queues)
+impl SpoolerReader for WindowsSpoolerReader {
+    async fn read_spooler_records(&self) -> Result<Vec<SpoolerRecord>, AppError> {
+        tokio::task::spawn_blocking(enumerate_local_records)
             .await
             .map_err(|error| {
                 AppError::internal(format!("printer enumeration did not finish: {error}"))
@@ -39,15 +35,45 @@ impl LocalPrinterCatalog for WindowsPrinterCatalog {
     }
 }
 
-fn enumerate_local_queues() -> Result<Vec<PrinterName>, AppError> {
+/// Lists the eligible local printer queues the spooler reports, excluding native ShaPrint client queues.
+pub struct WindowsPrinterCatalog {
+    inner: DestinationAwarePrinterCatalog,
+}
+
+impl Default for WindowsPrinterCatalog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WindowsPrinterCatalog {
+    pub fn new() -> Self {
+        Self {
+            inner: DestinationAwarePrinterCatalog::new(Arc::new(WindowsSpoolerReader)),
+        }
+    }
+}
+
+#[async_trait]
+impl LocalPrinterCatalog for WindowsPrinterCatalog {
+    async fn local_printers(&self) -> Result<Vec<PrinterName>, AppError> {
+        self.inner.local_printers().await
+    }
+
+    async fn recognised_client_queues(&self) -> Result<Vec<RecognisedClientQueue>, AppError> {
+        self.inner.recognised_client_queues().await
+    }
+}
+
+fn enumerate_local_records() -> Result<Vec<SpoolerRecord>, AppError> {
     let needed = required_bytes()?;
     if needed == 0 {
         return Ok(Vec::new());
     }
 
-    let stride = std::mem::size_of::<PRINTER_INFO_4W>();
+    let stride = std::mem::size_of::<PRINTER_INFO_2W>();
     let entries = (needed as usize).div_ceil(stride);
-    let mut buffer: Vec<PRINTER_INFO_4W> = vec![PRINTER_INFO_4W::default(); entries];
+    let mut buffer: Vec<PRINTER_INFO_2W> = vec![PRINTER_INFO_2W::default(); entries];
     let mut capacity = (entries * stride) as u32;
     let mut returned = 0u32;
 
@@ -73,19 +99,15 @@ fn enumerate_local_queues() -> Result<Vec<PrinterName>, AppError> {
 
     // Safety: the spooler filled the first `returned` entries of `buffer`.
     let listed = unsafe { std::slice::from_raw_parts(buffer.as_ptr(), returned as usize) };
-    let mut queues = Vec::with_capacity(listed.len());
+    let mut records = Vec::with_capacity(listed.len());
     for entry in listed {
-        // Safety: the spooler points at a NUL-terminated name inside the buffer it filled.
+        // Safety: the spooler points at NUL-terminated strings inside the buffer it filled.
         let name = unsafe { wide_string(entry.pPrinterName) };
-        match PrinterName::parse(&name) {
-            Ok(name) => queues.push(name),
-            Err(_) => log::warn!("ignoring a local printer queue with an unusable name"),
-        }
+        let port = unsafe { wide_string(entry.pPortName) };
+        records.push(SpoolerRecord::new(name, port));
     }
 
-    queues.sort();
-    queues.dedup();
-    Ok(queues)
+    Ok(records)
 }
 
 /// Asks the spooler how much memory the listing needs.

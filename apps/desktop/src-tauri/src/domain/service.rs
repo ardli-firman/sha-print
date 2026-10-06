@@ -106,6 +106,7 @@ const fn can_transition(from: ServiceState, to: ServiceState) -> bool {
             | (Stopping, Stopped)
             | (Stopping, Failed)
             | (Failed, Starting)
+            | (Failed, Stopped)
     )
 }
 

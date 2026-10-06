@@ -114,6 +114,16 @@ export interface ClientQueue {
   uri: string;
 }
 
+/** A recognised ShaPrint client queue read from the current Windows spooler state. */
+export interface RecognisedClientQueue {
+  /** Exact queue name as it appears in the Windows spooler. */
+  queue_name: string;
+  /** Canonical host:port of the server that shares the printer. */
+  server_address: string;
+  /** Printer queue name on that server. */
+  printer_name: string;
+}
+
 const KNOWN_ERROR_CODES: Record<string, true> = Object.fromEntries(
   ERROR_CODES.map((code) => [code, true]),
 );

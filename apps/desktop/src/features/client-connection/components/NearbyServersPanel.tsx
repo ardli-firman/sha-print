@@ -1,4 +1,4 @@
-import { Laptop, Plus, Radio, RefreshCw } from "lucide-react";
+import { Laptop, Plus, Radio } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import type { ServerConnectionsController } from "../hooks/useServerConnections"
 interface NearbyServersPanelProps {
   nearby: NearbyServersController;
   connections: ServerConnectionsController;
-  onOpenWizard?: () => void;
+  onOpenWizard?: (address?: string) => void;
 }
 
 /**
@@ -44,11 +44,11 @@ export function NearbyServersPanel({
           <Button
             type="button"
             size="sm"
-            onClick={onOpenWizard}
+            onClick={() => onOpenWizard()}
             className="gap-1.5 text-xs font-semibold shadow-xs"
           >
             <Plus size={15} />
-            <span>Guided setup</span>
+            <span>Add printer</span>
           </Button>
         )}
       </div>
@@ -76,7 +76,7 @@ export function NearbyServersPanel({
       {servers.length === 0 ? (
         <div className="connection-empty" role="status">
           <strong>Nothing found on this network.</strong>
-          <p>Enter a server address below to continue. Manual entry works across subnets.</p>
+          <p>Enter a server address manually using Add printer. Manual entry works across subnets.</p>
         </div>
       ) : (
         <ul
@@ -107,7 +107,7 @@ export function NearbyServersPanel({
                     </p>
                     <p className="hint mt-0.5 text-xs text-muted-foreground">
                       {server.printers.length > 0
-                        ? `Shares: ${server.printers.join(", ")}`
+                        ? `Advertised (unverified): ${server.printers.join(", ")}`
                         : "Shares no printer right now"}
                     </p>
                   </div>
@@ -117,17 +117,16 @@ export function NearbyServersPanel({
                     variant="outline"
                     size="sm"
                     className="shrink-0 text-xs h-8 sm:self-center self-start"
-                    onClick={() => void connections.reviewAddress(server.address)}
+                    onClick={() => {
+                      if (onOpenWizard) {
+                        onOpenWizard(server.address);
+                      } else {
+                        void connections.reviewAddress(server.address);
+                      }
+                    }}
                     disabled={connections.busy !== null}
                   >
-                    {connections.busy === "inspect" && connections.address === server.address ? (
-                      <>
-                        <RefreshCw size={13} className="animate-spin mr-1" />
-                        <span>Reviewing…</span>
-                      </>
-                    ) : (
-                      "Review identity"
-                    )}
+                    Connect
                   </Button>
                 </div>
               </li>

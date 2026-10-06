@@ -28,6 +28,7 @@ export interface ServerConnectionsController {
   approve: () => Promise<void>;
   query: () => Promise<void>;
   install: (printer: string) => Promise<void>;
+  reset: () => void;
 }
 
 export function useServerConnections(): ServerConnectionsController {
@@ -115,6 +116,15 @@ export function useServerConnections(): ServerConnectionsController {
     setError(null);
   }, []);
 
+  const reset = useCallback(() => {
+    setAddress("");
+    setReview(null);
+    setResult(null);
+    setInstalled(null);
+    setError(null);
+    setBusy(null);
+  }, []);
+
   return {
     address,
     setAddress: updateAddress,
@@ -128,5 +138,6 @@ export function useServerConnections(): ServerConnectionsController {
     approve,
     query,
     install,
+    reset,
   };
 }

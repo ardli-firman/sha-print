@@ -98,6 +98,32 @@ impl NetworkChannel {
         Ok(true)
     }
 
+    /// Synchronously configures in-memory channel verifier for test fixtures.
+    pub fn configure_sync(&self, channel: &str) -> Result<bool, AppError> {
+        if channel.is_empty() {
+            return Err(AppError::invalid_input("Network Channel cannot be empty"));
+        }
+        let mut salt = [0u8; 16];
+        SystemRandom::new()
+            .fill(&mut salt)
+            .map_err(|_| AppError::internal("cannot generate a Network Channel salt"))?;
+        let verifier = ChannelVerifier {
+            salt,
+            digest: channel_digest(&salt, channel),
+        };
+        let mut current = self
+            .verifier
+            .write()
+            .map_err(|_| AppError::internal("Network Channel state is unavailable"))?;
+        *current = Some(verifier);
+        let mut secret = self
+            .client_secret
+            .write()
+            .map_err(|_| AppError::internal("Network Channel state is unavailable"))?;
+        *secret = Some(channel.to_owned());
+        Ok(true)
+    }
+
     /// Whether a verifier is configured; does not reveal any credential material.
     pub fn is_configured(&self) -> bool {
         self.verifier
@@ -263,5 +289,11 @@ impl ChannelStore for NetworkChannel {
 
     async fn store(&self, channel: &str) -> Result<(), AppError> {
         self.configure(channel).await.map(|_| ())
+    }
+}
+
+impl crate::application::ChannelState for NetworkChannel {
+    fn is_configured(&self) -> bool {
+        NetworkChannel::is_configured(self)
     }
 }

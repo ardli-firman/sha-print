@@ -4,13 +4,14 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   AddPrinterDialog,
-  NearbyServersPanel,
-  ServerConnectionsPanel,
+  InstalledClientQueuesPanel,
   useNearbyServers,
+  useRecognisedClientQueues,
   useServerConnections,
 } from "@/features/client-connection";
 import { NetworkChannelPanel, useNetworkChannel } from "@/features/network-channel";
 import { PrintFailuresPanel, usePrintFailures } from "@/features/print-failures";
+import { SoftwareUpdatesPanel } from "@/features/updates/components/SoftwareUpdatesPanel";
 import { UpdateNotice, useUpdates } from "@/features/updates";
 import { PrinterSharingPanel, usePrinterSharing } from "@/features/printer-sharing";
 import {
@@ -27,21 +28,21 @@ import {
 import "./App.css";
 
 const NAV_ITEMS = [
-  { id: "share", label: "Share", icon: Printer },
-  { id: "connect", label: "Connect", icon: Network },
+  { id: "my-printers", label: "My printers", icon: Printer },
+  { id: "share", label: "Share printers", icon: Network },
   { id: "settings", label: "Settings", icon: Settings2 },
 ] as const;
 
 type PageId = (typeof NAV_ITEMS)[number]["id"];
 
 const PAGE_CONTENT: Record<PageId, { title: string; description: string }> = {
+  "my-printers": {
+    title: "My printers",
+    description: "Printers available to your Windows apps through ShaPrint.",
+  },
   share: {
     title: "Share printers",
     description: "Choose the printers this computer makes available over the network.",
-  },
-  connect: {
-    title: "Connect to a server",
-    description: "Add a printer shared from another ShaPrint computer.",
   },
   settings: {
     title: "Settings",
@@ -50,7 +51,7 @@ const PAGE_CONTENT: Record<PageId, { title: string; description: string }> = {
 };
 
 function App() {
-  const [page, setPage] = useState<PageId>("share");
+  const [page, setPage] = useState<PageId>("my-printers");
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [addPrinterOpen, setAddPrinterOpen] = useState(false);
 
@@ -61,6 +62,7 @@ function App() {
   const sharing = usePrinterSharing();
   const networkChannel = useNetworkChannel();
   const connections = useServerConnections();
+  const clientQueues = useRecognisedClientQueues();
   const nearby = useNearbyServers();
   const updates = useUpdates();
   const pageContent = PAGE_CONTENT[page];
@@ -143,9 +145,6 @@ function App() {
           </div>
 
           <div className="workspace-header-actions">
-            <Button type="button" variant="outline" onClick={() => void updates.check()} disabled={updates.checking}>
-              {updates.checking ? "Checking…" : "Check for Updates"}
-            </Button>
             <button
               type="button"
               onClick={() => setDiagnosticsOpen(true)}
@@ -172,6 +171,17 @@ function App() {
           <PrintFailuresPanel failures={failures} />
 
           <section className="page-stack" aria-label={pageContent.title}>
+            {page === "my-printers" ? (
+              <InstalledClientQueuesPanel
+                clientQueues={clientQueues}
+                onAddPrinter={() => setAddPrinterOpen(true)}
+                onReverifyServer={(serverAddress) => {
+                  setAddPrinterOpen(true);
+                  void connections.reviewAddress(serverAddress);
+                }}
+              />
+            ) : null}
+
             {page === "share" ? (
               <>
                 {networkChannel.configured === false ? (
@@ -186,18 +196,11 @@ function App() {
                     </Button>
                   </div>
                 ) : null}
-                <PrinterSharingPanel sharing={sharing} />
-              </>
-            ) : null}
-
-            {page === "connect" ? (
-              <>
-                <NearbyServersPanel
-                  nearby={nearby}
-                  connections={connections}
-                  onOpenWizard={() => setAddPrinterOpen(true)}
+                <PrinterSharingPanel
+                  sharing={sharing}
+                  runtime={runtime}
+                  networkChannel={networkChannel}
                 />
-                <ServerConnectionsPanel connections={connections} />
               </>
             ) : null}
 
@@ -205,6 +208,7 @@ function App() {
               <>
                 <NetworkChannelPanel settings={networkChannel} />
                 <StartupPanel startup={startup} />
+                <SoftwareUpdatesPanel updates={updates} />
                 <RuntimeStatusPanel runtime={runtime} />
                 <LegacyImportPanel legacy={legacy} />
               </>

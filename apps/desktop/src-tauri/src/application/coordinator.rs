@@ -295,8 +295,12 @@ impl RuntimeCoordinator {
 
         let entry = self.lock_running()?.remove(&id);
         let Some(entry) = entry else {
-            // No task is left to cancel (the service failed on its own); keep that visible.
-            self.settle_stopped(id);
+            // No task is left to cancel (the service failed on its own); settle to Stopped and persist.
+            self.registry.record(id, ServiceState::Stopped, "stopped");
+            if let Ok(service) = self.service(id) {
+                service.stopped();
+            }
+            log::info!("service stopped from non-running state id={}", id.as_str());
             return Ok(());
         };
 
@@ -430,9 +434,15 @@ impl RuntimeCoordinator {
         }
     }
 
-    /// Moves a live service to `stopped`; failures stay visible for the user to retry.
+    /// Moves a service to `stopped`; live services or failed services settle to stopped.
     fn settle_stopped(&self, id: ServiceId) {
-        if matches!(self.state(id), Ok(state) if state.is_live()) {
+        if matches!(
+            self.state(id),
+            Ok(ServiceState::Starting
+                | ServiceState::Running
+                | ServiceState::Stopping
+                | ServiceState::Failed)
+        ) {
             self.registry.record(id, ServiceState::Stopped, "stopped");
         }
     }
@@ -474,6 +484,9 @@ async fn supervise(
     match (outcome, state) {
         (Ok(()), Some(ServiceState::Stopping)) => {
             registry.record(id, ServiceState::Stopped, "stopped");
+        }
+        (_, Some(ServiceState::Stopped)) => {
+            // If the service was already explicitly stopped, preserve the Stopped state.
         }
         (Ok(()), _) => {
             log::warn!("service stopped unexpectedly id={}", id.as_str());

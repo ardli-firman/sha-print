@@ -37,6 +37,11 @@ pub trait ClientProxyState: Send + Sync + 'static {
     fn is_running(&self) -> bool;
 }
 
+/// Reports whether the client has configured a Network Channel for authorized print submission.
+pub trait ChannelState: Send + Sync + 'static {
+    fn is_configured(&self) -> bool;
+}
+
 /// Creates native Windows queues and reports where they send print jobs.
 pub trait QueueInstaller: Send + Sync + 'static {
     /// Whether this build has a real queue installer.
@@ -91,6 +96,7 @@ pub struct QueueInstallation {
     servers: Arc<dyn TrustedServerPrinters>,
     installer: Arc<dyn QueueInstaller>,
     proxy: Arc<dyn ClientProxyState>,
+    channel: Arc<dyn ChannelState>,
 }
 
 impl QueueInstallation {
@@ -99,12 +105,14 @@ impl QueueInstallation {
         servers: Arc<dyn TrustedServerPrinters>,
         installer: Arc<dyn QueueInstaller>,
         proxy: Arc<dyn ClientProxyState>,
+        channel: Arc<dyn ChannelState>,
     ) -> Self {
         Self {
             setup,
             servers,
             installer,
             proxy,
+            channel,
         }
     }
 
@@ -126,6 +134,11 @@ impl QueueInstallation {
         if !self.proxy.is_running() {
             return Err(AppError::invalid_state(
                 "the local print proxy is not running. Start it, then install the queue so the printer can reach the server.",
+            ));
+        }
+        if !self.channel.is_configured() {
+            return Err(AppError::invalid_state(
+                "a Network Channel is not configured. Set the shared Network Channel before installing the queue.",
             ));
         }
         let trusted = self.servers.shared_printers(server_address).await?;
@@ -332,11 +345,31 @@ mod tests {
         }
     }
 
+    struct FakeChannel {
+        configured: bool,
+    }
+
+    impl ChannelState for FakeChannel {
+        fn is_configured(&self) -> bool {
+            self.configured
+        }
+    }
+
     fn installation(
         broker: Arc<RecordingBroker>,
         servers: Arc<FakeServers>,
         installer: Arc<FakeInstaller>,
         proxy_running: bool,
+    ) -> QueueInstallation {
+        installation_with_channel(broker, servers, installer, proxy_running, true)
+    }
+
+    fn installation_with_channel(
+        broker: Arc<RecordingBroker>,
+        servers: Arc<FakeServers>,
+        installer: Arc<FakeInstaller>,
+        proxy_running: bool,
+        channel_configured: bool,
     ) -> QueueInstallation {
         QueueInstallation::new(
             Arc::new(Setup::new(broker as Arc<dyn ElevationBroker>)),
@@ -344,6 +377,9 @@ mod tests {
             installer as Arc<dyn QueueInstaller>,
             Arc::new(FakeProxy {
                 running: proxy_running,
+            }),
+            Arc::new(FakeChannel {
+                configured: channel_configured,
             }),
         )
     }
@@ -508,5 +544,33 @@ mod tests {
             .contains("Office Printer (ShaPrint 10.0.0.5-8631)"));
         assert!(error.message().contains("Print Spooler"));
         assert!(!error.message().contains("recorded failure"));
+    }
+
+    #[tokio::test]
+    async fn installation_is_rejected_before_elevation_when_network_channel_is_not_configured() {
+        let broker = Arc::new(RecordingBroker::default());
+        let servers = FakeServers::sharing("10.0.0.5:8631", &["Office Printer"]);
+        let installer = FakeInstaller::new();
+        let installation = installation_with_channel(
+            Arc::clone(&broker),
+            Arc::clone(&servers),
+            Arc::clone(&installer),
+            true,
+            false,
+        );
+
+        let error = installation
+            .install("10.0.0.5:8631", "Office Printer")
+            .await
+            .expect_err("rejected");
+
+        assert_eq!(error.code(), ErrorCode::InvalidState);
+        assert!(error
+            .message()
+            .contains("Network Channel is not configured"));
+        // Precondition failure must prevent UAC/elevation prompt and server queries
+        assert_eq!(broker.installed().len(), 0);
+        assert_eq!(installer.installs(), 0);
+        assert_eq!(servers.queries(), 0);
     }
 }

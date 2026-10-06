@@ -48,6 +48,8 @@ vi.mock("./api/serverConnections", () => ({
   approveServerConnection: vi.fn(),
   listServerConnectionPrinters: vi.fn(),
   installPrinterQueue: vi.fn(),
+  listRecognisedClientQueues: vi.fn(),
+  openPrintersSettings: vi.fn(),
 }));
 
 vi.mock("./api/discovery", () => ({
@@ -113,7 +115,7 @@ function serviceCard(container: HTMLElement, id: string): HTMLElement {
   return card as HTMLElement;
 }
 
-type WorkspacePage = "Share" | "Connect" | "Settings";
+type WorkspacePage = "My printers" | "Share printers" | "Settings";
 
 function navigateTo(page: WorkspacePage) {
   fireEvent.click(screen.getByRole("button", { name: page }));
@@ -129,6 +131,7 @@ function printerRow(container: HTMLElement, name: string): HTMLElement {
 
 /** Waits until the sharing panel has listed the queues. */
 async function sharingPanel(container: HTMLElement): Promise<HTMLElement> {
+  navigateTo("Share printers");
   await waitFor(() => expect(printerRow(container, "HP LaserJet")).toBeTruthy());
   return screen.getByRole("region", { name: "Local printers" });
 }
@@ -159,6 +162,7 @@ beforeEach(() => {
   vi.mocked(ipc.getRuntimeStatus).mockResolvedValue(runtimeWith("running", "stopped"));
   vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith());
   vi.mocked(ipc.getServerIdentity).mockResolvedValue(IDENTITY);
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([]);
   vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(false);
   vi.mocked(discovery.listNearbyServers).mockResolvedValue({ servers: [] });
   vi.mocked(discovery.onNearbyServers).mockResolvedValue(() => {});
@@ -238,10 +242,12 @@ describe("updater", () => {
       message: "GitHub Releases could not be reached. Check your internet connection and try again.",
     });
     render(<App />);
+    navigateTo("Settings");
 
-    fireEvent.click(screen.getByRole("button", { name: "Check for Updates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
 
-    expect((await screen.findByRole("alert")).textContent).toMatch(/GitHub Releases could not be reached/);
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts.some((el) => el.textContent?.includes("GitHub Releases could not be reached"))).toBe(true);
   });
 
   it("clears a previous update error when a later status event succeeds", async () => {
@@ -270,21 +276,41 @@ describe("updater", () => {
 });
 
 describe("workspace navigation", () => {
-  it("starts on Share and keeps Connect and Settings workflows in their own sections", async () => {
+  it("starts on My printers and keeps Share printers and Settings in their own sections", async () => {
     render(<App />);
 
-    expect(screen.getByRole("heading", { name: "Share printers", level: 1 })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Share" }).getAttribute("aria-current")).toBe("page");
-    expect(screen.queryByRole("region", { name: "Nearby servers" })).toBeNull();
-
-    navigateTo("Connect");
-    expect(await screen.findByRole("heading", { name: "Connect to a server", level: 1 })).toBeTruthy();
-    expect(await screen.findByRole("region", { name: "Nearby servers" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "My printers", level: 1 })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "My printers" }).getAttribute("aria-current")).toBe("page");
     expect(screen.queryByRole("region", { name: "Local printers" })).toBeNull();
+
+    navigateTo("Share printers");
+    expect(await screen.findByRole("heading", { name: "Share printers", level: 1 })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Local printers" })).toBeTruthy();
 
     navigateTo("Settings");
     expect(await screen.findByRole("heading", { name: "Settings", level: 1 })).toBeTruthy();
     expect(await screen.findByRole("region", { name: "Print authorization" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Software updates" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Startup" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Print services" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Previous ShaPrint app" })).toBeTruthy();
+  });
+
+  it("navigates from status pill or problem condition directly to service diagnostics dialog", async () => {
+    vi.mocked(ipc.getRuntimeStatus).mockResolvedValue(runtimeWith("failed", "stopped"));
+    render(<App />);
+
+    const statusPill = await screen.findByRole("button", {
+      name: /Service needs attention\. Open service diagnostics/i,
+    });
+    expect(statusPill).toBeTruthy();
+    fireEvent.click(statusPill);
+
+    // Diagnostics dialog opens with detailed technical service controls
+    const dialog = await screen.findByRole("dialog", { name: "Print service status" });
+    expect(dialog).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Client proxy" })).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Server sharing" })).toBeTruthy();
   });
 });
 
@@ -312,31 +338,467 @@ describe("workspace service status", () => {
 });
 
 describe("guided printer setup", () => {
-  it("shows the setup sequence and describes inspection as an identity review", async () => {
+  it("renders recognised client queues from Windows and allows refresh and retry", async () => {
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValueOnce([
+      {
+        queue_name: "Office Laser (ShaPrint 10.0.0.5-8631)",
+        server_address: "10.0.0.5:8631",
+        printer_name: "Office Laser",
+      },
+      {
+        queue_name: "Office Laser (ShaPrint 192.168.1.50-8631)",
+        server_address: "192.168.1.50:8631",
+        printer_name: "Office Laser",
+      },
+    ]);
+
+    render(<App />);
+
+    // Both queues, including same printer name on different servers, are listed on default My printers screen
+    await waitFor(() => {
+      expect(
+        screen.getByText("Office Laser (ShaPrint 10.0.0.5-8631)"),
+      ).toBeTruthy();
+      expect(
+        screen.getByText("Office Laser (ShaPrint 192.168.1.50-8631)"),
+      ).toBeTruthy();
+    });
+
+    // Refresh button fetches current state again
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValueOnce([]);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh installed queues" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "No ShaPrint client queues installed in Windows.",
+        ),
+      ).toBeTruthy();
+    });
+
+    // Error and retry state
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockRejectedValueOnce(
+      new Error("Spooler service unavailable"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh installed queues" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Spooler service unavailable"),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+  });
+
+  it("opens Windows settings or explains manual steps without offering in-app delete button", async () => {
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([
+      {
+        queue_name: "Office Laser (ShaPrint 10.0.0.5-8631)",
+        server_address: "10.0.0.5:8631",
+        printer_name: "Office Laser",
+      },
+    ]);
+    vi.mocked(serverConnections.openPrintersSettings).mockResolvedValue();
+
+    render(<App />);
+
+    expect(
+      await screen.findByText("Office Laser (ShaPrint 10.0.0.5-8631)"),
+    ).toBeTruthy();
+
+    // No in-app delete button
+    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /remove/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /uninstall/i })).toBeNull();
+
+    // Manage in Windows action calls desktop shell
+    const manageButtons = screen.getAllByRole("button", { name: /Manage in Windows/i });
+    expect(manageButtons.length).toBeGreaterThan(0);
+    fireEvent.click(manageButtons[0]);
+
+    await waitFor(() => {
+      expect(serverConnections.openPrintersSettings).toHaveBeenCalled();
+    });
+
+    // When opening settings fails, explains manual navigation and provides queue name copy
+    vi.mocked(serverConnections.openPrintersSettings).mockRejectedValueOnce(
+      new Error("Shell execution failed"),
+    );
+    fireEvent.click(manageButtons[0]);
+
+    expect(
+      await screen.findByText(/Could not open Windows Settings automatically/i),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Open Windows Settings > Bluetooth & devices > Printers & scanners/i),
+    ).toBeTruthy();
+
+    // Queue name copy button is available
+    const copyBtn = screen.getByRole("button", {
+      name: "Copy queue name Office Laser (ShaPrint 10.0.0.5-8631)",
+    });
+    expect(copyBtn).toBeTruthy();
+  });
+
+  it("shows evidence-based Reverify identity action when an installed queue's server identity has changed", async () => {
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([
+      {
+        queue_name: "Office Laser (ShaPrint 10.0.0.5-8631)",
+        server_address: "10.0.0.5:8631",
+        printer_name: "Office Laser",
+      },
+    ]);
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue({
+      address: "10.0.0.5:8631",
+      current_fingerprint: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
+      previous_fingerprint: "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
+      trusted: false,
+    });
+
+    render(<App />);
+
+    // Queue remains listed with targeted evidence warning
+    expect(
+      await screen.findByText("Office Laser (ShaPrint 10.0.0.5-8631)"),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText("Server identity changed. Printing is blocked until reverified."),
+    ).toBeTruthy();
+
+    // Does not display speculative Online or Offline badges
+    expect(screen.queryByText(/^Online$/i)).toBeNull();
+    expect(screen.queryByText(/^Offline$/i)).toBeNull();
+
+    // Reverify identity button opens the guided trust verification flow
+    const reverifyBtn = screen.getByRole("button", {
+      name: "Reverify identity for 10.0.0.5:8631",
+    });
+    expect(reverifyBtn).toBeTruthy();
+    fireEvent.click(reverifyBtn);
+
+    // Guided setup dialog opens directly to fingerprint verification step
+    expect(await screen.findByRole("dialog", { name: "Check the server identity" })).toBeTruthy();
+  });
+
+  it("offers a single guided Add printer entry in My printers workspace without duplicate inline controls", async () => {
+    render(<App />);
+
+    // The single guided entry action is available right on the default My printers screen
+    expect(screen.getByRole("button", { name: "Add printer" })).toBeTruthy();
+
+    // The duplicate inline inspection and install path is no longer present
+    expect(screen.queryByLabelText("Server address")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Add by address" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Inspect certificate" })).toBeNull();
+  });
+
+  it("labels advertised printer names as unverified before approval in nearby panel and guided dialog", async () => {
+    vi.mocked(discovery.listNearbyServers).mockResolvedValue({
+      servers: [
+        {
+          name: "DESKTOP-ABC",
+          address: "192.0.2.10:8631",
+          printers: ["Zebra", "Receipt"],
+          version: "3.1.3",
+        },
+      ],
+    });
+
+    render(<App />);
+
+    // Open guided setup from My printers
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
+    expect(within(dialog).getByText(/Advertised \(unverified\): Zebra, Receipt/)).toBeTruthy();
+  });
+
+  it("completes guided add printer flow from nearby server with observable IPC ordering", async () => {
+    vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(true);
+    vi.mocked(discovery.listNearbyServers).mockResolvedValue({
+      servers: [
+        {
+          name: "DESKTOP-ABC",
+          address: "192.0.2.10:8631",
+          printers: ["Office Laser"],
+          version: "3.1.3",
+        },
+      ],
+    });
     const review = {
-      address: "printer.example:8631",
+      address: "192.0.2.10:8631",
       current_fingerprint: IDENTITY.fingerprint,
       previous_fingerprint: null,
       trusted: false,
     };
     vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
-    render(<App />);
-    navigateTo("Connect");
-    fireEvent.click(screen.getByRole("button", { name: "Guided setup" }));
-
-    expect(await screen.findByRole("dialog", { name: "Find a server" })).toBeTruthy();
-    expect(screen.getByRole("list", { name: "Printer setup steps" })).toBeTruthy();
-    expect(screen.getByText("Server").closest("li")?.getAttribute("aria-current")).toBe("step");
-
-    fireEvent.change(screen.getByLabelText("Or enter a server address"), {
-      target: { value: "printer.example" },
+    vi.mocked(serverConnections.approveServerConnection).mockResolvedValue({
+      ...review,
+      trusted: true,
     });
-    fireEvent.click(screen.getByRole("button", { name: "Review identity" }));
+    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
+      address: review.address,
+      printers: ["Office Laser"],
+    });
+    vi.mocked(serverConnections.installPrinterQueue).mockResolvedValue({
+      queue_name: "Office Laser (ShaPrint 192.0.2.10-8631)",
+      server_address: review.address,
+      printer_name: "Office Laser",
+      uri: "ipp://127.0.0.1:8632/ipp/print/192.0.2.10%3A8631/Office%20Laser",
+    });
 
-    expect(await screen.findByRole("heading", { name: "Check the server identity" })).toBeTruthy();
-    expect(screen.getByText("Identity").closest("li")?.getAttribute("aria-current")).toBe("step");
-    expect(screen.getByRole("button", { name: "Approve fingerprint" })).toBeTruthy();
+    render(<App />);
+
+    // Click Add printer from My printers workspace
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    // Select nearby server from wizard
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
+    const serverOption = within(dialog).getByText("DESKTOP-ABC").closest(".wizard-server-option") as HTMLElement;
+    fireEvent.click(within(serverOption).getByRole("button", { name: "Review identity" }));
+
+    // Opens dialog, inspects certificate, reaches verification step
+    expect(await screen.findByRole("dialog", { name: "Check the server identity" })).toBeTruthy();
+    expect(serverConnections.inspectServerConnection).toHaveBeenCalledWith("192.0.2.10:8631");
+    // Authoritative shared-printer queries are blocked until server identity is approved
     expect(serverConnections.listServerConnectionPrinters).not.toHaveBeenCalled();
+
+    // Approve fingerprint
+    fireEvent.click(screen.getByRole("button", { name: "Approve fingerprint" }));
+
+    // Now queries printers and advances to printers step
+    await waitFor(() => {
+      expect(serverConnections.approveServerConnection).toHaveBeenCalledWith(
+        review.address,
+        review.current_fingerprint,
+      );
+      expect(serverConnections.listServerConnectionPrinters).toHaveBeenCalledWith(review.address);
+    });
+
+    expect(await screen.findByText("Office Laser")).toBeTruthy();
+
+    // Install printer
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    await waitFor(() => {
+      expect(serverConnections.installPrinterQueue).toHaveBeenCalledWith(
+        review.address,
+        "Office Laser",
+      );
+    });
+
+    // Success screen names the Windows queue and explains printing via ordinary Windows print dialog
+    expect(await screen.findByRole("heading", { name: "Printer installed" })).toBeTruthy();
+    expect(screen.getByText("Office Laser (ShaPrint 192.0.2.10-8631)")).toBeTruthy();
+    expect(screen.getByText(/Choose this printer from any Windows print dialog/)).toBeTruthy();
+  });
+
+  it("skips repeat approval when server identity matches saved approval (trusted repeat run)", async () => {
+    const review = {
+      address: "192.0.2.10:8631",
+      current_fingerprint: IDENTITY.fingerprint,
+      previous_fingerprint: null,
+      trusted: true,
+    };
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
+    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
+      address: review.address,
+      printers: ["Office Laser"],
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
+    fireEvent.change(within(dialog).getByLabelText("Or enter a server address"), {
+      target: { value: "192.0.2.10:8631" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review identity" }));
+
+    // Automatically jumps to printers step and queries printers without asking for approval
+    expect(await screen.findByRole("heading", { name: "Choose a printer" })).toBeTruthy();
+    expect(serverConnections.approveServerConnection).not.toHaveBeenCalled();
+    expect(serverConnections.listServerConnectionPrinters).toHaveBeenCalledWith(review.address);
+    expect(await screen.findByText("Office Laser")).toBeTruthy();
+  });
+
+  it("blocks printer queries and requires explicit reapproval when server identity has changed", async () => {
+    const review = {
+      address: "192.0.2.10:8631",
+      current_fingerprint:
+        "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77",
+      previous_fingerprint: IDENTITY.fingerprint,
+      trusted: false,
+    };
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
+    vi.mocked(serverConnections.approveServerConnection).mockResolvedValue({
+      ...review,
+      trusted: true,
+    });
+    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
+      address: review.address,
+      printers: ["Office Laser"],
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
+    fireEvent.change(within(dialog).getByLabelText("Or enter a server address"), {
+      target: { value: "192.0.2.10:8631" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review identity" }));
+
+    // Shows changed warning
+    expect(await screen.findByText("Server identity has changed.")).toBeTruthy();
+    const reapproveBtn = screen.getByRole("button", { name: "Reapprove fingerprint" });
+    expect(reapproveBtn).toBeTruthy();
+
+    // Authoritative printer query is blocked before reapproval
+    expect(serverConnections.listServerConnectionPrinters).not.toHaveBeenCalled();
+
+    // User explicitly reapproves
+    fireEvent.click(reapproveBtn);
+
+    await waitFor(() => {
+      expect(serverConnections.approveServerConnection).toHaveBeenCalledWith(
+        review.address,
+        review.current_fingerprint,
+      );
+      expect(serverConnections.listServerConnectionPrinters).toHaveBeenCalledWith(review.address);
+    });
+    expect(await screen.findByText("Office Laser")).toBeTruthy();
+  });
+
+  it("reflects conditional Network Channel step in wizard progress and requires channel before install", async () => {
+    // When channel is not configured
+    vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(false);
+    const review = {
+      address: "192.0.2.10:8631",
+      current_fingerprint: IDENTITY.fingerprint,
+      previous_fingerprint: null,
+      trusted: true,
+    };
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
+    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
+      address: review.address,
+      printers: ["Office Laser"],
+    });
+    vi.mocked(networkChannel.configureNetworkChannel).mockResolvedValue(true);
+    vi.mocked(serverConnections.installPrinterQueue).mockResolvedValue({
+      queue_name: "Office Laser (ShaPrint 192.0.2.10-8631)",
+      server_address: review.address,
+      printer_name: "Office Laser",
+      uri: "ipp://127.0.0.1:8632/ipp/print/192.0.2.10%3A8631/Office%20Laser",
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
+
+    // Step list includes Network Channel when not configured
+    const stepList = within(dialog).getByRole("list", { name: "Printer setup steps" });
+    expect(within(stepList).getByText("Network Channel")).toBeTruthy();
+
+    // Proceed to printers
+    fireEvent.change(within(dialog).getByLabelText("Or enter a server address"), {
+      target: { value: "192.0.2.10:8631" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review identity" }));
+
+    expect(await screen.findByRole("heading", { name: "Choose a printer" })).toBeTruthy();
+
+    // Click install -> prompts for Network Channel
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    expect(await screen.findByRole("heading", { name: "Set the Network Channel" })).toBeTruthy();
+    expect(within(stepList).getByText("Network Channel").closest("li")?.getAttribute("aria-current")).toBe("step");
+
+    // Enter channel and submit
+    fireEvent.change(screen.getByLabelText("Network Channel"), {
+      target: { value: "secret-channel" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Network Channel and install" }));
+
+    await waitFor(() => {
+      expect(networkChannel.configureNetworkChannel).toHaveBeenCalledWith("secret-channel");
+      expect(serverConnections.installPrinterQueue).toHaveBeenCalledWith(
+        review.address,
+        "Office Laser",
+      );
+    });
+
+    expect(await screen.findByRole("heading", { name: "Printer installed" })).toBeTruthy();
+  });
+
+  it("resets selection, progress, and error state when reopening the journey after success, cancellation, or failure", async () => {
+    vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(true);
+    const review = {
+      address: "192.0.2.10:8631",
+      current_fingerprint: IDENTITY.fingerprint,
+      previous_fingerprint: null,
+      trusted: true,
+    };
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
+    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
+      address: review.address,
+      printers: ["Office Laser"],
+    });
+    vi.mocked(serverConnections.installPrinterQueue).mockResolvedValue({
+      queue_name: "Office Laser (ShaPrint 192.0.2.10-8631)",
+      server_address: review.address,
+      printer_name: "Office Laser",
+      uri: "ipp://127.0.0.1:8632/ipp/print/192.0.2.10%3A8631/Office%20Laser",
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    let dialog = await screen.findByRole("dialog", { name: "Find a server" });
+    fireEvent.change(within(dialog).getByLabelText("Or enter a server address"), {
+      target: { value: "192.0.2.10:8631" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review identity" }));
+
+    expect(await screen.findByRole("heading", { name: "Choose a printer" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    expect(await screen.findByRole("heading", { name: "Printer installed" })).toBeTruthy();
+
+    // Click Done to close
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    // Reopen Add printer
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    dialog = await screen.findByRole("dialog", { name: "Find a server" });
+    // Starts fresh at step 1 with empty input and no stale installed queue
+    expect(within(dialog).getByRole("heading", { name: "Find a server" })).toBeTruthy();
+    expect((within(dialog).getByLabelText("Or enter a server address") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByText("Office Laser (ShaPrint 192.0.2.10-8631)")).toBeNull();
+  });
+
+  it("supports keyboard navigation and narrow desktop window layout in guided setup", async () => {
+    // Simulate narrow window
+    window.innerWidth = 480;
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
+    expect(dialog).toBeTruthy();
+
+    // Dialog has proper accessible attributes
+    expect(dialog.getAttribute("aria-labelledby")).toBe("add-printer-title");
+    expect(dialog.getAttribute("aria-describedby")).toBe("add-printer-description");
+
+    // Close with Escape key
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    // Reset window width
+    window.innerWidth = 1024;
   });
 });
 
@@ -556,6 +1018,7 @@ describe("shared printers panel", () => {
       })),
     });
     render(<App />);
+    navigateTo("Share printers");
 
     const panel = await screen.findByRole("region", { name: "Local printers" });
     fireEvent.change(within(panel).getByRole("textbox", { name: "Search printers" }), {
@@ -579,6 +1042,7 @@ describe("shared printers panel", () => {
 
   it("shows the certificate fingerprint a client has to approve", async () => {
     render(<App />);
+    navigateTo("Share printers");
 
     const fingerprint = await screen.findByTestId("server-fingerprint");
     expect(fingerprint.textContent).toBe(IDENTITY.fingerprint);
@@ -596,6 +1060,7 @@ describe("shared printers panel", () => {
 
     try {
       render(<App />);
+      navigateTo("Share printers");
       await screen.findByTestId("server-fingerprint");
       fireEvent.click(screen.getByRole("button", { name: "Copy" }));
 
@@ -624,6 +1089,71 @@ describe("shared printers panel", () => {
     expect(ipc.startService).toHaveBeenCalledWith("server-sharing");
   });
 
+  it("starts and stops sharing from user intent in Share printers workspace", async () => {
+    vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(true);
+    vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith("HP LaserJet"));
+    vi.mocked(ipc.startService).mockResolvedValue(runtimeWith("running", "running"));
+    vi.mocked(ipc.stopService).mockResolvedValue(runtimeWith("running", "stopped"));
+
+    render(<App />);
+    navigateTo("Share printers");
+
+    // Local queues already has a shared printer (HP LaserJet)
+    const startBtn = await screen.findByRole("button", { name: "Start sharing" });
+    expect(startBtn).toBeTruthy();
+    fireEvent.click(startBtn);
+
+    await waitFor(() => {
+      expect(ipc.startService).toHaveBeenCalledWith("server-sharing");
+    });
+
+    // When running, shows Stop sharing
+    const stopBtn = await screen.findByRole("button", { name: "Stop sharing" });
+    expect(stopBtn).toBeTruthy();
+    fireEvent.click(stopBtn);
+
+    await waitFor(() => {
+      expect(ipc.stopService).toHaveBeenCalledWith("server-sharing");
+    });
+  });
+
+  it("prompts for Network Channel when starting sharing without a configured channel", async () => {
+    vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(false);
+    vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith("HP LaserJet"));
+    vi.mocked(networkChannel.configureNetworkChannel).mockResolvedValue(true);
+    vi.mocked(ipc.startService).mockResolvedValue(runtimeWith("running", "running"));
+
+    render(<App />);
+    navigateTo("Share printers");
+
+    const startBtn = await screen.findByRole("button", { name: "Start sharing" });
+    fireEvent.click(startBtn);
+
+    // Shows contextual prompt
+    expect(
+      await screen.findByRole("region", { name: "Set Network Channel before sharing" }),
+    ).toBeTruthy();
+
+    // Cancel prompt leaves sharing off and preserves selection
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.queryByRole("region", { name: "Set Network Channel before sharing" }),
+    ).toBeNull();
+    expect(ipc.startService).not.toHaveBeenCalled();
+
+    // Entering secret saves and starts sharing
+    fireEvent.click(screen.getByRole("button", { name: "Start sharing" }));
+    fireEvent.change(screen.getByLabelText("Network Channel secret"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Start sharing" }));
+
+    await waitFor(() => {
+      expect(networkChannel.configureNetworkChannel).toHaveBeenCalledWith("secret123");
+      expect(ipc.startService).toHaveBeenCalledWith("server-sharing");
+    });
+  });
+
   it("shows the stable error code when a change is rejected and re-reads the queues", async () => {
     vi.mocked(ipc.setSharedPrinters).mockRejectedValue({
       code: "invalid-input",
@@ -650,6 +1180,7 @@ describe("shared printers panel", () => {
       message: "listing local printer queues is only supported on Windows",
     });
     render(<App />);
+    navigateTo("Share printers");
 
     const panel = await screen.findByRole("region", { name: "Local printers" });
     const alert = await within(panel).findByRole("alert");
@@ -657,153 +1188,6 @@ describe("shared printers panel", () => {
     expect(alert.textContent).toContain("only supported on Windows");
   });
 });
-describe("server connection panel", () => {
-  it("does not list printers before explicit fingerprint approval", async () => {
-    const review = {
-      address: "printer.example:8631",
-      current_fingerprint:
-        "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
-      previous_fingerprint: null,
-      trusted: false,
-    };
-    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
-    vi.mocked(serverConnections.approveServerConnection).mockResolvedValue({
-      ...review,
-      trusted: true,
-    });
-    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
-      address: review.address,
-      printers: ["Office Laser"],
-    });
-    render(<App />);
-    navigateTo("Connect");
-
-    fireEvent.change(screen.getByLabelText("Server address"), {
-      target: { value: "printer.example" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Inspect certificate" }));
-
-    await screen.findByText(review.current_fingerprint);
-    expect(serverConnections.listServerConnectionPrinters).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Approve this fingerprint" }));
-
-    fireEvent.click(await screen.findByRole("button", { name: "Show shared printers" }));
-
-    expect(await screen.findByText("Office Laser")).toBeTruthy();
-    expect(serverConnections.approveServerConnection).toHaveBeenCalledWith(
-      review.address,
-      review.current_fingerprint,
-    );
-    expect(serverConnections.listServerConnectionPrinters).toHaveBeenCalledWith(
-      review.address,
-    );
-  });
-
-  it("installs a Windows queue for an approved server's shared printer", async () => {
-    const review = {
-      address: "printer.example:8631",
-      current_fingerprint:
-        "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
-      previous_fingerprint: null,
-      trusted: true,
-    };
-    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
-    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
-      address: review.address,
-      printers: ["Office Laser"],
-    });
-    vi.mocked(serverConnections.installPrinterQueue).mockResolvedValue({
-      queue_name: "Office Laser (ShaPrint printer.example-8631)",
-      server_address: review.address,
-      printer_name: "Office Laser",
-      uri: "ipp://127.0.0.1:8632/ipp/print/printer.example%3A8631/Office%20Laser",
-    });
-    render(<App />);
-    navigateTo("Connect");
-
-    fireEvent.change(screen.getByLabelText("Server address"), {
-      target: { value: "printer.example" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Inspect certificate" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Show shared printers" }));
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Install a Windows queue for Office Laser",
-      }),
-    );
-
-    // The installed queue is named after the printer and the server, so the user can find it.
-    expect(await screen.findByText(/Office Laser \(ShaPrint printer\.example-8631\)/)).toBeTruthy();
-    expect(serverConnections.installPrinterQueue).toHaveBeenCalledWith(
-      review.address,
-      "Office Laser",
-    );
-  });
-
-  it("shows the action a user can take when the queue install fails", async () => {
-    const review = {
-      address: "printer.example:8631",
-      current_fingerprint:
-        "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
-      previous_fingerprint: null,
-      trusted: true,
-    };
-    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue(review);
-    vi.mocked(serverConnections.listServerConnectionPrinters).mockResolvedValue({
-      address: review.address,
-      printers: ["Office Laser"],
-    });
-    vi.mocked(serverConnections.installPrinterQueue).mockRejectedValue({
-      code: "invalid-state",
-      message:
-        'Could not install the Windows queue "Office Laser (ShaPrint printer.example-8631)" for printer "Office Laser": the Windows Print Spooler service is not running. Start it (services.msc), then try again.',
-    });
-    render(<App />);
-    navigateTo("Connect");
-
-    fireEvent.change(screen.getByLabelText("Server address"), {
-      target: { value: "printer.example" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Inspect certificate" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Show shared printers" }));
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Install a Windows queue for Office Laser",
-      }),
-    );
-
-    const banner = await screen.findByRole("alert");
-    expect(banner.textContent).toContain("Print Spooler service is not running");
-    expect(banner.textContent).toContain("services.msc");
-  });
-
-  it("explains changed identity and requires explicit reapproval", async () => {
-    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue({
-      address: "printer.example:8631",
-      current_fingerprint:
-        "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
-      previous_fingerprint:
-        "AA:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
-      trusted: false,
-    });
-    render(<App />);
-    navigateTo("Connect");
-
-    fireEvent.change(screen.getByLabelText("Server address"), {
-      target: { value: "printer.example" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Inspect certificate" }));
-
-    expect(
-      await screen.findByText(/identity changed\. Printers are blocked/i),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Explicitly reapprove this fingerprint" }),
-    ).toBeTruthy();
-    expect(serverConnections.listServerConnectionPrinters).not.toHaveBeenCalled();
-  });
-});
-
 describe("Network Channel panel", () => {
   it("gives the visibility button a field-specific name and keyboard focus", async () => {
     render(<App />);
@@ -848,23 +1232,22 @@ describe("nearby servers panel", () => {
       trusted: false,
     });
     render(<App />);
-    navigateTo("Connect");
 
-    const panel = await screen.findByRole("region", { name: "Nearby servers" });
-    expect(await within(panel).findByText("DESKTOP-ABC")).toBeTruthy();
-    expect(within(panel).getByText("192.0.2.10:8631")).toBeTruthy();
-    expect(within(panel).getByText(/Shares: Zebra/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
 
-    fireEvent.click(within(panel).getByRole("button", { name: "Review identity" }));
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
+    expect(await within(dialog).findByText("DESKTOP-ABC")).toBeTruthy();
+    expect(within(dialog).getByText("192.0.2.10:8631")).toBeTruthy();
+    expect(within(dialog).getByText(/Advertised \(unverified\): Zebra/)).toBeTruthy();
 
-    // Reviewing a discovered server goes through the same inspection as a typed address, and the
-    // address field shows what is being reviewed.
+    const serverOption = within(dialog).getByText("DESKTOP-ABC").closest(".wizard-server-option") as HTMLElement;
+    fireEvent.click(within(serverOption).getByRole("button", { name: "Review identity" }));
+
+    // Reviewing a discovered server opens the guided setup dialog and inspects its certificate
     await waitFor(() =>
       expect(serverConnections.inspectServerConnection).toHaveBeenCalledWith("192.0.2.10:8631"),
     );
-    expect((screen.getByLabelText("Server address") as HTMLInputElement).value).toBe(
-      "192.0.2.10:8631",
-    );
+    expect(await screen.findByRole("dialog", { name: "Check the server identity" })).toBeTruthy();
     expect(serverConnections.listServerConnectionPrinters).not.toHaveBeenCalled();
   });
 
@@ -875,26 +1258,27 @@ describe("nearby servers panel", () => {
       return () => {};
     });
     render(<App />);
-    navigateTo("Connect");
 
-    const panel = await screen.findByRole("region", { name: "Nearby servers" });
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
     await waitFor(() => expect(publish).toBeDefined());
     publish?.(nearbyWith("DESKTOP-ZULU"));
 
-    expect(await within(panel).findByText("DESKTOP-ZULU")).toBeTruthy();
+    expect(await within(dialog).findByText("DESKTOP-ZULU")).toBeTruthy();
   });
 
   it("keeps working by address when discovery finds nothing", async () => {
     render(<App />);
-    navigateTo("Connect");
 
-    const panel = await screen.findByRole("region", { name: "Nearby servers" });
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
     expect(
-      await within(panel).findByText(/Nothing found on this network/i),
+      await within(dialog).findByText(/No servers found on this network/i),
     ).toBeTruthy();
-    // The manual path is untouched by an empty discovery list.
-    expect(screen.getByLabelText("Server address")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Inspect certificate" })).toBeTruthy();
+    // Clicking Add printer allows manual address entry
+    expect(within(dialog).getByLabelText("Or enter a server address")).toBeTruthy();
   });
 
   it("exposes the advertised version and displays a non-blocking version drift badge when server is newer", async () => {
@@ -929,25 +1313,26 @@ describe("nearby servers panel", () => {
     });
 
     render(<App />);
-    navigateTo("Connect");
 
-    const panel = await screen.findByRole("region", { name: "Nearby servers" });
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
 
     // Matching version server displays version badge without drift badge
-    expect(await within(panel).findByText("DESKTOP-MATCH")).toBeTruthy();
-    expect(within(panel).getByText("v3.1.1")).toBeTruthy();
+    expect(await within(dialog).findByText("DESKTOP-MATCH")).toBeTruthy();
+    expect(within(dialog).getByText("v3.1.1")).toBeTruthy();
 
     // Legacy server displays without version badge or drift badge
-    expect(await within(panel).findByText("DESKTOP-LEGACY")).toBeTruthy();
+    expect(await within(dialog).findByText("DESKTOP-LEGACY")).toBeTruthy();
 
     // Newer server displays version badge AND version-drift advisory badge
-    expect(await within(panel).findByText("DESKTOP-NEWER")).toBeTruthy();
-    expect(within(panel).getByText("v3.2.0")).toBeTruthy();
-    const driftBadge = within(panel).getByText(/Newer server release/);
+    expect(await within(dialog).findByText("DESKTOP-NEWER")).toBeTruthy();
+    expect(within(dialog).getByText("v3.2.0")).toBeTruthy();
+    const driftBadge = within(dialog).getByText(/Newer server release/);
     expect(driftBadge).toBeTruthy();
 
     // Version drift does not block review identity action
-    const newerServerItem = within(panel).getByText("DESKTOP-NEWER").closest("li")!;
+    const newerServerItem = within(dialog).getByText("DESKTOP-NEWER").closest(".wizard-server-option") as HTMLElement;
     const reviewButton = within(newerServerItem).getByRole("button", { name: "Review identity" });
     expect((reviewButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(reviewButton);

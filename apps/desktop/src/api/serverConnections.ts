@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { ClientQueue } from "./types";
+import type { ClientQueue, RecognisedClientQueue } from "./types";
 
 export interface ServerConnectionReview {
   address: string;
@@ -22,4 +22,14 @@ export function listServerConnectionPrinters(address: string): Promise<ServerCon
 /** Installs the native Windows queue for a printer the trusted server shares. */
 export function installPrinterQueue(serverAddress: string, printerName: string): Promise<ClientQueue> {
   return invoke("install_printer_queue", { serverAddress, printerName });
+}
+
+/** Lists recognised ShaPrint client queues from the current Windows spooler state. */
+export function listRecognisedClientQueues(): Promise<RecognisedClientQueue[]> {
+  return invoke("list_recognised_client_queues");
+}
+
+/** Opens Windows Printers & scanners settings through the desktop shell. */
+export function openPrintersSettings(): Promise<void> {
+  return invoke("open_printers_settings");
 }

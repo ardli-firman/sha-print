@@ -50,8 +50,6 @@ interface AddPrinterDialogProps {
 
 type WizardStep = "servers" | "verify" | "printers" | "channel" | "success";
 
-const WIZARD_STEPS = ["Server", "Identity", "Printer"] as const;
-
 export function AddPrinterDialog({
   open,
   onOpenChange,
@@ -68,15 +66,24 @@ export function AddPrinterDialog({
   const [copyStatus, setCopyStatus] = useState(false);
 
   const { review, result, installed, busy, error } = connections;
-  const currentStepIndex = step === "servers" ? 0 : step === "verify" ? 1 : 2;
+  const needsChannel = networkChannel.configured === false;
+  const steps = needsChannel
+    ? (["Server", "Identity", "Printer", "Network Channel"] as const)
+    : (["Server", "Identity", "Printer"] as const);
 
-  // Reset dialog state when opened
+  const currentStepIndex =
+    step === "servers" ? 0 : step === "verify" ? 1 : step === "printers" ? 2 : 3;
+
+  // Reset dialog state when closed or opened
   useEffect(() => {
     if (open) {
-      setStep("servers");
       setSelectedPrinter(null);
       setCopyStatus(false);
       setChannelInput("");
+      setManualAddress("");
+    } else {
+      setStep("servers");
+      connections.reset();
     }
   }, [open]);
 
@@ -135,6 +142,7 @@ export function AddPrinterDialog({
       return;
     }
 
+    onEnsureProxyRunning?.();
     await connections.install(printerName);
   }
 
@@ -145,6 +153,7 @@ export function AddPrinterDialog({
     const saved = await networkChannel.save(channelInput);
     if (saved) {
       setChannelInput("");
+      onEnsureProxyRunning?.();
       await connections.install(selectedPrinter);
     }
   }
@@ -190,7 +199,7 @@ export function AddPrinterDialog({
       </DialogHeader>
 
       <ol className="wizard-progress" aria-label="Printer setup steps">
-        {WIZARD_STEPS.map((label, index) => {
+        {steps.map((label, index) => {
           const complete = step === "success" || index < currentStepIndex;
           const current = step !== "success" && index === currentStepIndex;
           return (
@@ -259,7 +268,7 @@ export function AddPrinterDialog({
                         </div>
                         <div className="text-[11px] text-muted-foreground mt-1">
                           {server.printers.length > 0
-                            ? `Shares: ${server.printers.join(", ")}`
+                            ? `Advertised (unverified): ${server.printers.join(", ")}`
                             : "Shares 0 printers"}
                         </div>
                       </div>

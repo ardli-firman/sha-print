@@ -86,15 +86,26 @@ pub fn sharing_runtime_persistent(
     queues: &[&str],
     data_dir: &std::path::Path,
 ) -> (Arc<Sharing>, Arc<IppsServer>) {
+    sharing_runtime_persistent_on(queues, data_dir, 0)
+}
+
+/// The persistent sharing configuration over `queues` using `data_dir` and a specific `port`.
+pub fn sharing_runtime_persistent_on(
+    queues: &[&str],
+    data_dir: &std::path::Path,
+    port: u16,
+) -> (Arc<Sharing>, Arc<IppsServer>) {
     let sharing = Arc::new(Sharing::with_persistence(
         FakeCatalog::new(queues),
         Some(data_dir),
     ));
     let identity = ServerIdentity::generate().expect("generates a server identity");
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let _ = channel.configure_sync("test-channel-secret");
     let endpoint = Arc::new(IppsServer::new(
-        0,
+        port,
         Arc::new(identity),
-        Arc::new(NetworkChannel::in_memory()),
+        Arc::clone(&channel),
         Arc::new(UnavailableSubmitter),
         Arc::new(PrintFailures::new()),
         Arc::new(shaprint_desktop::application::PrintJobTracker::new()),
@@ -108,10 +119,12 @@ pub fn sharing_runtime_persistent(
 pub fn sharing_runtime_on(queues: &[&str], port: u16) -> (Arc<Sharing>, Arc<IppsServer>) {
     let sharing = Arc::new(Sharing::new(FakeCatalog::new(queues)));
     let identity = ServerIdentity::generate().expect("generates a server identity");
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let _ = channel.configure_sync("test-channel-secret");
     let endpoint = Arc::new(IppsServer::new(
         port,
         Arc::new(identity),
-        Arc::new(NetworkChannel::in_memory()),
+        Arc::clone(&channel),
         Arc::new(UnavailableSubmitter),
         Arc::new(PrintFailures::new()),
         Arc::new(shaprint_desktop::application::PrintJobTracker::new()),
@@ -157,11 +170,22 @@ pub fn allowed_inbound_setup() -> Arc<Setup> {
 /// The advertiser binds an ephemeral discovery port, so tests never compete with the machine's own
 /// multicast DNS responder and one test cannot take the port another test needs.
 pub fn sharing_service(sharing: Arc<Sharing>, endpoint: Arc<IppsServer>) -> ServerSharingService {
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let _ = channel.configure_sync("test-channel-secret");
+    sharing_service_with_channel(sharing, endpoint, channel)
+}
+
+pub fn sharing_service_with_channel(
+    sharing: Arc<Sharing>,
+    endpoint: Arc<IppsServer>,
+    channel: Arc<NetworkChannel>,
+) -> ServerSharingService {
     ServerSharingService::new(
         sharing,
         endpoint,
         Arc::new(MdnsAdvertiser::on(vec![0])),
         allowed_inbound_setup(),
+        channel,
     )
 }
 

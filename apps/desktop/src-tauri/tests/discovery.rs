@@ -94,12 +94,15 @@ async fn start_server(
         .set_shared(printer_names(queues))
         .await
         .expect("selects the shared queues");
+    let channel = Arc::new(shaprint_desktop::adapters::ipps::NetworkChannel::in_memory());
+    let _ = channel.configure_sync("test-channel-secret");
     let runtime = Arc::new(RuntimeCoordinator::new(vec![Arc::new(
         ServerSharingService::new(
             sharing,
             Arc::clone(&endpoint),
             Arc::clone(&advertiser) as Arc<dyn ServerAdvertiser>,
             allowed_inbound_setup(),
+            channel,
         ),
     )]));
     runtime

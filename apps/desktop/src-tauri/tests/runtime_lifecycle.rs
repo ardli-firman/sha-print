@@ -396,3 +396,134 @@ async fn restarting_when_all_printers_removed_leaves_sharing_stopped_cleanly() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn restarting_when_network_channel_missing_leaves_sharing_stopped_and_does_not_claim_running()
+{
+    let dir = temporary_directory("persist-lifecycle-missing-channel");
+
+    // Session 1: configure printer and start sharing
+    {
+        let (sharing, endpoint) = support::sharing_runtime_persistent(&["HP LaserJet"], &dir);
+        sharing
+            .set_shared(printer_names(&["HP LaserJet"]))
+            .await
+            .expect("selects HP LaserJet");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
+            Arc::clone(&sharing),
+            endpoint,
+        ))]);
+
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("starts sharing");
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    // Session 2: restore sharing but with unconfigured channel
+    {
+        let (sharing, endpoint) = support::sharing_runtime_persistent(&["HP LaserJet"], &dir);
+        sharing.restore().await.expect("restores sharing state");
+
+        // Create unconfigured channel service
+        let unconfigured_channel =
+            Arc::new(shaprint_desktop::adapters::ipps::NetworkChannel::in_memory());
+        let service = Arc::new(support::sharing_service_with_channel(
+            Arc::clone(&sharing),
+            endpoint,
+            unconfigured_channel,
+        ));
+
+        let runtime = RuntimeCoordinator::new(vec![service]);
+
+        // Autostart should not claim sharing is running when channel is missing
+        let _ = runtime.start_autostart().await;
+        assert_ne!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Running
+        );
+        // User's printer selection remains preserved for when channel is configured
+        assert_eq!(
+            sharing
+                .shared_printers()
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>(),
+            vec!["HP LaserJet"]
+        );
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn explicit_stop_persists_even_when_service_was_in_failed_state() {
+    let dir = temporary_directory("persist-lifecycle-failed-stop");
+
+    // Session 1: printer is selected and sharing is started on a port that conflicts, causing run to fail
+    {
+        // Bind a port first so IppsServer fails to listen
+        let conflict_socket =
+            std::net::TcpListener::bind("0.0.0.0:0").expect("binds conflict port");
+        let port = conflict_socket.local_addr().expect("local addr").port();
+
+        let (sharing, conflicting_endpoint) =
+            support::sharing_runtime_persistent_on(&["HP LaserJet"], &dir, port);
+        sharing
+            .set_shared(printer_names(&["HP LaserJet"]))
+            .await
+            .expect("selects printer");
+
+        let service = support::sharing_service(Arc::clone(&sharing), conflicting_endpoint);
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(service)]);
+
+        let start_result = runtime.start(ServiceId::ServerSharing).await;
+        assert!(
+            start_result.is_err(),
+            "start should fail when port is already bound"
+        );
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Failed,
+            "service should enter Failed state"
+        );
+
+        // Explicit user stop from failed state
+        runtime
+            .stop(ServiceId::ServerSharing)
+            .await
+            .expect("stops sharing from failed state");
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Stopped
+        );
+
+        drop(conflict_socket);
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    // Session 2: restart must stay stopped even when the port is free now
+    {
+        let (sharing, endpoint) = support::sharing_runtime_persistent(&["HP LaserJet"], &dir);
+        sharing.restore().await.expect("restores");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
+            Arc::clone(&sharing),
+            endpoint,
+        ))]);
+
+        runtime.start_autostart().await.expect("autostart");
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Stopped
+        );
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}

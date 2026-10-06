@@ -22,4 +22,4 @@ pub use windows::WindowsPrintJobSubmitter;
 #[cfg(not(windows))]
 pub use unsupported::UnsupportedPrinterCatalog;
 #[cfg(windows)]
-pub use windows::WindowsPrinterCatalog;
+pub use windows::{WindowsPrinterCatalog, WindowsSpoolerReader};
