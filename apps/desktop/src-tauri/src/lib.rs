@@ -113,6 +113,7 @@ impl Shell {
             Arc::clone(&endpoint),
             advertiser,
             Arc::clone(&setup),
+            Arc::clone(&network_channel) as Arc<dyn application::ChannelState>,
         );
         let runtime = Arc::new(RuntimeCoordinator::new(vec![
             Arc::new(ClientProxyService::new(

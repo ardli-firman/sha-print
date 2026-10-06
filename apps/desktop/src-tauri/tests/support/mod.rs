@@ -91,10 +91,12 @@ pub fn sharing_runtime_persistent(
         Some(data_dir),
     ));
     let identity = ServerIdentity::generate().expect("generates a server identity");
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let _ = channel.configure_sync("test-channel-secret");
     let endpoint = Arc::new(IppsServer::new(
         0,
         Arc::new(identity),
-        Arc::new(NetworkChannel::in_memory()),
+        Arc::clone(&channel),
         Arc::new(UnavailableSubmitter),
         Arc::new(PrintFailures::new()),
         Arc::new(shaprint_desktop::application::PrintJobTracker::new()),
@@ -108,10 +110,12 @@ pub fn sharing_runtime_persistent(
 pub fn sharing_runtime_on(queues: &[&str], port: u16) -> (Arc<Sharing>, Arc<IppsServer>) {
     let sharing = Arc::new(Sharing::new(FakeCatalog::new(queues)));
     let identity = ServerIdentity::generate().expect("generates a server identity");
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let _ = channel.configure_sync("test-channel-secret");
     let endpoint = Arc::new(IppsServer::new(
         port,
         Arc::new(identity),
-        Arc::new(NetworkChannel::in_memory()),
+        Arc::clone(&channel),
         Arc::new(UnavailableSubmitter),
         Arc::new(PrintFailures::new()),
         Arc::new(shaprint_desktop::application::PrintJobTracker::new()),
@@ -157,11 +161,14 @@ pub fn allowed_inbound_setup() -> Arc<Setup> {
 /// The advertiser binds an ephemeral discovery port, so tests never compete with the machine's own
 /// multicast DNS responder and one test cannot take the port another test needs.
 pub fn sharing_service(sharing: Arc<Sharing>, endpoint: Arc<IppsServer>) -> ServerSharingService {
+    let channel = Arc::new(NetworkChannel::in_memory());
+    let _ = channel.configure_sync("test-channel-secret");
     ServerSharingService::new(
         sharing,
         endpoint,
         Arc::new(MdnsAdvertiser::on(vec![0])),
         allowed_inbound_setup(),
+        channel,
     )
 }
 

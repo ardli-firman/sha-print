@@ -194,7 +194,11 @@ function App() {
                     </Button>
                   </div>
                 ) : null}
-                <PrinterSharingPanel sharing={sharing} />
+                <PrinterSharingPanel
+                  sharing={sharing}
+                  runtime={runtime}
+                  networkChannel={networkChannel}
+                />
               </>
             ) : null}
 

@@ -1026,6 +1026,71 @@ describe("shared printers panel", () => {
     expect(ipc.startService).toHaveBeenCalledWith("server-sharing");
   });
 
+  it("starts and stops sharing from user intent in Share printers workspace", async () => {
+    vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(true);
+    vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith("HP LaserJet"));
+    vi.mocked(ipc.startService).mockResolvedValue(runtimeWith("running", "running"));
+    vi.mocked(ipc.stopService).mockResolvedValue(runtimeWith("running", "stopped"));
+
+    render(<App />);
+    navigateTo("Share printers");
+
+    // Local queues already has a shared printer (HP LaserJet)
+    const startBtn = await screen.findByRole("button", { name: "Start sharing" });
+    expect(startBtn).toBeTruthy();
+    fireEvent.click(startBtn);
+
+    await waitFor(() => {
+      expect(ipc.startService).toHaveBeenCalledWith("server-sharing");
+    });
+
+    // When running, shows Stop sharing
+    const stopBtn = await screen.findByRole("button", { name: "Stop sharing" });
+    expect(stopBtn).toBeTruthy();
+    fireEvent.click(stopBtn);
+
+    await waitFor(() => {
+      expect(ipc.stopService).toHaveBeenCalledWith("server-sharing");
+    });
+  });
+
+  it("prompts for Network Channel when starting sharing without a configured channel", async () => {
+    vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(false);
+    vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith("HP LaserJet"));
+    vi.mocked(networkChannel.configureNetworkChannel).mockResolvedValue(true);
+    vi.mocked(ipc.startService).mockResolvedValue(runtimeWith("running", "running"));
+
+    render(<App />);
+    navigateTo("Share printers");
+
+    const startBtn = await screen.findByRole("button", { name: "Start sharing" });
+    fireEvent.click(startBtn);
+
+    // Shows contextual prompt
+    expect(
+      await screen.findByRole("region", { name: "Set Network Channel before sharing" }),
+    ).toBeTruthy();
+
+    // Cancel prompt leaves sharing off and preserves selection
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.queryByRole("region", { name: "Set Network Channel before sharing" }),
+    ).toBeNull();
+    expect(ipc.startService).not.toHaveBeenCalled();
+
+    // Entering secret saves and starts sharing
+    fireEvent.click(screen.getByRole("button", { name: "Start sharing" }));
+    fireEvent.change(screen.getByLabelText("Network Channel secret"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Start sharing" }));
+
+    await waitFor(() => {
+      expect(networkChannel.configureNetworkChannel).toHaveBeenCalledWith("secret123");
+      expect(ipc.startService).toHaveBeenCalledWith("server-sharing");
+    });
+  });
+
   it("shows the stable error code when a change is rejected and re-reads the queues", async () => {
     vi.mocked(ipc.setSharedPrinters).mockRejectedValue({
       code: "invalid-input",

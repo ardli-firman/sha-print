@@ -14,7 +14,8 @@ use async_trait::async_trait;
 
 use crate::adapters::ipps::IppsServer;
 use crate::application::{
-    RuntimeService, ServerAdvertiser, ServiceContext, Setup, SharedPrinterSource, Sharing,
+    ChannelState, RuntimeService, ServerAdvertiser, ServiceContext, Setup, SharedPrinterSource,
+    Sharing,
 };
 use crate::domain::{AppError, ServiceId};
 
@@ -24,6 +25,7 @@ pub struct ServerSharingService {
     endpoint: Arc<IppsServer>,
     advertiser: Arc<dyn ServerAdvertiser>,
     setup: Arc<Setup>,
+    channel: Arc<dyn ChannelState>,
 }
 
 impl ServerSharingService {
@@ -32,12 +34,14 @@ impl ServerSharingService {
         endpoint: Arc<IppsServer>,
         advertiser: Arc<dyn ServerAdvertiser>,
         setup: Arc<Setup>,
+        channel: Arc<dyn ChannelState>,
     ) -> Self {
         Self {
             sharing,
             endpoint,
             advertiser,
             setup,
+            channel,
         }
     }
 }
@@ -67,10 +71,16 @@ impl RuntimeService for ServerSharingService {
 
     /// Sharing needs something to share: a server with no selected queue would open a port and
     /// answer every client with an empty printer list.
+    /// Sharing also requires a configured Network Channel to authorize print requests.
     fn preflight(&self) -> Result<(), AppError> {
         if self.sharing.shared_printers().is_empty() {
             return Err(AppError::invalid_state(
                 "select at least one printer to share before starting",
+            ));
+        }
+        if !self.channel.is_configured() {
+            return Err(AppError::invalid_state(
+                "a Network Channel is not configured. Set a Network Channel before starting sharing.",
             ));
         }
         Ok(())
@@ -307,10 +317,12 @@ mod tests {
             queues.iter().map(|queue| name(queue)).collect(),
         ));
         let sharing = Arc::new(Sharing::new(catalog));
+        let channel = Arc::new(NetworkChannel::in_memory());
+        let _ = channel.configure_sync("test-channel-secret");
         let endpoint = Arc::new(IppsServer::new(
             0,
             Arc::new(ServerIdentity::generate().expect("generates")),
-            Arc::new(NetworkChannel::in_memory()),
+            Arc::clone(&channel),
             Arc::new(UnavailableSubmitter),
             Arc::new(PrintFailures::new()),
             Arc::new(crate::application::PrintJobTracker::new()),
@@ -320,6 +332,7 @@ mod tests {
             Arc::clone(&endpoint),
             advertiser,
             allowed_setup(),
+            channel,
         ))]);
         (runtime, sharing, endpoint)
     }
@@ -361,6 +374,14 @@ mod tests {
     }
 
     fn service(queues: &[&str], setup: Arc<Setup>) -> (ServerSharingService, Arc<Sharing>) {
+        service_with_channel(queues, setup, true)
+    }
+
+    fn service_with_channel(
+        queues: &[&str],
+        setup: Arc<Setup>,
+        channel_configured: bool,
+    ) -> (ServerSharingService, Arc<Sharing>) {
         let catalog = Arc::new(FakeCatalog(
             queues
                 .iter()
@@ -369,17 +390,21 @@ mod tests {
         ));
         let sharing = Arc::new(Sharing::new(catalog));
         let identity = Arc::new(ServerIdentity::generate().expect("generates"));
+        let channel = Arc::new(NetworkChannel::in_memory());
+        if channel_configured {
+            let _ = channel.configure_sync("test-channel-secret");
+        }
         let endpoint = Arc::new(IppsServer::new(
             0,
             identity,
-            Arc::new(NetworkChannel::in_memory()),
+            Arc::clone(&channel),
             Arc::new(UnavailableSubmitter),
             Arc::new(PrintFailures::new()),
             Arc::new(crate::application::PrintJobTracker::new()),
         ));
         let (advertiser, _recorded) = FakeAdvertiser::available();
         (
-            ServerSharingService::new(Arc::clone(&sharing), endpoint, advertiser, setup),
+            ServerSharingService::new(Arc::clone(&sharing), endpoint, advertiser, setup, channel),
             sharing,
         )
     }
@@ -790,6 +815,28 @@ mod tests {
             .stop(ServiceId::ServerSharing)
             .await
             .expect("sharing stops");
+    }
+
+    #[tokio::test]
+    async fn sharing_cannot_start_before_network_channel_is_configured() {
+        use crate::domain::ErrorCode;
+
+        let (service, sharing) = service_with_channel(&["HP LaserJet"], allowed_setup(), false);
+        sharing
+            .set_shared(vec![name("HP LaserJet")])
+            .await
+            .expect("selects printer");
+
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(service)]);
+        let error = runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect_err("refuses start without channel");
+
+        assert_eq!(error.code(), ErrorCode::InvalidState);
+        assert!(error
+            .message()
+            .contains("Network Channel is not configured"));
     }
 
     #[tokio::test]
