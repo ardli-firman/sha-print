@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use windows_sys::Win32::Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER};
-use windows_sys::Win32::Graphics::Printing::{EnumPrintersW, PRINTER_ENUM_LOCAL, PRINTER_INFO_2W};
+use windows_sys::Win32::Graphics::Printing::{
+    EnumPrintersW, PRINTER_ENUM_CONNECTIONS, PRINTER_ENUM_LOCAL, PRINTER_INFO_2W,
+};
 
 use crate::application::{DestinationAwarePrinterCatalog, LocalPrinterCatalog, SpoolerReader};
 use crate::domain::{AppError, PrinterName, RecognisedClientQueue, SpoolerRecord};
@@ -65,6 +67,10 @@ impl LocalPrinterCatalog for WindowsPrinterCatalog {
     }
 }
 
+/// Enumeration flags: include both locally installed printers and per-user network/IPP connections
+/// so that queues installed via Add-Printer -IppURL are always enumerated.
+const PRINTER_ENUM_FLAGS: u32 = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
+
 fn enumerate_local_records() -> Result<Vec<SpoolerRecord>, AppError> {
     let needed = required_bytes()?;
     if needed == 0 {
@@ -80,7 +86,7 @@ fn enumerate_local_records() -> Result<Vec<SpoolerRecord>, AppError> {
     // Safety: `buffer` holds `capacity` bytes of writable memory and `capacity` describes it.
     let listed = unsafe {
         EnumPrintersW(
-            PRINTER_ENUM_LOCAL,
+            PRINTER_ENUM_FLAGS,
             std::ptr::null(),
             PRINTER_INFO_LEVEL,
             buffer.as_mut_ptr().cast::<u8>(),
@@ -118,7 +124,7 @@ fn required_bytes() -> Result<u32, AppError> {
     // Safety: a sizing call writes only to the two out-parameters.
     let listed = unsafe {
         EnumPrintersW(
-            PRINTER_ENUM_LOCAL,
+            PRINTER_ENUM_FLAGS,
             std::ptr::null(),
             PRINTER_INFO_LEVEL,
             std::ptr::null_mut(),
