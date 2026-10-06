@@ -440,6 +440,46 @@ describe("guided printer setup", () => {
     expect(copyBtn).toBeTruthy();
   });
 
+  it("shows evidence-based Reverify identity action when an installed queue's server identity has changed", async () => {
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([
+      {
+        queue_name: "Office Laser (ShaPrint 10.0.0.5-8631)",
+        server_address: "10.0.0.5:8631",
+        printer_name: "Office Laser",
+      },
+    ]);
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue({
+      address: "10.0.0.5:8631",
+      current_fingerprint: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
+      previous_fingerprint: "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
+      trusted: false,
+    });
+
+    render(<App />);
+
+    // Queue remains listed with targeted evidence warning
+    expect(
+      await screen.findByText("Office Laser (ShaPrint 10.0.0.5-8631)"),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText("Server identity changed. Printing is blocked until reverified."),
+    ).toBeTruthy();
+
+    // Does not display speculative Online or Offline badges
+    expect(screen.queryByText(/^Online$/i)).toBeNull();
+    expect(screen.queryByText(/^Offline$/i)).toBeNull();
+
+    // Reverify identity button opens the guided trust verification flow
+    const reverifyBtn = screen.getByRole("button", {
+      name: "Reverify identity for 10.0.0.5:8631",
+    });
+    expect(reverifyBtn).toBeTruthy();
+    fireEvent.click(reverifyBtn);
+
+    // Guided setup dialog opens directly to fingerprint verification step
+    expect(await screen.findByRole("dialog", { name: "Check the server identity" })).toBeTruthy();
+  });
+
   it("offers a single guided Add printer entry in My printers workspace without duplicate inline controls", async () => {
     render(<App />);
 

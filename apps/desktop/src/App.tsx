@@ -175,6 +175,10 @@ function App() {
               <InstalledClientQueuesPanel
                 clientQueues={clientQueues}
                 onAddPrinter={() => setAddPrinterOpen(true)}
+                onReverifyServer={(serverAddress) => {
+                  setAddPrinterOpen(true);
+                  void connections.reviewAddress(serverAddress);
+                }}
               />
             ) : null}
 
