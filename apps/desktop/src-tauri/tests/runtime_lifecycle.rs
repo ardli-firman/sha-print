@@ -464,38 +464,49 @@ async fn restarting_when_network_channel_missing_leaves_sharing_stopped_and_does
 async fn explicit_stop_persists_even_when_service_was_in_failed_state() {
     let dir = temporary_directory("persist-lifecycle-failed-stop");
 
-    // Session 1: printer is selected, sharing is autostart-enabled
+    // Session 1: printer is selected and sharing is started on a port that conflicts, causing run to fail
     {
-        let (sharing, endpoint) = support::sharing_runtime_persistent(&["HP LaserJet"], &dir);
+        // Bind a port first so IppsServer fails to listen
+        let conflict_socket =
+            std::net::TcpListener::bind("0.0.0.0:0").expect("binds conflict port");
+        let port = conflict_socket.local_addr().expect("local addr").port();
+
+        let (sharing, conflicting_endpoint) =
+            support::sharing_runtime_persistent_on(&["HP LaserJet"], &dir, port);
         sharing
             .set_shared(printer_names(&["HP LaserJet"]))
             .await
             .expect("selects printer");
 
-        let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
-            Arc::clone(&sharing),
-            endpoint,
-        ))]);
+        let service = support::sharing_service(Arc::clone(&sharing), conflicting_endpoint);
+        let runtime = RuntimeCoordinator::new(vec![Arc::new(service)]);
 
-        runtime
-            .start(ServiceId::ServerSharing)
-            .await
-            .expect("starts sharing");
+        let start_result = runtime.start(ServiceId::ServerSharing).await;
+        assert!(
+            start_result.is_err(),
+            "start should fail when port is already bound"
+        );
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Failed,
+            "service should enter Failed state"
+        );
 
-        // Explicit user stop
+        // Explicit user stop from failed state
         runtime
             .stop(ServiceId::ServerSharing)
             .await
-            .expect("stops sharing");
+            .expect("stops sharing from failed state");
         assert_eq!(
             state(&runtime, ServiceId::ServerSharing),
             ServiceState::Stopped
         );
 
+        drop(conflict_socket);
         runtime.shutdown().await.expect("clean shutdown");
     }
 
-    // Session 2: restart must stay stopped
+    // Session 2: restart must stay stopped even when the port is free now
     {
         let (sharing, endpoint) = support::sharing_runtime_persistent(&["HP LaserJet"], &dir);
         sharing.restore().await.expect("restores");

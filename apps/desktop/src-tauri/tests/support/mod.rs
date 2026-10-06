@@ -86,6 +86,15 @@ pub fn sharing_runtime_persistent(
     queues: &[&str],
     data_dir: &std::path::Path,
 ) -> (Arc<Sharing>, Arc<IppsServer>) {
+    sharing_runtime_persistent_on(queues, data_dir, 0)
+}
+
+/// The persistent sharing configuration over `queues` using `data_dir` and a specific `port`.
+pub fn sharing_runtime_persistent_on(
+    queues: &[&str],
+    data_dir: &std::path::Path,
+    port: u16,
+) -> (Arc<Sharing>, Arc<IppsServer>) {
     let sharing = Arc::new(Sharing::with_persistence(
         FakeCatalog::new(queues),
         Some(data_dir),
@@ -94,7 +103,7 @@ pub fn sharing_runtime_persistent(
     let channel = Arc::new(NetworkChannel::in_memory());
     let _ = channel.configure_sync("test-channel-secret");
     let endpoint = Arc::new(IppsServer::new(
-        0,
+        port,
         Arc::new(identity),
         Arc::clone(&channel),
         Arc::new(UnavailableSubmitter),
