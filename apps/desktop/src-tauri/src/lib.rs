@@ -303,6 +303,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ipc::client_connections::list_server_connection_printers,
             ipc::client_connections::list_recognised_client_queues,
             ipc::commands::install_printer_queue,
+            ipc::commands::open_printers_settings,
             ipc::server_settings::configure_network_channel,
             ipc::server_settings::get_network_channel_status,
             ipc::discovery::list_nearby_servers,

@@ -28,3 +28,8 @@ export function installPrinterQueue(serverAddress: string, printerName: string):
 export function listRecognisedClientQueues(): Promise<RecognisedClientQueue[]> {
   return invoke("list_recognised_client_queues");
 }
+
+/** Opens Windows Printers & scanners settings through the desktop shell. */
+export function openPrintersSettings(): Promise<void> {
+  return invoke("open_printers_settings");
+}

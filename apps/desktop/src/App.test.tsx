@@ -49,6 +49,7 @@ vi.mock("./api/serverConnections", () => ({
   listServerConnectionPrinters: vi.fn(),
   installPrinterQueue: vi.fn(),
   listRecognisedClientQueues: vi.fn(),
+  openPrintersSettings: vi.fn(),
 }));
 
 vi.mock("./api/discovery", () => ({
@@ -364,6 +365,56 @@ describe("guided printer setup", () => {
       ).toBeTruthy();
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     });
+  });
+
+  it("opens Windows settings or explains manual steps without offering in-app delete button", async () => {
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([
+      {
+        queue_name: "Office Laser (ShaPrint 10.0.0.5-8631)",
+        server_address: "10.0.0.5:8631",
+        printer_name: "Office Laser",
+      },
+    ]);
+    vi.mocked(serverConnections.openPrintersSettings).mockResolvedValue();
+
+    render(<App />);
+
+    expect(
+      await screen.findByText("Office Laser (ShaPrint 10.0.0.5-8631)"),
+    ).toBeTruthy();
+
+    // No in-app delete button
+    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /remove/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /uninstall/i })).toBeNull();
+
+    // Manage in Windows action calls desktop shell
+    const manageButtons = screen.getAllByRole("button", { name: /Manage in Windows/i });
+    expect(manageButtons.length).toBeGreaterThan(0);
+    fireEvent.click(manageButtons[0]);
+
+    await waitFor(() => {
+      expect(serverConnections.openPrintersSettings).toHaveBeenCalled();
+    });
+
+    // When opening settings fails, explains manual navigation and provides queue name copy
+    vi.mocked(serverConnections.openPrintersSettings).mockRejectedValueOnce(
+      new Error("Shell execution failed"),
+    );
+    fireEvent.click(manageButtons[0]);
+
+    expect(
+      await screen.findByText(/Could not open Windows Settings automatically/i),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Open Windows Settings > Bluetooth & devices > Printers & scanners/i),
+    ).toBeTruthy();
+
+    // Queue name copy button is available
+    const copyBtn = screen.getByRole("button", {
+      name: "Copy queue name Office Laser (ShaPrint 10.0.0.5-8631)",
+    });
+    expect(copyBtn).toBeTruthy();
   });
 
   it("offers a single guided Add printer entry in My printers workspace without duplicate inline controls", async () => {
