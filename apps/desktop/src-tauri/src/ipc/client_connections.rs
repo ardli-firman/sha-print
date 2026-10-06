@@ -5,6 +5,24 @@ use serde::Serialize;
 use tauri::State;
 
 pub type SharedClientConnections = std::sync::Arc<ClientConnections>;
+pub type SharedPrinterCatalog = std::sync::Arc<dyn crate::application::LocalPrinterCatalog>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecognisedClientQueueDto {
+    pub queue_name: String,
+    pub server_address: String,
+    pub printer_name: String,
+}
+
+impl From<crate::domain::RecognisedClientQueue> for RecognisedClientQueueDto {
+    fn from(q: crate::domain::RecognisedClientQueue) -> Self {
+        Self {
+            queue_name: q.queue_name().to_string(),
+            server_address: q.server_address().to_string(),
+            printer_name: q.printer_name().to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServerConnectionReviewDto {
@@ -69,5 +87,21 @@ pub async fn list_server_connection_printers(
         .printers(&address)
         .await
         .map(ServerConnectionPrintersDto::from)
+        .map_err(|e| AppErrorDto::from(&e))
+}
+
+#[tauri::command]
+pub async fn list_recognised_client_queues(
+    catalog: State<'_, SharedPrinterCatalog>,
+) -> Result<Vec<RecognisedClientQueueDto>, AppErrorDto> {
+    catalog
+        .recognised_client_queues()
+        .await
+        .map(|queues| {
+            queues
+                .into_iter()
+                .map(RecognisedClientQueueDto::from)
+                .collect()
+        })
         .map_err(|e| AppErrorDto::from(&e))
 }

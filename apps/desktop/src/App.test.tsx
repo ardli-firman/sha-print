@@ -48,6 +48,7 @@ vi.mock("./api/serverConnections", () => ({
   approveServerConnection: vi.fn(),
   listServerConnectionPrinters: vi.fn(),
   installPrinterQueue: vi.fn(),
+  listRecognisedClientQueues: vi.fn(),
 }));
 
 vi.mock("./api/discovery", () => ({
@@ -159,6 +160,7 @@ beforeEach(() => {
   vi.mocked(ipc.getRuntimeStatus).mockResolvedValue(runtimeWith("running", "stopped"));
   vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith());
   vi.mocked(ipc.getServerIdentity).mockResolvedValue(IDENTITY);
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([]);
   vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(false);
   vi.mocked(discovery.listNearbyServers).mockResolvedValue({ servers: [] });
   vi.mocked(discovery.onNearbyServers).mockResolvedValue(() => {});
@@ -312,6 +314,59 @@ describe("workspace service status", () => {
 });
 
 describe("guided printer setup", () => {
+  it("renders recognised client queues from Windows and allows refresh and retry", async () => {
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValueOnce([
+      {
+        queue_name: "Office Laser (ShaPrint 10.0.0.5-8631)",
+        server_address: "10.0.0.5:8631",
+        printer_name: "Office Laser",
+      },
+      {
+        queue_name: "Office Laser (ShaPrint 192.168.1.50-8631)",
+        server_address: "192.168.1.50:8631",
+        printer_name: "Office Laser",
+      },
+    ]);
+
+    render(<App />);
+    navigateTo("Connect");
+
+    // Both queues, including same printer name on different servers, are listed
+    await waitFor(() => {
+      expect(
+        screen.getByText("Office Laser (ShaPrint 10.0.0.5-8631)"),
+      ).toBeTruthy();
+      expect(
+        screen.getByText("Office Laser (ShaPrint 192.168.1.50-8631)"),
+      ).toBeTruthy();
+    });
+
+    // Refresh button fetches current state again
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValueOnce([]);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh installed queues" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "No ShaPrint client queues installed in Windows. Use Add printer to install one.",
+        ),
+      ).toBeTruthy();
+    });
+
+    // Error and retry state
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockRejectedValueOnce(
+      new Error("Spooler service unavailable"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh installed queues" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Spooler service unavailable"),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+  });
+
   it("offers a single guided Add printer entry in Connect workspace without duplicate inline controls", async () => {
     render(<App />);
     navigateTo("Connect");

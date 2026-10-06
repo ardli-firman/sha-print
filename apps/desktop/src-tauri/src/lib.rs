@@ -56,6 +56,7 @@ use domain::AppError;
 pub struct Shell {
     runtime: Arc<RuntimeCoordinator>,
     sharing: Arc<Sharing>,
+    printer_catalog: Arc<dyn application::LocalPrinterCatalog>,
     endpoint: Arc<IppsServer>,
     startup: Arc<Startup>,
     legacy_import: Arc<LegacyImport>,
@@ -71,8 +72,9 @@ impl Shell {
     /// Builds the shell for the app data directory the identity and settings live in.
     pub fn new(data_dir: &Path) -> Result<Self, AppError> {
         let identity = Arc::new(FileIdentityStore::new(data_dir).load_or_create()?);
+        let printer_catalog = default_printer_catalog();
         let sharing = Arc::new(Sharing::with_persistence(
-            default_printer_catalog(),
+            Arc::clone(&printer_catalog),
             Some(data_dir),
         ));
         let client_connections = Arc::new(ClientConnections::new(data_dir)?);
@@ -136,6 +138,7 @@ impl Shell {
         Ok(Self {
             runtime,
             sharing,
+            printer_catalog,
             endpoint,
             startup,
             legacy_import,
@@ -154,6 +157,10 @@ impl Shell {
 
     pub fn sharing(&self) -> Arc<Sharing> {
         Arc::clone(&self.sharing)
+    }
+
+    pub fn printer_catalog(&self) -> Arc<dyn application::LocalPrinterCatalog> {
+        Arc::clone(&self.printer_catalog)
     }
 
     pub fn endpoint(&self) -> Arc<IppsServer> {
@@ -293,6 +300,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ipc::client_connections::inspect_server_connection,
             ipc::client_connections::approve_server_connection,
             ipc::client_connections::list_server_connection_printers,
+            ipc::client_connections::list_recognised_client_queues,
             ipc::commands::install_printer_queue,
             ipc::server_settings::configure_network_channel,
             ipc::server_settings::get_network_channel_status,
@@ -318,6 +326,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ipc::emitter::forward_legacy_import(app.handle().clone(), shell.legacy_import());
             app.manage(shell.runtime());
             app.manage(shell.sharing());
+            app.manage(shell.printer_catalog());
             app.manage(shell.endpoint());
             app.manage(shell.client_connections());
             app.manage(shell.network_channel());

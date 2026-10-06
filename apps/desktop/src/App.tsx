@@ -4,8 +4,10 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   AddPrinterDialog,
+  InstalledClientQueuesPanel,
   NearbyServersPanel,
   useNearbyServers,
+  useRecognisedClientQueues,
   useServerConnections,
 } from "@/features/client-connection";
 import { NetworkChannelPanel, useNetworkChannel } from "@/features/network-channel";
@@ -60,6 +62,7 @@ function App() {
   const sharing = usePrinterSharing();
   const networkChannel = useNetworkChannel();
   const connections = useServerConnections();
+  const clientQueues = useRecognisedClientQueues();
   const nearby = useNearbyServers();
   const updates = useUpdates();
   const pageContent = PAGE_CONTENT[page];
@@ -190,16 +193,19 @@ function App() {
             ) : null}
 
             {page === "connect" ? (
-              <NearbyServersPanel
-                nearby={nearby}
-                connections={connections}
-                onOpenWizard={(address) => {
-                  setAddPrinterOpen(true);
-                  if (address) {
-                    void connections.reviewAddress(address);
-                  }
-                }}
-              />
+              <>
+                <NearbyServersPanel
+                  nearby={nearby}
+                  connections={connections}
+                  onOpenWizard={(address) => {
+                    setAddPrinterOpen(true);
+                    if (address) {
+                      void connections.reviewAddress(address);
+                    }
+                  }}
+                />
+                <InstalledClientQueuesPanel clientQueues={clientQueues} />
+              </>
             ) : null}
 
             {page === "settings" ? (

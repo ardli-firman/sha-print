@@ -575,7 +575,7 @@ mod tests {
         });
 
         let catalog = Arc::new(DestinationAwarePrinterCatalog::new(spooler));
-        let sharing = Sharing::new(catalog);
+        let sharing = Sharing::new(Arc::clone(&catalog) as Arc<dyn LocalPrinterCatalog>);
 
         let local = sharing.local_printers().await.expect("reads local queues");
         let local_names: Vec<&str> = local.iter().map(|p| p.name().as_str()).collect();
@@ -619,6 +619,26 @@ mod tests {
             .await
             .expect("eligible printers succeed");
         assert_eq!(sharing.shared_printers().len(), 2);
+
+        // Recognised client queues listing enumerates exactly genuine client queues
+        let client_queues = catalog
+            .recognised_client_queues()
+            .await
+            .expect("lists client queues");
+        assert_eq!(client_queues.len(), 2);
+        assert_eq!(
+            client_queues[0].queue_name().as_str(),
+            "Canon (ShaPrint 10.0.0.5-8631)"
+        );
+        assert_eq!(client_queues[0].server_address(), "10.0.0.5:8631");
+        assert_eq!(client_queues[0].printer_name().as_str(), "Canon");
+
+        assert_eq!(
+            client_queues[1].queue_name().as_str(),
+            "Office Laser (ShaPrint 10.0.0.5-8631)"
+        );
+        assert_eq!(client_queues[1].server_address(), "10.0.0.5:8631");
+        assert_eq!(client_queues[1].printer_name().as_str(), "Office Laser");
     }
 
     #[tokio::test]
