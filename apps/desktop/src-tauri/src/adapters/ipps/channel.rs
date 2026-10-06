@@ -265,3 +265,9 @@ impl ChannelStore for NetworkChannel {
         self.configure(channel).await.map(|_| ())
     }
 }
+
+impl crate::application::ChannelState for NetworkChannel {
+    fn is_configured(&self) -> bool {
+        NetworkChannel::is_configured(self)
+    }
+}

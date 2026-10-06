@@ -133,6 +133,7 @@ impl Shell {
             Arc::clone(&client_connections) as Arc<dyn TrustedServerPrinters>,
             adapters::queue_installation::platform_installer(),
             Arc::clone(&runtime) as Arc<dyn ClientProxyState>,
+            Arc::clone(&network_channel) as Arc<dyn application::ChannelState>,
         ));
 
         Ok(Self {

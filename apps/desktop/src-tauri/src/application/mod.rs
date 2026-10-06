@@ -32,8 +32,8 @@ pub use printers::{
     PrintOrientation, PrintSettings, SharedPrinterSource, SpoolerReader,
 };
 pub use queue_installation::{
-    ClientProxyState, ClientQueue, QueueInstallation, QueueInstaller, TrustedPrinters,
-    TrustedServerPrinters,
+    ChannelState, ClientProxyState, ClientQueue, QueueInstallation, QueueInstaller,
+    TrustedPrinters, TrustedServerPrinters,
 };
 pub use runtime::{RuntimeService, ServiceContext, ServiceReporter, Shutdown};
 pub use setup::{ElevationBroker, Setup, SetupOutcome};

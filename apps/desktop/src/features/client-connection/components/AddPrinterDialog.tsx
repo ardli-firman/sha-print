@@ -142,6 +142,7 @@ export function AddPrinterDialog({
       return;
     }
 
+    onEnsureProxyRunning?.();
     await connections.install(printerName);
   }
 
@@ -152,6 +153,7 @@ export function AddPrinterDialog({
     const saved = await networkChannel.save(channelInput);
     if (saved) {
       setChannelInput("");
+      onEnsureProxyRunning?.();
       await connections.install(selectedPrinter);
     }
   }

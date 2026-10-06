@@ -153,6 +153,7 @@ struct RunningClient {
     proxy_address: String,
     server_port: u16,
     submitter: Arc<RecordingSubmitter>,
+    channel: Arc<NetworkChannel>,
 }
 
 impl RunningClient {
@@ -221,7 +222,7 @@ impl RunningClient {
         let proxy_tracker = Arc::new(shaprint_desktop::application::PrintJobTracker::new());
         let proxy = Arc::new(ClientProxyService::with_port(
             Arc::clone(&connections),
-            client_channel,
+            Arc::clone(&client_channel),
             Arc::new(PrintFailures::new()),
             proxy_tracker,
             proxy_port,
@@ -243,6 +244,7 @@ impl RunningClient {
             proxy_address,
             server_port,
             submitter,
+            channel: client_channel,
         }
     }
 
@@ -254,6 +256,7 @@ impl RunningClient {
                 authority: self.proxy_address.clone(),
             }) as Arc<dyn QueueInstaller>,
             Arc::clone(&self.coordinator) as Arc<dyn ClientProxyState>,
+            Arc::clone(&self.channel) as Arc<dyn shaprint_desktop::application::ChannelState>,
         )
     }
 
@@ -574,4 +577,33 @@ async fn windows_installs_a_native_queue_that_prints_through_the_proxy() {
         "the smoke queue was not removed"
     );
     client.stop().await;
+}
+
+#[tokio::test]
+async fn installing_a_queue_is_rejected_before_elevation_when_client_channel_is_missing() {
+    let running = RunningClient::start(true).await;
+    let broker = Arc::new(RecordingBroker::default());
+    let unconfigured_channel = Arc::new(NetworkChannel::in_memory());
+    let installation = QueueInstallation::new(
+        Arc::new(Setup::new(broker.clone() as Arc<dyn ElevationBroker>)),
+        Arc::clone(&running.connections) as Arc<dyn TrustedServerPrinters>,
+        Arc::new(TrackingInstaller {
+            authority: running.proxy_address.clone(),
+        }) as Arc<dyn QueueInstaller>,
+        Arc::clone(&running.coordinator) as Arc<dyn ClientProxyState>,
+        unconfigured_channel as Arc<dyn shaprint_desktop::application::ChannelState>,
+    );
+
+    let error = installation
+        .install(&format!("127.0.0.1:{}", running.server_port), SERVER_QUEUE)
+        .await
+        .expect_err("must be rejected");
+
+    assert_eq!(error.code(), ErrorCode::InvalidState);
+    assert!(error
+        .message()
+        .contains("Network Channel is not configured"));
+    assert_eq!(broker.installed().len(), 0);
+
+    running.stop().await;
 }
