@@ -28,8 +28,8 @@ pub use legacy::{
 };
 pub use lifecycle::{close_action, CloseAction};
 pub use printers::{
-    DuplexMode, LocalPrinterCatalog, PrintJob, PrintJobSubmitter, PrintOrientation, PrintSettings,
-    SharedPrinterSource,
+    DestinationAwarePrinterCatalog, DuplexMode, LocalPrinterCatalog, PrintJob, PrintJobSubmitter,
+    PrintOrientation, PrintSettings, SharedPrinterSource, SpoolerReader,
 };
 pub use queue_installation::{
     ClientProxyState, ClientQueue, QueueInstallation, QueueInstaller, TrustedPrinters,

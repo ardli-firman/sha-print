@@ -527,4 +527,136 @@ mod tests {
 
         std::fs::remove_dir_all(&path).ok();
     }
+
+    struct FakeSpooler {
+        records: Vec<crate::domain::SpoolerRecord>,
+    }
+
+    #[async_trait]
+    impl crate::application::SpoolerReader for FakeSpooler {
+        async fn read_spooler_records(
+            &self,
+        ) -> Result<Vec<crate::domain::SpoolerRecord>, AppError> {
+            Ok(self.records.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn destination_aware_sharing_excludes_client_queues_and_ambiguous_records() {
+        use crate::application::DestinationAwarePrinterCatalog;
+        use crate::domain::SpoolerRecord;
+
+        let spooler = Arc::new(FakeSpooler {
+            records: vec![
+                SpoolerRecord::new("Brother HL-L2350DW", "USB001"),
+                // Lookalike queue on a local USB port remains selectable (name alone does not qualify)
+                SpoolerRecord::new("Office Printer (ShaPrint 10.0.0.5-8631)", "USB002"),
+                // Genuine client queue on IPP loopback port
+                SpoolerRecord::new(
+                    "Office Laser (ShaPrint 10.0.0.5-8631)",
+                    "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Laser",
+                ),
+                // Genuine client queue on Windows-normalised HTTP loopback port
+                SpoolerRecord::new(
+                    "Canon (ShaPrint 10.0.0.5-8631)",
+                    "http://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Canon",
+                ),
+                // Ambiguous destination
+                SpoolerRecord::new(
+                    "Corrupt Queue (ShaPrint 10.0.0.5-8631)",
+                    "ipp://127.0.0.1:8632/ipp/print/malformed",
+                ),
+                // Ambiguous name mismatch
+                SpoolerRecord::new(
+                    "Wrong Queue Name",
+                    "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Canon",
+                ),
+            ],
+        });
+
+        let catalog = Arc::new(DestinationAwarePrinterCatalog::new(spooler));
+        let sharing = Sharing::new(catalog);
+
+        let local = sharing.local_printers().await.expect("reads local queues");
+        let local_names: Vec<&str> = local.iter().map(|p| p.name().as_str()).collect();
+
+        // Only real local queues (including lookalikes with real ports) are eligible
+        assert_eq!(
+            local_names,
+            vec![
+                "Brother HL-L2350DW",
+                "Office Printer (ShaPrint 10.0.0.5-8631)"
+            ]
+        );
+
+        // Direct selection of a native client queue is rejected by backend
+        let err_ipp = sharing
+            .set_shared(vec![name("Office Laser (ShaPrint 10.0.0.5-8631)")])
+            .await
+            .expect_err("must reject client queue");
+        assert_eq!(err_ipp.code(), ErrorCode::InvalidInput);
+
+        // Direct selection of an HTTP-normalized client queue is rejected
+        let err_http = sharing
+            .set_shared(vec![name("Canon (ShaPrint 10.0.0.5-8631)")])
+            .await
+            .expect_err("must reject client queue");
+        assert_eq!(err_http.code(), ErrorCode::InvalidInput);
+
+        // Direct selection of ambiguous queues is rejected
+        let err_ambig = sharing
+            .set_shared(vec![name("Corrupt Queue (ShaPrint 10.0.0.5-8631)")])
+            .await
+            .expect_err("must reject ambiguous queue");
+        assert_eq!(err_ambig.code(), ErrorCode::InvalidInput);
+
+        // Eligible printers succeed
+        sharing
+            .set_shared(vec![
+                name("Brother HL-L2350DW"),
+                name("Office Printer (ShaPrint 10.0.0.5-8631)"),
+            ])
+            .await
+            .expect("eligible printers succeed");
+        assert_eq!(sharing.shared_printers().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn restore_filters_out_saved_client_queues_and_ambiguous_records() {
+        use crate::application::DestinationAwarePrinterCatalog;
+        use crate::domain::SpoolerRecord;
+
+        let path = temporary_directory("restore-client-queue");
+
+        let spooler = Arc::new(FakeSpooler {
+            records: vec![
+                SpoolerRecord::new("Brother HL-L2350DW", "USB001"),
+                SpoolerRecord::new(
+                    "Office Laser (ShaPrint 10.0.0.5-8631)",
+                    "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Laser",
+                ),
+            ],
+        });
+
+        // Craft a saved settings file that contains both a local printer and an injected client queue
+        let saved_json = r#"{
+            "enabled": true,
+            "printers": [
+                "Brother HL-L2350DW",
+                "Office Laser (ShaPrint 10.0.0.5-8631)"
+            ]
+        }"#;
+        std::fs::write(path.join("sharing_state.json"), saved_json).expect("writes state");
+
+        let catalog = Arc::new(DestinationAwarePrinterCatalog::new(spooler));
+        let sharing = Sharing::with_persistence(catalog, Some(&path));
+
+        sharing.restore().await.expect("restore succeeds");
+
+        // The client queue was filtered out; only the real local printer was restored
+        assert_eq!(sharing.shared_printers(), vec![name("Brother HL-L2350DW")]);
+        assert!(sharing.is_autostart_enabled());
+
+        std::fs::remove_dir_all(&path).ok();
+    }
 }

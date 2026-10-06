@@ -142,6 +142,163 @@ impl ClientQueueRequest {
     }
 }
 
+/// One printer queue reported by the platform spooler, with its queue name and port/destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpoolerRecord {
+    pub name: String,
+    pub port: String,
+}
+
+/// A ShaPrint client queue recognised in the Windows spooler.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RecognisedClientQueue {
+    queue_name: ClientQueueName,
+    server_address: String,
+    printer_name: PrinterName,
+}
+
+impl RecognisedClientQueue {
+    pub fn new(
+        queue_name: ClientQueueName,
+        server_address: String,
+        printer_name: PrinterName,
+    ) -> Self {
+        Self {
+            queue_name,
+            server_address,
+            printer_name,
+        }
+    }
+
+    pub fn queue_name(&self) -> &ClientQueueName {
+        &self.queue_name
+    }
+
+    pub fn server_address(&self) -> &str {
+        &self.server_address
+    }
+
+    pub fn printer_name(&self) -> &PrinterName {
+        &self.printer_name
+    }
+}
+
+/// The conservative classification of one spooler record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpoolerRecordClassification {
+    /// A genuine ShaPrint client queue, verified by endpoint, port form, destination, and identity.
+    RecognisedClientQueue(RecognisedClientQueue),
+    /// An ambiguous or malformed record (e.g. points to loopback/proxy endpoint but destination or identity doesn't match).
+    AmbiguousClientQueue,
+    /// An eligible local printer that is safe to share.
+    EligibleLocal(PrinterName),
+    /// Other non-shareable / ignored records (e.g. invalid printer name).
+    Ignored,
+}
+
+impl SpoolerRecord {
+    pub fn new(name: impl Into<String>, port: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            port: port.into(),
+        }
+    }
+
+    /// Evaluates this spooler entry against the expected local proxy authority.
+    pub fn classify(&self, proxy_authority: &str) -> SpoolerRecordClassification {
+        let name_trimmed = self.name.trim();
+        let port_trimmed = self.port.trim();
+
+        let ipp_prefix = format!("ipp://{proxy_authority}/ipp/print/");
+        let http_prefix = format!("http://{proxy_authority}/ipp/print/");
+
+        let port_lower = port_trimmed.to_ascii_lowercase();
+        let ipp_lower = ipp_prefix.to_ascii_lowercase();
+        let http_lower = http_prefix.to_ascii_lowercase();
+
+        if port_lower.starts_with(&ipp_lower) || port_lower.starts_with(&http_lower) {
+            let prefix_len = if port_lower.starts_with(&ipp_lower) {
+                ipp_prefix.len()
+            } else {
+                http_prefix.len()
+            };
+            let remainder = &port_trimmed[prefix_len..];
+            let segments: Vec<&str> = remainder.split('/').collect();
+            if segments.len() != 2 || segments[0].is_empty() || segments[1].is_empty() {
+                return SpoolerRecordClassification::AmbiguousClientQueue;
+            }
+
+            let server_decoded = percent_decode(segments[0]);
+            if validate_address(&server_decoded).is_err() {
+                return SpoolerRecordClassification::AmbiguousClientQueue;
+            }
+
+            let printer_decoded = percent_decode(segments[1]);
+            let Ok(printer_name) = PrinterName::parse(&printer_decoded) else {
+                return SpoolerRecordClassification::AmbiguousClientQueue;
+            };
+
+            let Ok(expected_queue_name) =
+                ClientQueueName::for_shared_printer(&printer_name, &server_decoded)
+            else {
+                return SpoolerRecordClassification::AmbiguousClientQueue;
+            };
+
+            if expected_queue_name.as_str() == name_trimmed {
+                SpoolerRecordClassification::RecognisedClientQueue(RecognisedClientQueue {
+                    queue_name: expected_queue_name,
+                    server_address: server_decoded,
+                    printer_name,
+                })
+            } else {
+                // Port points to proxy endpoint, but name does not match derived identity
+                SpoolerRecordClassification::AmbiguousClientQueue
+            }
+        } else if port_lower.contains(&proxy_authority.to_ascii_lowercase())
+            || port_lower.contains("/ipp/print/")
+            || port_lower.starts_with("ipp://127.0.0.1")
+            || port_lower.starts_with("http://127.0.0.1")
+            || port_lower.starts_with("ipp://localhost")
+            || port_lower.starts_with("http://localhost")
+        {
+            // Mentions loopback proxy or IPP print endpoint, but failed valid client queue criteria
+            SpoolerRecordClassification::AmbiguousClientQueue
+        } else {
+            // Real local queue (or lookalike name with USB/network port)
+            match PrinterName::parse(name_trimmed) {
+                Ok(printer_name) => SpoolerRecordClassification::EligibleLocal(printer_name),
+                Err(_) => SpoolerRecordClassification::Ignored,
+            }
+        }
+    }
+}
+
+fn percent_decode(value: &str) -> String {
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut chars = value.bytes();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            let high = chars.next().and_then(hex_val);
+            let low = chars.next().and_then(hex_val);
+            if let (Some(h), Some(l)) = (high, low) {
+                bytes.push((h << 4) | l);
+                continue;
+            }
+        }
+        bytes.push(b);
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Accepts only the canonical `host:port` shapes the client trust store produces.
 ///
 /// The authoritative address parser is `adapters::client_connections`, and the URI builder parses
@@ -345,5 +502,103 @@ mod tests {
                 "rejected {valid:?}"
             );
         }
+    }
+
+    #[test]
+    fn spooler_record_classifies_genuine_client_queue_with_ipp_and_http_schemes() {
+        let authority = "127.0.0.1:8632";
+        let valid_ipp = SpoolerRecord::new(
+            "Office Printer (ShaPrint 10.0.0.5-8631)",
+            "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Printer",
+        );
+        let valid_http = SpoolerRecord::new(
+            "Office Printer (ShaPrint 10.0.0.5-8631)",
+            "http://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Printer",
+        );
+
+        match valid_ipp.classify(authority) {
+            SpoolerRecordClassification::RecognisedClientQueue(q) => {
+                assert_eq!(
+                    q.queue_name().as_str(),
+                    "Office Printer (ShaPrint 10.0.0.5-8631)"
+                );
+                assert_eq!(q.server_address(), "10.0.0.5:8631");
+                assert_eq!(q.printer_name().as_str(), "Office Printer");
+            }
+            other => panic!("expected RecognisedClientQueue, got {other:?}"),
+        }
+
+        match valid_http.classify(authority) {
+            SpoolerRecordClassification::RecognisedClientQueue(q) => {
+                assert_eq!(
+                    q.queue_name().as_str(),
+                    "Office Printer (ShaPrint 10.0.0.5-8631)"
+                );
+                assert_eq!(q.server_address(), "10.0.0.5:8631");
+                assert_eq!(q.printer_name().as_str(), "Office Printer");
+            }
+            other => panic!("expected RecognisedClientQueue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spooler_record_treats_lookalikes_with_real_ports_as_eligible_local_printers() {
+        let authority = "127.0.0.1:8632";
+        // A queue with ShaPrint in the name but on a USB port is a real local queue (name prefix alone does not qualify)
+        let lookalike = SpoolerRecord::new("Office Printer (ShaPrint 10.0.0.5-8631)", "USB001");
+        assert_eq!(
+            lookalike.classify(authority),
+            SpoolerRecordClassification::EligibleLocal(printer(
+                "Office Printer (ShaPrint 10.0.0.5-8631)"
+            ))
+        );
+
+        let real_local = SpoolerRecord::new("HP LaserJet Pro", "WSD-1234");
+        assert_eq!(
+            real_local.classify(authority),
+            SpoolerRecordClassification::EligibleLocal(printer("HP LaserJet Pro"))
+        );
+    }
+
+    #[test]
+    fn spooler_record_treats_loopback_destinations_with_bad_shapes_or_names_as_ambiguous() {
+        let authority = "127.0.0.1:8632";
+        // Port points to proxy, but name does not match derived identity
+        let name_mismatch = SpoolerRecord::new(
+            "Some Other Name",
+            "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Printer",
+        );
+        assert_eq!(
+            name_mismatch.classify(authority),
+            SpoolerRecordClassification::AmbiguousClientQueue
+        );
+
+        // Malformed path
+        let malformed_path = SpoolerRecord::new(
+            "Office Printer (ShaPrint 10.0.0.5-8631)",
+            "ipp://127.0.0.1:8632/ipp/print/only-one-segment",
+        );
+        assert_eq!(
+            malformed_path.classify(authority),
+            SpoolerRecordClassification::AmbiguousClientQueue
+        );
+
+        // Extra path segments
+        let extra_segments = SpoolerRecord::new(
+            "Office Printer (ShaPrint 10.0.0.5-8631)",
+            "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Printer/extra",
+        );
+        assert_eq!(
+            extra_segments.classify(authority),
+            SpoolerRecordClassification::AmbiguousClientQueue
+        );
+
+        // Ambiguous loopback port mention
+        let loopback_misc =
+            SpoolerRecord::new("Unknown Spooler Entry", "ipp://127.0.0.1:8632/corrupt");
+        assert_eq!(
+            loopback_misc.classify(authority),
+            SpoolerRecordClassification::AmbiguousClientQueue
+        );
     }
 }

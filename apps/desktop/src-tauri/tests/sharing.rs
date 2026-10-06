@@ -213,3 +213,63 @@ async fn sharing_without_a_selection_never_opens_the_endpoint() {
         Some(ServiceState::Stopped)
     );
 }
+
+#[tokio::test]
+async fn sharing_boundary_rejects_client_queues_and_restores_safely_with_interchangeable_spooler() {
+    use async_trait::async_trait;
+    use shaprint_desktop::application::{DestinationAwarePrinterCatalog, SpoolerReader};
+    use shaprint_desktop::domain::{AppError, SpoolerRecord};
+
+    struct TestSpooler(Vec<SpoolerRecord>);
+    #[async_trait]
+    impl SpoolerReader for TestSpooler {
+        async fn read_spooler_records(&self) -> Result<Vec<SpoolerRecord>, AppError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    let spooler = Arc::new(TestSpooler(vec![
+        SpoolerRecord::new("HP LaserJet", "USB001"),
+        // Lookalike on a real port remains selectable
+        SpoolerRecord::new("Office Printer (ShaPrint 10.0.0.5-8631)", "WSD-1"),
+        // Native client queue on loopback IPP
+        SpoolerRecord::new(
+            "Client Queue (ShaPrint 10.0.0.5-8631)",
+            "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Client%20Queue",
+        ),
+        // Windows-normalized port
+        SpoolerRecord::new(
+            "Windows Norm (ShaPrint 10.0.0.5-8631)",
+            "http://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Windows%20Norm",
+        ),
+        // Malformed destination
+        SpoolerRecord::new(
+            "Malformed (ShaPrint 10.0.0.5-8631)",
+            "ipp://127.0.0.1:8632/ipp/print/bad",
+        ),
+    ]));
+
+    let catalog = Arc::new(DestinationAwarePrinterCatalog::new(spooler));
+    let sharing = Arc::new(Sharing::new(catalog));
+
+    let local = sharing.local_printers().await.expect("reads local");
+    let names: Vec<&str> = local.iter().map(|p| p.name().as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["HP LaserJet", "Office Printer (ShaPrint 10.0.0.5-8631)"]
+    );
+
+    // Direct selection of recognised client queue is rejected
+    let err = sharing
+        .set_shared(printer_names(&["Client Queue (ShaPrint 10.0.0.5-8631)"]))
+        .await
+        .expect_err("rejected");
+    assert_eq!(err.code(), ErrorCode::InvalidInput);
+
+    // Direct selection of malformed destination is rejected
+    let err = sharing
+        .set_shared(printer_names(&["Malformed (ShaPrint 10.0.0.5-8631)"]))
+        .await
+        .expect_err("rejected");
+    assert_eq!(err.code(), ErrorCode::InvalidInput);
+}
