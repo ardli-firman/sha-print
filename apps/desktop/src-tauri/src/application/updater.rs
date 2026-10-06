@@ -368,7 +368,7 @@ mod tests {
 
     fn release() -> UpdateRelease {
         UpdateRelease {
-            version: "3.2.0".into(),
+            version: "3.2.1".into(),
             notes: None,
             backend_release: None,
         }
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(
             coordinator.status().state,
             UpdateState::ReadyToRestart {
-                version: "3.2.0".into(),
+                version: "3.2.1".into(),
                 restart_requested: false,
             }
         );
