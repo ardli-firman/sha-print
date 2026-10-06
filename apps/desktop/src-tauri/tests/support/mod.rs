@@ -163,6 +163,14 @@ pub fn allowed_inbound_setup() -> Arc<Setup> {
 pub fn sharing_service(sharing: Arc<Sharing>, endpoint: Arc<IppsServer>) -> ServerSharingService {
     let channel = Arc::new(NetworkChannel::in_memory());
     let _ = channel.configure_sync("test-channel-secret");
+    sharing_service_with_channel(sharing, endpoint, channel)
+}
+
+pub fn sharing_service_with_channel(
+    sharing: Arc<Sharing>,
+    endpoint: Arc<IppsServer>,
+    channel: Arc<NetworkChannel>,
+) -> ServerSharingService {
     ServerSharingService::new(
         sharing,
         endpoint,
