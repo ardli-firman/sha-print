@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import {
   AddPrinterDialog,
   InstalledClientQueuesPanel,
-  NearbyServersPanel,
   useNearbyServers,
   useRecognisedClientQueues,
   useServerConnections,
@@ -28,21 +27,21 @@ import {
 import "./App.css";
 
 const NAV_ITEMS = [
-  { id: "share", label: "Share", icon: Printer },
-  { id: "connect", label: "Connect", icon: Network },
+  { id: "my-printers", label: "My printers", icon: Printer },
+  { id: "share", label: "Share printers", icon: Network },
   { id: "settings", label: "Settings", icon: Settings2 },
 ] as const;
 
 type PageId = (typeof NAV_ITEMS)[number]["id"];
 
 const PAGE_CONTENT: Record<PageId, { title: string; description: string }> = {
+  "my-printers": {
+    title: "My printers",
+    description: "Printers available to your Windows apps through ShaPrint.",
+  },
   share: {
     title: "Share printers",
     description: "Choose the printers this computer makes available over the network.",
-  },
-  connect: {
-    title: "Connect to a server",
-    description: "Add a printer shared from another ShaPrint computer.",
   },
   settings: {
     title: "Settings",
@@ -51,7 +50,7 @@ const PAGE_CONTENT: Record<PageId, { title: string; description: string }> = {
 };
 
 function App() {
-  const [page, setPage] = useState<PageId>("share");
+  const [page, setPage] = useState<PageId>("my-printers");
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [addPrinterOpen, setAddPrinterOpen] = useState(false);
 
@@ -174,6 +173,13 @@ function App() {
           <PrintFailuresPanel failures={failures} />
 
           <section className="page-stack" aria-label={pageContent.title}>
+            {page === "my-printers" ? (
+              <InstalledClientQueuesPanel
+                clientQueues={clientQueues}
+                onAddPrinter={() => setAddPrinterOpen(true)}
+              />
+            ) : null}
+
             {page === "share" ? (
               <>
                 {networkChannel.configured === false ? (
@@ -189,22 +195,6 @@ function App() {
                   </div>
                 ) : null}
                 <PrinterSharingPanel sharing={sharing} />
-              </>
-            ) : null}
-
-            {page === "connect" ? (
-              <>
-                <NearbyServersPanel
-                  nearby={nearby}
-                  connections={connections}
-                  onOpenWizard={(address) => {
-                    setAddPrinterOpen(true);
-                    if (address) {
-                      void connections.reviewAddress(address);
-                    }
-                  }}
-                />
-                <InstalledClientQueuesPanel clientQueues={clientQueues} />
               </>
             ) : null}
 

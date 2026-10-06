@@ -1,13 +1,15 @@
-import { RefreshCw } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 import { Button } from "../../../components/ui/button";
 import type { UseRecognisedClientQueues } from "../hooks/useRecognisedClientQueues";
 
 interface InstalledClientQueuesPanelProps {
   clientQueues: UseRecognisedClientQueues;
+  onAddPrinter: () => void;
 }
 
 export function InstalledClientQueuesPanel({
   clientQueues,
+  onAddPrinter,
 }: InstalledClientQueuesPanelProps) {
   const { queues, loading, error, refresh } = clientQueues;
 
@@ -16,23 +18,35 @@ export function InstalledClientQueuesPanel({
       <div className="flex items-center justify-between gap-2">
         <div>
           <h2 id="installed-queues-title" className="text-base font-semibold">
-            Installed client queues
+            My printers
           </h2>
           <p className="text-xs text-muted-foreground">
-            ShaPrint client queues currently installed in Windows.
+            Printers available to your Windows applications through ShaPrint.
           </p>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => void refresh()}
-          disabled={loading}
-          aria-label="Refresh installed queues"
-        >
-          <RefreshCw className={`size-3.5 mr-1 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            onClick={onAddPrinter}
+            aria-label="Add printer"
+          >
+            <Plus className="size-3.5 mr-1" />
+            Add printer
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void refresh()}
+            disabled={loading}
+            aria-label="Refresh installed queues"
+          >
+            <RefreshCw className={`size-3.5 mr-1 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {loading && queues.length === 0 ? (
@@ -56,8 +70,18 @@ export function InstalledClientQueuesPanel({
       ) : null}
 
       {!loading && !error && queues.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-          No ShaPrint client queues installed in Windows. Use Add printer to install one.
+        <div className="rounded-lg border border-dashed p-8 text-center space-y-3">
+          <p className="text-sm text-muted-foreground">
+            No ShaPrint client queues installed in Windows.
+          </p>
+          <Button
+            type="button"
+            onClick={onAddPrinter}
+            aria-label="Add a printer now"
+          >
+            <Plus className="size-4 mr-1.5" />
+            Add printer
+          </Button>
         </div>
       ) : null}
 

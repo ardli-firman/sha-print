@@ -114,7 +114,7 @@ function serviceCard(container: HTMLElement, id: string): HTMLElement {
   return card as HTMLElement;
 }
 
-type WorkspacePage = "Share" | "Connect" | "Settings";
+type WorkspacePage = "My printers" | "Share printers" | "Settings";
 
 function navigateTo(page: WorkspacePage) {
   fireEvent.click(screen.getByRole("button", { name: page }));
@@ -130,6 +130,7 @@ function printerRow(container: HTMLElement, name: string): HTMLElement {
 
 /** Waits until the sharing panel has listed the queues. */
 async function sharingPanel(container: HTMLElement): Promise<HTMLElement> {
+  navigateTo("Share printers");
   await waitFor(() => expect(printerRow(container, "HP LaserJet")).toBeTruthy());
   return screen.getByRole("region", { name: "Local printers" });
 }
@@ -272,17 +273,16 @@ describe("updater", () => {
 });
 
 describe("workspace navigation", () => {
-  it("starts on Share and keeps Connect and Settings workflows in their own sections", async () => {
+  it("starts on My printers and keeps Share printers and Settings in their own sections", async () => {
     render(<App />);
 
-    expect(screen.getByRole("heading", { name: "Share printers", level: 1 })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Share" }).getAttribute("aria-current")).toBe("page");
-    expect(screen.queryByRole("region", { name: "Nearby servers" })).toBeNull();
-
-    navigateTo("Connect");
-    expect(await screen.findByRole("heading", { name: "Connect to a server", level: 1 })).toBeTruthy();
-    expect(await screen.findByRole("region", { name: "Nearby servers" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "My printers", level: 1 })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "My printers" }).getAttribute("aria-current")).toBe("page");
     expect(screen.queryByRole("region", { name: "Local printers" })).toBeNull();
+
+    navigateTo("Share printers");
+    expect(await screen.findByRole("heading", { name: "Share printers", level: 1 })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Local printers" })).toBeTruthy();
 
     navigateTo("Settings");
     expect(await screen.findByRole("heading", { name: "Settings", level: 1 })).toBeTruthy();
@@ -329,9 +329,8 @@ describe("guided printer setup", () => {
     ]);
 
     render(<App />);
-    navigateTo("Connect");
 
-    // Both queues, including same printer name on different servers, are listed
+    // Both queues, including same printer name on different servers, are listed on default My printers screen
     await waitFor(() => {
       expect(
         screen.getByText("Office Laser (ShaPrint 10.0.0.5-8631)"),
@@ -348,7 +347,7 @@ describe("guided printer setup", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "No ShaPrint client queues installed in Windows. Use Add printer to install one.",
+          "No ShaPrint client queues installed in Windows.",
         ),
       ).toBeTruthy();
     });
@@ -367,11 +366,10 @@ describe("guided printer setup", () => {
     });
   });
 
-  it("offers a single guided Add printer entry in Connect workspace without duplicate inline controls", async () => {
+  it("offers a single guided Add printer entry in My printers workspace without duplicate inline controls", async () => {
     render(<App />);
-    navigateTo("Connect");
 
-    // The single guided entry action is available
+    // The single guided entry action is available right on the default My printers screen
     expect(screen.getByRole("button", { name: "Add printer" })).toBeTruthy();
 
     // The duplicate inline inspection and install path is no longer present
@@ -393,14 +391,9 @@ describe("guided printer setup", () => {
     });
 
     render(<App />);
-    navigateTo("Connect");
 
-    const panel = await screen.findByRole("region", { name: "Nearby servers" });
-    // In nearby panel, advertised printers are explicitly labelled unverified
-    expect(within(panel).getByText(/Advertised \(unverified\): Zebra, Receipt/)).toBeTruthy();
-
-    // Open guided setup
-    fireEvent.click(within(panel).getByRole("button", { name: "Add printer" }));
+    // Open guided setup from My printers
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
     const dialog = await screen.findByRole("dialog", { name: "Find a server" });
     expect(within(dialog).getByText(/Advertised \(unverified\): Zebra, Receipt/)).toBeTruthy();
   });
@@ -440,11 +433,14 @@ describe("guided printer setup", () => {
     });
 
     render(<App />);
-    navigateTo("Connect");
 
-    // Click on the nearby server's connect action
-    const panel = await screen.findByRole("region", { name: "Nearby servers" });
-    fireEvent.click(within(panel).getByRole("button", { name: "Connect" }));
+    // Click Add printer from My printers workspace
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    // Select nearby server from wizard
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
+    const serverOption = within(dialog).getByText("DESKTOP-ABC").closest(".wizard-server-option") as HTMLElement;
+    fireEvent.click(within(serverOption).getByRole("button", { name: "Review identity" }));
 
     // Opens dialog, inspects certificate, reaches verification step
     expect(await screen.findByRole("dialog", { name: "Check the server identity" })).toBeTruthy();
@@ -496,7 +492,6 @@ describe("guided printer setup", () => {
     });
 
     render(<App />);
-    navigateTo("Connect");
     fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Find a server" });
@@ -531,7 +526,6 @@ describe("guided printer setup", () => {
     });
 
     render(<App />);
-    navigateTo("Connect");
     fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Find a server" });
@@ -584,7 +578,6 @@ describe("guided printer setup", () => {
     });
 
     render(<App />);
-    navigateTo("Connect");
     fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Find a server" });
@@ -645,7 +638,6 @@ describe("guided printer setup", () => {
     });
 
     render(<App />);
-    navigateTo("Connect");
     fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
 
     let dialog = await screen.findByRole("dialog", { name: "Find a server" });
@@ -676,7 +668,6 @@ describe("guided printer setup", () => {
     window.innerWidth = 480;
 
     render(<App />);
-    navigateTo("Connect");
     fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Find a server" });
@@ -913,6 +904,7 @@ describe("shared printers panel", () => {
       })),
     });
     render(<App />);
+    navigateTo("Share printers");
 
     const panel = await screen.findByRole("region", { name: "Local printers" });
     fireEvent.change(within(panel).getByRole("textbox", { name: "Search printers" }), {
@@ -936,6 +928,7 @@ describe("shared printers panel", () => {
 
   it("shows the certificate fingerprint a client has to approve", async () => {
     render(<App />);
+    navigateTo("Share printers");
 
     const fingerprint = await screen.findByTestId("server-fingerprint");
     expect(fingerprint.textContent).toBe(IDENTITY.fingerprint);
@@ -953,6 +946,7 @@ describe("shared printers panel", () => {
 
     try {
       render(<App />);
+      navigateTo("Share printers");
       await screen.findByTestId("server-fingerprint");
       fireEvent.click(screen.getByRole("button", { name: "Copy" }));
 
@@ -1007,6 +1001,7 @@ describe("shared printers panel", () => {
       message: "listing local printer queues is only supported on Windows",
     });
     render(<App />);
+    navigateTo("Share printers");
 
     const panel = await screen.findByRole("region", { name: "Local printers" });
     const alert = await within(panel).findByRole("alert");
@@ -1058,14 +1053,16 @@ describe("nearby servers panel", () => {
       trusted: false,
     });
     render(<App />);
-    navigateTo("Connect");
 
-    const panel = await screen.findByRole("region", { name: "Nearby servers" });
-    expect(await within(panel).findByText("DESKTOP-ABC")).toBeTruthy();
-    expect(within(panel).getByText("192.0.2.10:8631")).toBeTruthy();
-    expect(within(panel).getByText(/Advertised \(unverified\): Zebra/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
 
-    fireEvent.click(within(panel).getByRole("button", { name: "Connect" }));
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
+    expect(await within(dialog).findByText("DESKTOP-ABC")).toBeTruthy();
+    expect(within(dialog).getByText("192.0.2.10:8631")).toBeTruthy();
+    expect(within(dialog).getByText(/Advertised \(unverified\): Zebra/)).toBeTruthy();
+
+    const serverOption = within(dialog).getByText("DESKTOP-ABC").closest(".wizard-server-option") as HTMLElement;
+    fireEvent.click(within(serverOption).getByRole("button", { name: "Review identity" }));
 
     // Reviewing a discovered server opens the guided setup dialog and inspects its certificate
     await waitFor(() =>
@@ -1082,26 +1079,26 @@ describe("nearby servers panel", () => {
       return () => {};
     });
     render(<App />);
-    navigateTo("Connect");
 
-    const panel = await screen.findByRole("region", { name: "Nearby servers" });
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
     await waitFor(() => expect(publish).toBeDefined());
     publish?.(nearbyWith("DESKTOP-ZULU"));
 
-    expect(await within(panel).findByText("DESKTOP-ZULU")).toBeTruthy();
+    expect(await within(dialog).findByText("DESKTOP-ZULU")).toBeTruthy();
   });
 
   it("keeps working by address when discovery finds nothing", async () => {
     render(<App />);
-    navigateTo("Connect");
 
-    const panel = await screen.findByRole("region", { name: "Nearby servers" });
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
     expect(
-      await within(panel).findByText(/Nothing found on this network/i),
+      await within(dialog).findByText(/No servers found on this network/i),
     ).toBeTruthy();
     // Clicking Add printer allows manual address entry
-    fireEvent.click(within(panel).getByRole("button", { name: "Add printer" }));
-    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
     expect(within(dialog).getByLabelText("Or enter a server address")).toBeTruthy();
   });
 
@@ -1137,26 +1134,27 @@ describe("nearby servers panel", () => {
     });
 
     render(<App />);
-    navigateTo("Connect");
 
-    const panel = await screen.findByRole("region", { name: "Nearby servers" });
+    fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Find a server" });
 
     // Matching version server displays version badge without drift badge
-    expect(await within(panel).findByText("DESKTOP-MATCH")).toBeTruthy();
-    expect(within(panel).getByText("v3.1.1")).toBeTruthy();
+    expect(await within(dialog).findByText("DESKTOP-MATCH")).toBeTruthy();
+    expect(within(dialog).getByText("v3.1.1")).toBeTruthy();
 
     // Legacy server displays without version badge or drift badge
-    expect(await within(panel).findByText("DESKTOP-LEGACY")).toBeTruthy();
+    expect(await within(dialog).findByText("DESKTOP-LEGACY")).toBeTruthy();
 
     // Newer server displays version badge AND version-drift advisory badge
-    expect(await within(panel).findByText("DESKTOP-NEWER")).toBeTruthy();
-    expect(within(panel).getByText("v3.2.0")).toBeTruthy();
-    const driftBadge = within(panel).getByText(/Newer server release/);
+    expect(await within(dialog).findByText("DESKTOP-NEWER")).toBeTruthy();
+    expect(within(dialog).getByText("v3.2.0")).toBeTruthy();
+    const driftBadge = within(dialog).getByText(/Newer server release/);
     expect(driftBadge).toBeTruthy();
 
     // Version drift does not block review identity action
-    const newerServerItem = within(panel).getByText("DESKTOP-NEWER").closest("li")!;
-    const reviewButton = within(newerServerItem).getByRole("button", { name: "Connect" });
+    const newerServerItem = within(dialog).getByText("DESKTOP-NEWER").closest(".wizard-server-option") as HTMLElement;
+    const reviewButton = within(newerServerItem).getByRole("button", { name: "Review identity" });
     expect((reviewButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(reviewButton);
 
