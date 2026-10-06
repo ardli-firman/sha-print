@@ -11,6 +11,7 @@ import * as printFailures from "./api/printFailures";
 import * as serverConnections from "./api/serverConnections";
 import * as startupApi from "./api/startup";
 import * as updatesApi from "./api/updates";
+import { CLIENT_VERSION } from "./lib/version";
 import type { UpdateStatus } from "./api/updates";
 import type {
   LocalPrinters,
@@ -590,6 +591,21 @@ describe("guided printer setup", () => {
     expect(await screen.findByRole("heading", { name: "Printer installed" })).toBeTruthy();
     expect(screen.getByText("Office Laser (ShaPrint 192.0.2.10-8631)")).toBeTruthy();
     expect(screen.getByText(/Choose this printer from any Windows print dialog/)).toBeTruthy();
+
+    // Verifies listRecognisedClientQueues was automatically refreshed upon installation
+    expect(serverConnections.listRecognisedClientQueues).toHaveBeenCalled();
+
+    // When the user clicks Done and closes the dialog, the newly installed queue is visible in My printers
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([
+      {
+        queue_name: "Office Laser (ShaPrint 192.0.2.10-8631)",
+        server_address: review.address,
+        printer_name: "Office Laser",
+      },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(await screen.findByText("Office Laser (ShaPrint 192.0.2.10-8631)")).toBeTruthy();
   });
 
   it("skips repeat approval when server identity matches saved approval (trusted repeat run)", async () => {
@@ -1288,13 +1304,13 @@ describe("nearby servers panel", () => {
           name: "DESKTOP-MATCH",
           address: "192.0.2.10:8631",
           printers: ["Zebra"],
-          version: "3.1.1",
+          version: CLIENT_VERSION,
         },
         {
           name: "DESKTOP-NEWER",
           address: "192.0.2.11:8631",
           printers: ["Canon"],
-          version: "3.2.0",
+          version: "3.3.0",
         },
         {
           name: "DESKTOP-LEGACY",
@@ -1320,14 +1336,14 @@ describe("nearby servers panel", () => {
 
     // Matching version server displays version badge without drift badge
     expect(await within(dialog).findByText("DESKTOP-MATCH")).toBeTruthy();
-    expect(within(dialog).getByText("v3.1.1")).toBeTruthy();
+    expect(within(dialog).getByText(`v${CLIENT_VERSION}`)).toBeTruthy();
 
     // Legacy server displays without version badge or drift badge
     expect(await within(dialog).findByText("DESKTOP-LEGACY")).toBeTruthy();
 
     // Newer server displays version badge AND version-drift advisory badge
     expect(await within(dialog).findByText("DESKTOP-NEWER")).toBeTruthy();
-    expect(within(dialog).getByText("v3.2.0")).toBeTruthy();
+    expect(within(dialog).getByText("v3.3.0")).toBeTruthy();
     const driftBadge = within(dialog).getByText(/Newer server release/);
     expect(driftBadge).toBeTruthy();
 

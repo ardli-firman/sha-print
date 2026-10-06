@@ -224,10 +224,18 @@ function App() {
       {/* Wizard and Diagnostics Dialogs */}
       <AddPrinterDialog
         open={addPrinterOpen}
-        onOpenChange={setAddPrinterOpen}
+        onOpenChange={(nextOpen) => {
+          setAddPrinterOpen(nextOpen);
+          if (!nextOpen) {
+            void clientQueues.refresh();
+          }
+        }}
         nearby={nearby}
         connections={connections}
         networkChannel={networkChannel}
+        onInstalled={() => {
+          void clientQueues.refresh();
+        }}
         onEnsureProxyRunning={() => {
           const proxy = runtime.status?.services.find((s) => s.id === "client-proxy");
           if (proxy && proxy.state !== "running") {
