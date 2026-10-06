@@ -242,10 +242,12 @@ describe("updater", () => {
       message: "GitHub Releases could not be reached. Check your internet connection and try again.",
     });
     render(<App />);
+    navigateTo("Settings");
 
-    fireEvent.click(screen.getByRole("button", { name: "Check for Updates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
 
-    expect((await screen.findByRole("alert")).textContent).toMatch(/GitHub Releases could not be reached/);
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts.some((el) => el.textContent?.includes("GitHub Releases could not be reached"))).toBe(true);
   });
 
   it("clears a previous update error when a later status event succeeds", async () => {
@@ -288,6 +290,27 @@ describe("workspace navigation", () => {
     navigateTo("Settings");
     expect(await screen.findByRole("heading", { name: "Settings", level: 1 })).toBeTruthy();
     expect(await screen.findByRole("region", { name: "Print authorization" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Software updates" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Startup" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Print services" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Previous ShaPrint app" })).toBeTruthy();
+  });
+
+  it("navigates from status pill or problem condition directly to service diagnostics dialog", async () => {
+    vi.mocked(ipc.getRuntimeStatus).mockResolvedValue(runtimeWith("failed", "stopped"));
+    render(<App />);
+
+    const statusPill = await screen.findByRole("button", {
+      name: /Service needs attention\. Open service diagnostics/i,
+    });
+    expect(statusPill).toBeTruthy();
+    fireEvent.click(statusPill);
+
+    // Diagnostics dialog opens with detailed technical service controls
+    const dialog = await screen.findByRole("dialog", { name: "Print service status" });
+    expect(dialog).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Client proxy" })).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Server sharing" })).toBeTruthy();
   });
 });
 

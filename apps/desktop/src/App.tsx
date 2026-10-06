@@ -11,6 +11,7 @@ import {
 } from "@/features/client-connection";
 import { NetworkChannelPanel, useNetworkChannel } from "@/features/network-channel";
 import { PrintFailuresPanel, usePrintFailures } from "@/features/print-failures";
+import { SoftwareUpdatesPanel } from "@/features/updates/components/SoftwareUpdatesPanel";
 import { UpdateNotice, useUpdates } from "@/features/updates";
 import { PrinterSharingPanel, usePrinterSharing } from "@/features/printer-sharing";
 import {
@@ -144,9 +145,6 @@ function App() {
           </div>
 
           <div className="workspace-header-actions">
-            <Button type="button" variant="outline" onClick={() => void updates.check()} disabled={updates.checking}>
-              {updates.checking ? "Checking…" : "Check for Updates"}
-            </Button>
             <button
               type="button"
               onClick={() => setDiagnosticsOpen(true)}
@@ -206,6 +204,7 @@ function App() {
               <>
                 <NetworkChannelPanel settings={networkChannel} />
                 <StartupPanel startup={startup} />
+                <SoftwareUpdatesPanel updates={updates} />
                 <RuntimeStatusPanel runtime={runtime} />
                 <LegacyImportPanel legacy={legacy} />
               </>
