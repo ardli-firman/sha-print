@@ -787,34 +787,14 @@ fn find_by_uri<'a>(
     host: &str,
     requested: &str,
 ) -> Option<&'a PrinterName> {
-    let Some((authority, path)) = ipps_authority_and_path(requested) else {
-        trace_issue34("server-uri=malformed");
-        return None;
-    };
+    let (authority, path) = ipps_authority_and_path(requested)?;
     if !authority.eq_ignore_ascii_case(host) {
-        trace_issue34("server-uri-authority=mismatch");
         return None;
     }
-    let Some(encoded_name) = path.strip_prefix("ipp/print/") else {
-        trace_issue34("server-uri-path=mismatch");
-        return None;
-    };
+    let encoded_name = path.strip_prefix("ipp/print/")?;
     let decoded_name = percent_decode(encoded_name);
-    let Some(printer) = find_by_name(shared, &decoded_name) else {
-        trace_issue34("server-printer=not-shared");
-        return None;
-    };
-    if decoded_name != printer.as_str() {
-        trace_issue34("server-printer-case=normalized");
-    }
-    trace_issue34("server-lookup=matched");
+    let printer = find_by_name(shared, &decoded_name)?;
     Some(printer)
-}
-
-fn trace_issue34(message: &str) {
-    if std::env::var_os("SHAPRINT_ISSUE34_IPP_TRACE").is_some() {
-        eprintln!("[DEBUG-34IPP] {message}");
-    }
 }
 
 fn ipps_authority_and_path(uri: &str) -> Option<(&str, &str)> {

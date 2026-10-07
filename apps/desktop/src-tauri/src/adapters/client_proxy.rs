@@ -29,14 +29,6 @@ pub const CLIENT_PROXY_DEFAULT_PORT: u16 = 48632;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_HEAD_BYTES: usize = 8 * 1024;
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
-const ISSUE34_TRACE_ENV: &str = "SHAPRINT_ISSUE34_IPP_TRACE";
-
-fn trace_issue34(message: &str) {
-    if std::env::var_os(ISSUE34_TRACE_ENV).is_some() {
-        eprintln!("[DEBUG-34IPP] {message}");
-    }
-}
-
 /// Supervises the local client proxy.
 pub struct ClientProxyService {
     connections: Arc<ClientConnections>,
@@ -161,8 +153,7 @@ impl RuntimeService for ClientProxyService {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 Some(_) = connections.join_next(), if !connections.is_empty() => {}
-                accepted = listener.accept() => if let Ok((stream, peer)) = accepted {
-                    trace_issue34(&format!("accepted-peer={peer}"));
+                accepted = listener.accept() => if let Ok((stream, _)) = accepted {
                     let client_connections = Arc::clone(&self.connections);
                     let channel = Arc::clone(&self.channel);
                     let failures = Arc::clone(&self.failures);
@@ -179,7 +170,6 @@ impl RuntimeService for ClientProxyService {
                         )
                         .await
                         {
-                            trace_issue34(&format!("request-error={}: {}", error.code_str(), error.message()));
                             log::warn!(
                                 "local proxy request failed code={}: {}",
                                 error.code_str(),
@@ -211,15 +201,6 @@ async fn serve_client(
         .map_err(|_| {
             AppError::timeout("The local printer did not finish its request in time.")
         })??;
-    trace_issue34(&format!(
-        "http-method={} target={}",
-        head.method,
-        if head.path.starts_with("/ipp/print") {
-            "ipp-print"
-        } else {
-            "other"
-        }
-    ));
     if head.method != "POST"
         || !head.path.starts_with("/ipp/print")
         || !head
@@ -238,7 +219,6 @@ async fn serve_client(
         }
     };
     if head.expects_continue {
-        trace_issue34("sending 100-continue");
         write
             .write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
             .await
@@ -250,7 +230,6 @@ async fn serve_client(
         })?;
     }
     let body = if head.is_chunked {
-        trace_issue34("reading-chunked-body");
         timeout(REQUEST_TIMEOUT, read_chunked_body(&mut reader))
             .await
             .map_err(|_| {
@@ -261,7 +240,6 @@ async fn serve_client(
             write_http(&mut write, "413 Payload Too Large", &[]).await?;
             return Ok(());
         }
-        trace_issue34(&format!("reading-body length={length}"));
         let mut buf = vec![0; length];
         timeout(REQUEST_TIMEOUT, reader.read_exact(&mut buf))
             .await
@@ -287,11 +265,6 @@ async fn serve_client(
     let request_id = request.request_id();
     let operation = request.operation();
     let version = request.response_version();
-    trace_issue34(&format!(
-        "operation=0x{operation:04x} req_id={request_id} uri={:?} req_attrs={:?}",
-        request.value("printer-uri"),
-        request.text_values("requested-attributes")
-    ));
     if !request.version_is_supported() {
         let response = protocol::response(
             request_id,
@@ -330,11 +303,9 @@ async fn serve_client(
     });
     let route_from_path = route_from_request_path(&head.path, authority).ok();
     let Some((server_address, printer_name, local_uri)) = route_from_uri.or(route_from_path) else {
-        trace_issue34("route=rejected");
         write_ipp_error(&mut write, protocol::Status::NotFound).await?;
         return Ok(());
     };
-    trace_issue34("route=accepted");
     let _job_lease = if matches!(
         operation,
         protocol::OPERATION_PRINT_JOB
@@ -391,13 +362,9 @@ async fn serve_client(
             let status = match response.get(2..4) {
                 Some(bytes) => {
                     let status = u16::from_be_bytes([bytes[0], bytes[1]]);
-                    trace_issue34(&format!("response-status=0x{status:04x}"));
                     Some(status)
                 }
-                None => {
-                    trace_issue34("response=truncated");
-                    None
-                }
+                None => None,
             };
             if operation == protocol::OPERATION_PRINT_JOB {
                 // A query the driver makes while probing is not a print failure; a rejected job is.
@@ -425,7 +392,6 @@ async fn serve_client(
             write_http(&mut write, "200 OK", &response).await
         }
         Err(error) => {
-            trace_issue34(&format!("forward-error={}", error.code_str()));
             if operation == protocol::OPERATION_PRINT_JOB {
                 failures.report(PrintFailure::client(error.code(), Some(&printer_name)));
             }
