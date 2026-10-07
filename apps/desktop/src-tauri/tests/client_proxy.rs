@@ -480,7 +480,22 @@ async fn multi_megabyte_raster_payload_reaches_the_server_intact() {
     let (http_status, response) = submit_to_local_queue(&proxy_address, &uri, &document).await;
 
     assert_eq!(http_status, 200);
-    assert_eq!(ipp_status(&response), 0x0000);
+    let proxy_failure = pair
+        .failures
+        .latest()
+        .map(|failure| format!("{}: {}", failure.message(), failure.recovery()))
+        .unwrap_or_else(|| "none".to_owned());
+    let submitted_jobs = pair
+        .submitter
+        .jobs
+        .lock()
+        .expect("reads submitted jobs")
+        .len();
+    assert_eq!(
+        ipp_status(&response),
+        0x0000,
+        "unexpected IPP response; submitted_jobs={submitted_jobs}; proxy_failure={proxy_failure}"
+    );
     {
         let jobs = pair.submitter.jobs.lock().expect("reads submitted jobs");
         assert_eq!(jobs.len(), 1);

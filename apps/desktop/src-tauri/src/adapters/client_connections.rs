@@ -376,6 +376,7 @@ impl ClientConnections {
         let response = timeout(Duration::from_secs(120), async {
             tls.write_all(head.as_bytes()).await?;
             tls.write_all(&request).await?;
+            tls.flush().await?;
             let mut response = Vec::new();
             tls.take((MAX_RESPONSE + 8192) as u64)
                 .read_to_end(&mut response)
@@ -579,6 +580,7 @@ async fn query_printers(
     let response = timeout(Duration::from_secs(8), async {
         tls.write_all(request.as_bytes()).await?;
         tls.write_all(&ipp).await?;
+        tls.flush().await?;
         let mut response = Vec::new();
         tls.take((MAX_RESPONSE + 8192) as u64)
             .read_to_end(&mut response)
