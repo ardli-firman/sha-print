@@ -3,7 +3,7 @@
 //! A busy port is reclaimed only after the operating-system socket table identifies every owner as
 //! another ShaPrint process. Unknown and unrelated processes are never terminated (ADR 0014).
 
-use std::{io, net::SocketAddr, process, sync::Arc, time::Duration};
+use std::{collections::HashSet, io, net::SocketAddr, process, sync::Arc, time::Duration};
 
 use tokio::net::{TcpListener, UdpSocket};
 
@@ -11,6 +11,7 @@ use crate::domain::AppError;
 
 const DEFAULT_RECLAIM_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const UNKNOWN_PROCESS_NAME: &str = "<unknown>";
 
 /// Socket transport whose local port is being inspected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +52,10 @@ impl PortOwner {
             .unwrap_or(self.process_name.as_str())
             .trim_end_matches(".exe");
         name.eq_ignore_ascii_case("shaprint") || name.eq_ignore_ascii_case("shaprint-desktop")
+    }
+
+    fn is_unknown(&self) -> bool {
+        self.process_name == UNKNOWN_PROCESS_NAME
     }
 }
 
@@ -155,6 +160,10 @@ impl PortBinder {
             }
         }
 
+        let terminated_process_ids = owners
+            .iter()
+            .map(|owner| owner.process_id)
+            .collect::<HashSet<_>>();
         for owner in &owners {
             self.terminate(owner, transport, port).await?;
         }
@@ -166,7 +175,11 @@ impl PortBinder {
                 return Ok(());
             }
             for owner in &remaining {
-                if owner.process_id == current_process_id || !owner.is_shaprint() {
+                let recently_terminated_unknown =
+                    owner.is_unknown() && terminated_process_ids.contains(&owner.process_id);
+                if owner.process_id == current_process_id
+                    || (!owner.is_shaprint() && !recently_terminated_unknown)
+                {
                     return Err(conflict_error(transport, port, owner));
                 }
             }
@@ -250,10 +263,18 @@ fn conflict_error(transport: PortTransport, port: u16, owner: &PortOwner) -> App
 struct SystemPortOwnerInspector;
 
 #[cfg(windows)]
+fn powershell_command() -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut command = std::process::Command::new("powershell.exe");
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(windows)]
 impl PortOwnerInspector for SystemPortOwnerInspector {
     fn owners(&self, transport: PortTransport, port: u16) -> io::Result<Vec<PortOwner>> {
-        use std::process::Command;
-
         let query = match transport {
             PortTransport::Tcp => format!(
                 "$ids = @(Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique); "
@@ -263,9 +284,9 @@ impl PortOwnerInspector for SystemPortOwnerInspector {
             ),
         };
         let script = format!(
-            "$ErrorActionPreference = 'Stop'; {query} foreach ($id in $ids) {{ $p = Get-Process -Id $id -ErrorAction SilentlyContinue; if ($null -ne $p) {{ Write-Output ('{{0}}|{{1}}' -f $p.ProcessName, $id) }} }}"
+            "$ErrorActionPreference = 'Stop'; {query} foreach ($id in $ids) {{ $p = Get-Process -Id $id -ErrorAction SilentlyContinue; $name = if ($null -ne $p) {{ $p.ProcessName }} else {{ '<unknown>' }}; Write-Output ('{{0}}|{{1}}' -f $name, $id) }}"
         );
-        let output = Command::new("powershell.exe")
+        let output = powershell_command()
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -294,8 +315,6 @@ impl PortOwnerInspector for SystemPortOwnerInspector {
     }
 
     fn terminate(&self, owner: &PortOwner) -> io::Result<()> {
-        use std::process::Command;
-
         if !owner.is_shaprint() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -306,7 +325,7 @@ impl PortOwnerInspector for SystemPortOwnerInspector {
             "$ErrorActionPreference = 'Stop'; $p = Get-Process -Id {} -ErrorAction Stop; if ($p.ProcessName -notmatch '^(?i:shaprint(?:-desktop)?)$') {{ throw 'process identity changed' }}; Stop-Process -Id {} -Force -ErrorAction Stop",
             owner.process_id, owner.process_id
         );
-        let output = Command::new("powershell.exe")
+        let output = powershell_command()
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -404,6 +423,58 @@ mod tests {
         fn current_process_id(&self) -> u32 {
             self.current_process_id
         }
+    }
+
+    struct DelayedReleaseInspector {
+        held_tcp: Mutex<Option<std::net::TcpListener>>,
+        inspections: AtomicUsize,
+        terminations: AtomicUsize,
+    }
+
+    impl PortOwnerInspector for DelayedReleaseInspector {
+        fn owners(&self, _transport: PortTransport, _port: u16) -> io::Result<Vec<PortOwner>> {
+            let inspection = self.inspections.fetch_add(1, Ordering::SeqCst);
+            match inspection {
+                0 => Ok(vec![PortOwner::new(42, "shaprint.exe")]),
+                1 | 2 => Ok(vec![PortOwner::new(42, "<unknown>")]),
+                _ => {
+                    self.held_tcp
+                        .lock()
+                        .map_err(|_| io::Error::other("TCP lock poisoned"))?
+                        .take();
+                    Ok(Vec::new())
+                }
+            }
+        }
+
+        fn terminate(&self, _owner: &PortOwner) -> io::Result<()> {
+            self.terminations.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn current_process_id(&self) -> u32 {
+            process::id()
+        }
+    }
+
+    #[tokio::test]
+    async fn reclaim_waits_for_socket_release_after_terminated_owner_disappears() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test port");
+        let address = held.local_addr().expect("read test port");
+        let inspector = Arc::new(DelayedReleaseInspector {
+            held_tcp: Mutex::new(Some(held)),
+            inspections: AtomicUsize::new(0),
+            terminations: AtomicUsize::new(0),
+        });
+        let binder = PortBinder::with_inspector(inspector.clone())
+            .with_reclaim_timeout(Duration::from_millis(100))
+            .with_poll_interval(Duration::from_millis(1));
+
+        let listener = binder.bind_tcp(address).await.expect("wait and bind");
+
+        assert_eq!(listener.local_addr().expect("listener address"), address);
+        assert_eq!(inspector.terminations.load(Ordering::SeqCst), 1);
+        assert!(inspector.inspections.load(Ordering::SeqCst) >= 4);
     }
 
     #[tokio::test]

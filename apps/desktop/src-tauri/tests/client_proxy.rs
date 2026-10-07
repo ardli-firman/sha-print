@@ -58,11 +58,26 @@ struct FakeSubmitter {
     render: AtomicBool,
     pages: Mutex<Vec<RasterPage>>,
     submitted: tokio::sync::Notify,
+    submission_gate: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
 }
 
 #[async_trait]
 impl PrintJobSubmitter for FakeSubmitter {
     async fn submit(&self, printer: &PrinterName, job: PrintJob) -> Result<u32, AppError> {
+        let gate = self
+            .submission_gate
+            .lock()
+            .expect("reads submission gate")
+            .take();
+        if let Some((entered, release)) = gate {
+            let _ = entered.send(());
+            let _ = release.await;
+        }
         if self.render.load(Ordering::Relaxed) {
             // Same decoder the real Windows adapter runs before invoking the installed driver.
             let pages = decode_pwg(job.document())?;
@@ -621,6 +636,113 @@ async fn create_send_and_job_queries_complete_over_the_local_proxy() {
         assert_eq!(submitted[0].1.document(), document);
         assert_eq!(submitted[0].1.settings().copies, Some(2));
     }
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn multi_step_send_document_counts_the_pending_job_once() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let printer_uri = local_printer_uri(&proxy_address, &pair.server_address);
+
+    let mut create = operation_request(0x0005, 57, &printer_uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+    let job_id = created.integer("job-id").expect("server assigned a job id");
+    assert_eq!(pair.server_tracker.active_count(), 1);
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    *pair
+        .submitter
+        .submission_gate
+        .lock()
+        .expect("sets submission gate") = Some((entered_tx, release_rx));
+
+    let mut send = operation_request(0x0006, 58, &printer_uri);
+    integer_attribute(&mut send, "job-id", job_id);
+    boolean_attribute(&mut send, "last-document", true);
+    send.push(3);
+    send.extend(document_bytes());
+    let send_task =
+        tokio::spawn(async move { submit_request_to_local_queue(&proxy_address, send).await });
+
+    entered_rx.await.expect("final document reached submitter");
+    assert_eq!(
+        pair.server_tracker.active_count(),
+        1,
+        "Send-Document must not count its existing Create-Job twice"
+    );
+    release_tx.send(()).expect("releases print submission");
+    let (http_status, response) = send_task.await.expect("Send-Document task completes");
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    assert_eq!(pair.server_tracker.active_count(), 0);
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn terminal_job_history_does_not_reject_new_job_at_capacity() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let printer_uri = local_printer_uri(&proxy_address, &pair.server_address);
+    let mut oldest_job_id = None;
+
+    for index in 0..256u32 {
+        let create_request_id = 1_000 + index * 2;
+        let mut create = operation_request(0x0005, create_request_id, &printer_uri);
+        create.push(3);
+        let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+        assert_eq!(http_status, 200, "Create-Job request {index}");
+        assert_eq!(ipp_status(&response), 0x0000, "Create-Job request {index}");
+        let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+        let job_id = created.integer("job-id").expect("server assigned a job id");
+        oldest_job_id.get_or_insert(job_id);
+
+        let mut cancel = operation_request(0x0008, create_request_id + 1, &printer_uri);
+        integer_attribute(&mut cancel, "job-id", job_id);
+        cancel.push(3);
+        let (http_status, response) = submit_request_to_local_queue(&proxy_address, cancel).await;
+        assert_eq!(http_status, 200, "Cancel-Job request {index}");
+        assert_eq!(ipp_status(&response), 0x0000, "Cancel-Job request {index}");
+    }
+
+    let mut create = operation_request(0x0005, 2_000, &printer_uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(
+        ipp_status(&response),
+        0x0000,
+        "terminal history must not block a new Create-Job"
+    );
+    let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+    let new_job_id = created.integer("job-id").expect("server assigned a job id");
+
+    let mut get_oldest = operation_request(0x0009, 2_001, &printer_uri);
+    integer_attribute(
+        &mut get_oldest,
+        "job-id",
+        oldest_job_id.expect("created at least one job"),
+    );
+    get_oldest.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, get_oldest).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(
+        ipp_status(&response),
+        0x0406,
+        "oldest terminal job is evicted"
+    );
+
+    let mut cancel = operation_request(0x0008, 2_002, &printer_uri);
+    integer_attribute(&mut cancel, "job-id", new_job_id);
+    cancel.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, cancel).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
     pair.stop().await;
 }
 

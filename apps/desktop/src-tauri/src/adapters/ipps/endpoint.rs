@@ -79,7 +79,17 @@ impl JobStore {
         let mut state = self.inner.lock().map_err(|_| Status::InternalError)?;
         Self::expire_locked(&mut state);
         if state.jobs.len() >= MAX_TRACKED_JOBS {
-            return Err(Status::NotAcceptingJobs);
+            let oldest_terminal = state
+                .jobs
+                .iter()
+                .filter(|(_, job)| matches!(job.entry.state, 7..=9))
+                .min_by_key(|(_, job)| job.created_at)
+                .map(|(id, _)| *id);
+            let Some(oldest_terminal) = oldest_terminal else {
+                return Err(Status::NotAcceptingJobs);
+            };
+            // Keep active jobs intact while reclaiming bounded terminal history for new work.
+            state.jobs.remove(&oldest_terminal);
         }
         let id = Self::next_id(&mut state)?;
         let printer_uri = entry(host, &printer, true).uri;
@@ -591,12 +601,7 @@ async fn answer_multi_step(
             if request.document().is_empty() {
                 return (response(request_id, version, Status::BadRequest, &[]), None);
             }
-            if !request_lease.mark_print_job() {
-                return (
-                    response(request_id, version, Status::NotAcceptingJobs, &[]),
-                    None,
-                );
-            }
+            // Create-Job holds the print-job lease; this request lease keeps the restart drain open.
             if !submitter.is_available() {
                 failures.report(PrintFailure::server(
                     ErrorCode::QueueUnavailable,
@@ -701,12 +706,7 @@ async fn answer_multi_step(
             let Some(job_id) = request.integer("job-id").filter(|id| *id > 0) else {
                 return (response(request_id, version, Status::BadRequest, &[]), None);
             };
-            if !request_lease.mark_print_job() {
-                return (
-                    response(request_id, version, Status::NotAcceptingJobs, &[]),
-                    None,
-                );
-            }
+            // Keep this request leased through the response; cancel releases the stored job lease.
             match jobs.cancel(job_id, &printer) {
                 Ok(job) => (
                     managed_job_response(request_id, version, &job),
