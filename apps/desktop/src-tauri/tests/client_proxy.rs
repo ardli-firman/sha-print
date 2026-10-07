@@ -295,6 +295,10 @@ async fn submit_request_with_headers(
         .await
         .expect("writes local IPP request");
     stream.write_all(&body).await.expect("writes print job");
+    stream
+        .shutdown()
+        .await
+        .expect("half-closes the request after its declared body");
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
