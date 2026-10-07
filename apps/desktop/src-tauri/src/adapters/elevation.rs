@@ -317,11 +317,7 @@ mod windows {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-    use super::{
-        helper_parameters, inbound_rules, netsh_add_rule_args, HelperRequest, InboundRule,
-    };
-    use crate::adapters::discovery::DISCOVERY_PORTS;
-    use crate::adapters::ipps::DEFAULT_PORT;
+    use super::{helper_parameters, inbound_rules, netsh_add_rule_args, HelperRequest};
     use crate::domain::{SetupAction, SetupFailure, SetupFailureKind};
 
     /// Windows error raised when the user declines the UAC prompt.
