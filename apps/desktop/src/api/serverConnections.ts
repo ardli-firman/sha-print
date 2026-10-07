@@ -9,6 +9,25 @@ export interface ServerConnectionReview {
   trusted: boolean;
 }
 export interface ServerConnectionPrinters { address: string; printers: string[] }
+export interface TrustedServer { address: string; fingerprint: string }
+export type TrustedServerStatus = "online" | "offline" | "identity_changed";
+export interface TrustedServerProbe {
+  address: string;
+  status: TrustedServerStatus;
+  approved_fingerprint: string;
+  current_fingerprint: string | null;
+  printers: string[];
+}
+
+export function listTrustedServers(): Promise<TrustedServer[]> {
+  return invoke("list_trusted_servers");
+}
+export function probeTrustedServer(address: string): Promise<TrustedServerProbe> {
+  return invoke("probe_trusted_server", { address });
+}
+export function forgetTrustedServer(address: string): Promise<void> {
+  return invoke("forget_trusted_server", { address });
+}
 
 export function inspectServerConnection(address: string): Promise<ServerConnectionReview> {
   return invoke("inspect_server_connection", { address });

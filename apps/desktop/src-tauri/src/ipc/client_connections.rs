@@ -1,6 +1,11 @@
 //! Tauri commands for the manual client server-review flow.
 
-use crate::{adapters::client_connections::ClientConnections, ipc::dto::AppErrorDto};
+use crate::{
+    adapters::client_connections::{
+        ClientConnections, TrustedServer, TrustedServerProbe, TrustedServerStatus,
+    },
+    ipc::dto::AppErrorDto,
+};
 use serde::Serialize;
 use tauri::State;
 
@@ -36,6 +41,55 @@ pub struct ServerConnectionPrintersDto {
     pub address: String,
     pub printers: Vec<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TrustedServerDto {
+    pub address: String,
+    pub fingerprint: String,
+}
+
+impl From<TrustedServer> for TrustedServerDto {
+    fn from(server: TrustedServer) -> Self {
+        Self {
+            address: server.address,
+            fingerprint: server.fingerprint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustedServerStatusDto {
+    Online,
+    Offline,
+    IdentityChanged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TrustedServerProbeDto {
+    pub address: String,
+    pub status: TrustedServerStatusDto,
+    pub approved_fingerprint: String,
+    pub current_fingerprint: Option<String>,
+    pub printers: Vec<String>,
+}
+
+impl From<TrustedServerProbe> for TrustedServerProbeDto {
+    fn from(probe: TrustedServerProbe) -> Self {
+        Self {
+            address: probe.address,
+            status: match probe.status {
+                TrustedServerStatus::Online => TrustedServerStatusDto::Online,
+                TrustedServerStatus::Offline => TrustedServerStatusDto::Offline,
+                TrustedServerStatus::IdentityChanged => TrustedServerStatusDto::IdentityChanged,
+            },
+            approved_fingerprint: probe.approved_fingerprint,
+            current_fingerprint: probe.current_fingerprint,
+            printers: probe.printers,
+        }
+    }
+}
+
 impl From<crate::adapters::client_connections::ConnectionReview> for ServerConnectionReviewDto {
     fn from(v: crate::adapters::client_connections::ConnectionReview) -> Self {
         Self {
@@ -87,6 +141,40 @@ pub async fn list_server_connection_printers(
         .printers(&address)
         .await
         .map(ServerConnectionPrintersDto::from)
+        .map_err(|e| AppErrorDto::from(&e))
+}
+
+#[tauri::command]
+pub async fn list_trusted_servers(
+    connections: State<'_, SharedClientConnections>,
+) -> Result<Vec<TrustedServerDto>, AppErrorDto> {
+    connections
+        .list_trusted_servers()
+        .await
+        .map(|servers| servers.into_iter().map(TrustedServerDto::from).collect())
+        .map_err(|e| AppErrorDto::from(&e))
+}
+
+#[tauri::command]
+pub async fn probe_trusted_server(
+    address: String,
+    connections: State<'_, SharedClientConnections>,
+) -> Result<TrustedServerProbeDto, AppErrorDto> {
+    connections
+        .probe_trusted_server(&address)
+        .await
+        .map(TrustedServerProbeDto::from)
+        .map_err(|e| AppErrorDto::from(&e))
+}
+
+#[tauri::command]
+pub async fn forget_trusted_server(
+    address: String,
+    connections: State<'_, SharedClientConnections>,
+) -> Result<(), AppErrorDto> {
+    connections
+        .forget_trusted_server(&address)
+        .await
         .map_err(|e| AppErrorDto::from(&e))
 }
 

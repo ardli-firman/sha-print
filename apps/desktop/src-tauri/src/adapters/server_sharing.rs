@@ -107,9 +107,19 @@ impl RuntimeService for ServerSharingService {
         {
             Ok(advertisement) => Some(advertisement),
             Err(error) => {
-                // Printer sharing is the product's job; being found on the network is how a client
-                // gets to it. A server that cannot advertise still serves every client that
-                // reaches it by address, so this is reported and not fatal (ADR 0004).
+                // A conflicting process on the dedicated discovery port is actionable and must
+                // remain visible as a failed start; do not disguise it as a best-effort discovery
+                // outage. Other discovery failures remain non-fatal to direct IPPS printing.
+                if error.message().contains(" is in use")
+                    || error.message().contains(" remains in use")
+                    || error.message().contains("did not release UDP port")
+                    || error.message().contains("holding UDP port")
+                    || error
+                        .message()
+                        .contains("cannot inspect the process using UDP port")
+                {
+                    return Err(error);
+                }
                 log::warn!(
                     "sharing cannot advertise itself code={} message={}",
                     error.code_str(),

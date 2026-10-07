@@ -14,15 +14,21 @@ pub use browse::MdnsBrowser;
 // the wire, and nothing else.
 pub use wire::{encode_query, SERVICE_TYPE};
 
+use std::collections::BTreeSet;
+use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tokio::net::UdpSocket;
 
 use crate::domain::AppError;
 
 /// The multicast group every multicast DNS responder listens on (RFC 6762 §3).
 pub const MDNS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
+
+/// IPv4 hop limit for multicast discovery across routed VLANs (#84).
+pub const MDNS_MULTICAST_TTL: u32 = 32;
 
 /// Dedicated multicast DNS discovery port (ADR 0014).
 pub const DISCOVERY_PORT: u16 = 48633;
@@ -45,6 +51,121 @@ pub const QUEUE_PROPERTY: &str = "queue";
 pub const VERSION_PROPERTY: &str = "v";
 /// The resource path a browser connects to, shared with the IPPS endpoint.
 pub const RESOURCE_PATH: &str = "ipp/print";
+
+/// Per-interface IPv4 multicast socket operations used by the advertiser and browser.
+///
+/// The production adapter joins groups and changes the multicast interface on the shared socket.
+/// Tests can observe each attempt without relying on host multicast loopback support.
+#[async_trait]
+pub trait MulticastInterfaceSender: Send + Sync {
+    fn set_hop_limit(&self, socket: &UdpSocket, ttl: u32) -> io::Result<()>;
+
+    fn join_group(
+        &self,
+        socket: &UdpSocket,
+        group: Ipv4Addr,
+        interface: Ipv4Addr,
+    ) -> io::Result<()>;
+
+    async fn send_on(
+        &self,
+        socket: &UdpSocket,
+        interface: Ipv4Addr,
+        packet: &[u8],
+        destination: SocketAddr,
+    ) -> io::Result<()>;
+}
+
+struct SystemMulticastInterfaceSender;
+
+#[async_trait]
+impl MulticastInterfaceSender for SystemMulticastInterfaceSender {
+    fn set_hop_limit(&self, socket: &UdpSocket, ttl: u32) -> io::Result<()> {
+        socket.set_multicast_ttl_v4(ttl)
+    }
+
+    fn join_group(
+        &self,
+        socket: &UdpSocket,
+        group: Ipv4Addr,
+        interface: Ipv4Addr,
+    ) -> io::Result<()> {
+        socket.join_multicast_v4(group, interface)
+    }
+
+    async fn send_on(
+        &self,
+        socket: &UdpSocket,
+        interface: Ipv4Addr,
+        packet: &[u8],
+        destination: SocketAddr,
+    ) -> io::Result<()> {
+        socket2::SockRef::from(socket).set_multicast_if_v4(&interface)?;
+        socket.send_to(packet, destination).await.map(|_| ())
+    }
+}
+
+pub(super) fn system_multicast_interface_sender() -> std::sync::Arc<dyn MulticastInterfaceSender> {
+    std::sync::Arc::new(SystemMulticastInterfaceSender)
+}
+
+pub(super) fn active_ipv4_interfaces(
+    addresses: impl IntoIterator<Item = Ipv4Addr>,
+) -> Vec<Ipv4Addr> {
+    addresses
+        .into_iter()
+        .filter(|address| !address.is_loopback() && !address.is_unspecified())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+pub(super) fn system_ipv4_interfaces() -> Vec<Ipv4Addr> {
+    match if_addrs::get_if_addrs() {
+        Ok(interfaces) => active_ipv4_interfaces(interfaces.into_iter().filter_map(|interface| {
+            match interface.addr {
+                if_addrs::IfAddr::V4(address) => Some(address.ip),
+                if_addrs::IfAddr::V6(_) => None,
+            }
+        })),
+        Err(error) => {
+            log::debug!("cannot enumerate IPv4 discovery interfaces message={error}");
+            Vec::new()
+        }
+    }
+}
+
+/// Sends one multicast packet on every eligible interface, isolating per-interface failures.
+pub(super) async fn send_multicast_on_interfaces(
+    socket: &UdpSocket,
+    sender: &dyn MulticastInterfaceSender,
+    multicast_lock: &tokio::sync::Mutex<()>,
+    interfaces: &[Ipv4Addr],
+    packet: &[u8],
+    destinations: &[SocketAddr],
+    what: &str,
+) -> Result<(), AppError> {
+    let mut failures = 0;
+    for interface in active_ipv4_interfaces(interfaces.iter().copied()) {
+        let _multicast_guard = multicast_lock.lock().await;
+        for destination in destinations {
+            if let Err(error) = sender
+                .send_on(socket, interface, packet, *destination)
+                .await
+            {
+                log::debug!("cannot send a discovery {what} interface={interface} target={destination} message={error}");
+                failures += 1;
+            }
+        }
+    }
+    if failures == 0 {
+        Ok(())
+    } else {
+        Err(AppError::internal(format!(
+            "the discovery {what} failed on {failures} interface send(s)"
+        )))
+    }
+}
 
 /// Sends one discovery packet to every destination.
 ///

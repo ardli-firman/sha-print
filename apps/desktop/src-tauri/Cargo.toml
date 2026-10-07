@@ -8,7 +8,12 @@ publish = false
 
 [features]
 default = ["desktop"]
-desktop = ["dep:tauri", "dep:tauri-plugin-log", "dep:tauri-plugin-updater"]
+desktop = [
+    "dep:tauri",
+    "dep:tauri-plugin-log",
+    "dep:tauri-plugin-single-instance",
+    "dep:tauri-plugin-updater",
+]
 
 [lib]
 # The lib name must differ from the bin name on Windows (rust-lang/cargo#8519).
@@ -29,6 +34,7 @@ async-trait = "0.1"
 # only reason this app decodes base64 itself.
 base64 = "0.22"
 hex = "0.4"
+if-addrs = "0.13"
 log = "0.4"
 # `ring` is the TLS backend for both rustls and rcgen on every platform we build, including the
 # Windows CI runner, so no assembly toolchain beyond the platform C compiler is required.
@@ -38,8 +44,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+socket2 = "0.6"
 tauri = { version = "2", features = ["tray-icon"], optional = true }
 tauri-plugin-log = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
 tauri-plugin-updater = { version = "2", optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

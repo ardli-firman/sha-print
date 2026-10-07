@@ -17,12 +17,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_rustls::{rustls::ServerConfig, TlsAcceptor};
 
-use crate::adapters::identity::ServerIdentity;
+use crate::adapters::{identity::ServerIdentity, port_binding::PortBinder};
 use crate::application::{
     PrintFailures, PrintJobSubmitter, PrintJobTracker, ServiceContext, SharedPrinterSource,
 };
@@ -35,7 +35,7 @@ pub const DEFAULT_PORT: u16 = 48631;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long a client has to send its request before the connection is dropped.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Serves public IPP queries and authorized Print-Job submissions for shared queues over TLS.
 pub struct IppsServer {
@@ -45,6 +45,8 @@ pub struct IppsServer {
     submitter: Arc<dyn PrintJobSubmitter>,
     failures: Arc<PrintFailures>,
     tracker: Arc<PrintJobTracker>,
+    jobs: Arc<endpoint::JobStore>,
+    binder: PortBinder,
     bound: Mutex<Option<SocketAddr>>,
 }
 
@@ -58,6 +60,27 @@ impl IppsServer {
         failures: Arc<PrintFailures>,
         tracker: Arc<PrintJobTracker>,
     ) -> Self {
+        Self::with_port_binder(
+            port,
+            identity,
+            channel,
+            submitter,
+            failures,
+            tracker,
+            PortBinder::system(),
+        )
+    }
+
+    /// Builds the endpoint with an injected binder for lifecycle tests.
+    pub fn with_port_binder(
+        port: u16,
+        identity: Arc<ServerIdentity>,
+        channel: Arc<NetworkChannel>,
+        submitter: Arc<dyn PrintJobSubmitter>,
+        failures: Arc<PrintFailures>,
+        tracker: Arc<PrintJobTracker>,
+        binder: PortBinder,
+    ) -> Self {
         Self {
             port,
             identity,
@@ -65,6 +88,8 @@ impl IppsServer {
             submitter,
             failures,
             tracker,
+            jobs: Arc::new(endpoint::JobStore::default()),
+            binder,
             bound: Mutex::new(None),
         }
     }
@@ -90,14 +115,10 @@ impl IppsServer {
         context: ServiceContext,
     ) -> Result<(), AppError> {
         let tls = Arc::new(self.tls_config()?);
-        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, self.port)))
-            .await
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "cannot listen for clients on port {}: {error}",
-                    self.port
-                ))
-            })?;
+        let listener = self
+            .binder
+            .bind_tcp(SocketAddr::from((Ipv4Addr::UNSPECIFIED, self.port)))
+            .await?;
         let local = listener.local_addr().map_err(|error| {
             AppError::internal(format!("cannot read the sharing endpoint address: {error}"))
         })?;
@@ -110,9 +131,12 @@ impl IppsServer {
 
         let mut connections: JoinSet<()> = JoinSet::new();
         let mut shutdown = context.shutdown();
+        let mut cleanup = tokio::time::interval(Duration::from_secs(30));
+        cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
+                _ = cleanup.tick() => self.jobs.expire(),
                 Some(_) = connections.join_next(), if !connections.is_empty() => {}
                 accepted = listener.accept() => match accepted {
                     Ok((stream, peer)) => {
@@ -123,6 +147,7 @@ impl IppsServer {
                             submitter: Arc::clone(&self.submitter),
                             failures: Arc::clone(&self.failures),
                             tracker: Arc::clone(&self.tracker),
+                            jobs: Arc::clone(&self.jobs),
                         };
                         connections.spawn(serve_client(stream, server_ctx, peer));
                     }
@@ -134,6 +159,7 @@ impl IppsServer {
         // Stop accepting immediately and drop the connections still in flight: a stopped server
         // answers no client.
         connections.shutdown().await;
+        self.jobs.abort_incomplete();
         if let Ok(mut bound) = self.bound.lock() {
             *bound = None;
         }
@@ -163,6 +189,7 @@ struct ServerClientContext {
     submitter: Arc<dyn PrintJobSubmitter>,
     failures: Arc<PrintFailures>,
     tracker: Arc<PrintJobTracker>,
+    jobs: Arc<endpoint::JobStore>,
 }
 
 /// Completes the TLS handshake and answers one request.
@@ -181,13 +208,14 @@ async fn serve_client(stream: TcpStream, ctx: ServerClientContext, peer: SocketA
         }
     };
 
-    if let Err(error) = answer_request_with_jobs(
+    if let Err(error) = answer_request_with_store(
         tls_stream,
         ctx.directory.as_ref(),
         ctx.channel.as_ref(),
         ctx.submitter.as_ref(),
         ctx.failures.as_ref(),
         ctx.tracker.as_ref(),
+        ctx.jobs.as_ref(),
     )
     .await
     {
@@ -206,6 +234,25 @@ pub async fn answer_request_with_jobs<S>(
     submitter: &dyn PrintJobSubmitter,
     failures: &PrintFailures,
     tracker: &PrintJobTracker,
+) -> Result<(), AppError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let jobs = endpoint::JobStore::default();
+    answer_request_with_store(
+        stream, directory, channel, submitter, failures, tracker, &jobs,
+    )
+    .await
+}
+
+async fn answer_request_with_store<S>(
+    stream: S,
+    directory: &dyn SharedPrinterSource,
+    channel: &NetworkChannel,
+    submitter: &dyn PrintJobSubmitter,
+    failures: &PrintFailures,
+    tracker: &PrintJobTracker,
+    jobs: &endpoint::JobStore,
 ) -> Result<(), AppError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -253,11 +300,14 @@ where
     };
     let (answer, _active_job_guard) = endpoint::answer_job(
         body,
-        authority,
-        directory,
-        channel,
-        submitter,
-        failures,
+        endpoint::EndpointContext {
+            host: authority,
+            shared: directory,
+            channel,
+            submitter,
+            failures,
+            jobs,
+        },
         request_lease,
     )
     .await;
