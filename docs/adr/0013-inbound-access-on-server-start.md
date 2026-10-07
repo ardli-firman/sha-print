@@ -1,5 +1,7 @@
 # Ensure inbound Client access when Server Sharing starts
 
+The port numbers below (TCP 8631 and UDP 5353/5354) are replaced by ADR 0014 (TCP 48631 and UDP 48633).
+
 ---
 status: accepted
 ---

@@ -23,6 +23,11 @@ A shared secret configured by ShaPrint installations to authorize print jobs bet
 A server a client has seen advertise itself on the local network, as opposed to an address entered by
 hand. A nearby server is a hint to review, never a trusted server.
 
+**Trusted server**:
+A server whose certificate identity a client user has reviewed and approved for printer discovery and
+print jobs, whether originally found as a nearby server or entered by address across networks.
+_Avoid_: approved server, saved server, known server
+
 **Client queue**:
 A native Windows print queue installed on a client computer that routes print jobs through ShaPrint's
 local client proxy to a server's shared printer.

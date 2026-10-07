@@ -2,6 +2,7 @@
 
 The document-format and RAW spooler submission decisions below are replaced by ADR 0010.
 The separate inbound-firewall action and unprivileged start described below are replaced by ADR 0013.
+The default port assignment (8631) below is replaced by ADR 0014 (48631).
 
 ---
 status: accepted

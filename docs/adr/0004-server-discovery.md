@@ -1,5 +1,7 @@
 # Nearby-server discovery over multicast DNS
 
+The discovery port selection (5353/5354), single-interface binding, and TTL=1 limit below are replaced by ADR 0014.
+
 ---
 status: accepted
 ---
