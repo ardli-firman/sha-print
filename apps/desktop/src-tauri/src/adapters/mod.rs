@@ -12,6 +12,7 @@ pub mod elevation;
 pub mod identity;
 pub mod ipps;
 pub mod legacy;
+pub mod port_binding;
 pub mod printers;
 pub mod queue_installation;
 mod server_sharing;

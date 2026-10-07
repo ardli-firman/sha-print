@@ -13,8 +13,10 @@ use async_trait::async_trait;
 use tokio::net::UdpSocket;
 
 use crate::adapters::discovery::{
-    send_to_all, wire, DISCOVERY_PORTS, MAX_DATAGRAM, MDNS_GROUP, NAME_PROPERTY, QUEUE_PROPERTY,
-    READ_BACKOFF, VERSION_PROPERTY,
+    active_ipv4_interfaces, send_multicast_on_interfaces, send_to_all, system_ipv4_interfaces,
+    system_multicast_interface_sender, wire, MulticastInterfaceSender, DISCOVERY_PORTS,
+    MAX_DATAGRAM, MDNS_GROUP, MDNS_MULTICAST_TTL, NAME_PROPERTY, QUEUE_PROPERTY, READ_BACKOFF,
+    VERSION_PROPERTY,
 };
 use crate::application::{AdvertisementSink, Browse, DiscoveryBrowser, Shutdown};
 use crate::domain::{AppError, NearbyServer, PrinterName};
@@ -29,6 +31,8 @@ const QUERY_INTERVAL: Duration = Duration::from_secs(15);
 pub struct MdnsBrowser {
     targets: Vec<SocketAddr>,
     interval: Duration,
+    interfaces: Option<Vec<Ipv4Addr>>,
+    multicast_sender: Arc<dyn MulticastInterfaceSender>,
 }
 
 impl Default for MdnsBrowser {
@@ -46,6 +50,8 @@ impl MdnsBrowser {
                 .map(|port| SocketAddr::from((MDNS_GROUP, *port)))
                 .collect(),
             interval: QUERY_INTERVAL,
+            interfaces: None,
+            multicast_sender: system_multicast_interface_sender(),
         }
     }
 
@@ -63,6 +69,20 @@ impl MdnsBrowser {
         self.interval = interval;
         self
     }
+
+    /// Overrides interface enumeration for a real multi-interface UDP test.
+    #[must_use]
+    pub fn with_interfaces(mut self, interfaces: Vec<Ipv4Addr>) -> Self {
+        self.interfaces = Some(active_ipv4_interfaces(interfaces));
+        self
+    }
+
+    /// Uses a multicast socket adapter for an observable UDP integration test.
+    #[must_use]
+    pub fn with_multicast_sender(mut self, sender: Arc<dyn MulticastInterfaceSender>) -> Self {
+        self.multicast_sender = sender;
+        self
+    }
 }
 
 #[async_trait]
@@ -75,9 +95,26 @@ impl DiscoveryBrowser for MdnsBrowser {
                     "cannot open a socket to discover nearby servers on this network",
                 )
             })?;
+        if let Err(error) = self
+            .multicast_sender
+            .set_hop_limit(&socket, MDNS_MULTICAST_TTL)
+        {
+            log::debug!(
+                "cannot set discovery multicast hop limit ttl={MDNS_MULTICAST_TTL} message={error}"
+            );
+        }
+        if let Err(error) = socket.set_multicast_loop_v4(true) {
+            log::debug!("cannot enable discovery multicast loopback message={error}");
+        }
         Ok(Box::new(MdnsBrowse {
             socket,
             targets: self.targets.clone(),
+            interfaces: self
+                .interfaces
+                .clone()
+                .unwrap_or_else(system_ipv4_interfaces),
+            multicast_sender: Arc::clone(&self.multicast_sender),
+            multicast_lock: tokio::sync::Mutex::new(()),
             interval: self.interval,
         }))
     }
@@ -87,6 +124,9 @@ impl DiscoveryBrowser for MdnsBrowser {
 struct MdnsBrowse {
     socket: UdpSocket,
     targets: Vec<SocketAddr>,
+    interfaces: Vec<Ipv4Addr>,
+    multicast_sender: Arc<dyn MulticastInterfaceSender>,
+    multicast_lock: tokio::sync::Mutex<()>,
     interval: Duration,
 }
 
@@ -129,7 +169,41 @@ impl MdnsBrowse {
     /// Asks every target what it advertises.
     async fn query(&self) -> Result<(), AppError> {
         let packet = wire::encode_query(wire::SERVICE_TYPE)?;
-        send_to_all(&self.socket, &packet, &self.targets, "query").await
+        let (multicast_targets, direct_targets): (Vec<_>, Vec<_>) = self
+            .targets
+            .iter()
+            .copied()
+            .partition(|target| target.ip().is_multicast());
+        let mut failures = 0;
+        if !multicast_targets.is_empty()
+            && send_multicast_on_interfaces(
+                &self.socket,
+                &*self.multicast_sender,
+                &self.multicast_lock,
+                &self.interfaces,
+                &packet,
+                &multicast_targets,
+                "query",
+            )
+            .await
+            .is_err()
+        {
+            failures += 1;
+        }
+        if !direct_targets.is_empty()
+            && send_to_all(&self.socket, &packet, &direct_targets, "query")
+                .await
+                .is_err()
+        {
+            failures += 1;
+        }
+        if failures == 0 {
+            Ok(())
+        } else {
+            Err(AppError::internal(format!(
+                "the discovery query had {failures} independent send failure(s)"
+            )))
+        }
     }
 }
 
