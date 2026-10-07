@@ -3,10 +3,23 @@
 
 mod support;
 
-use std::sync::Arc;
+use std::{
+    io,
+    net::TcpListener,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
 
+use shaprint_desktop::adapters::discovery::MdnsAdvertiser;
 use shaprint_desktop::adapters::ipps::NetworkChannel;
-use shaprint_desktop::adapters::{client_connections::ClientConnections, ClientProxyService};
+use shaprint_desktop::adapters::port_binding::{
+    PortBinder, PortOwner, PortOwnerInspector, PortTransport,
+};
+use shaprint_desktop::adapters::{
+    client_connections::ClientConnections, ClientProxyService, ServerSharingService,
+};
 use shaprint_desktop::application::{
     PrintFailures, RuntimeCoordinator, SharedPrinterSource, Sharing,
 };
@@ -526,4 +539,165 @@ async fn explicit_stop_persists_even_when_service_was_in_failed_state() {
     }
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+struct HeldTcpOwner {
+    owner: Mutex<Option<PortOwner>>,
+    listener: Mutex<Option<TcpListener>>,
+    terminations: AtomicUsize,
+}
+
+impl PortOwnerInspector for HeldTcpOwner {
+    fn owners(&self, transport: PortTransport, _port: u16) -> io::Result<Vec<PortOwner>> {
+        if transport != PortTransport::Tcp {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .owner
+            .lock()
+            .map_err(|_| io::Error::other("owner lock poisoned"))?
+            .clone()
+            .into_iter()
+            .collect())
+    }
+
+    fn terminate(&self, _owner: &PortOwner) -> io::Result<()> {
+        self.terminations.fetch_add(1, Ordering::SeqCst);
+        self.owner
+            .lock()
+            .map_err(|_| io::Error::other("owner lock poisoned"))?
+            .take();
+        self.listener
+            .lock()
+            .map_err(|_| io::Error::other("listener lock poisoned"))?
+            .take();
+        Ok(())
+    }
+}
+
+fn proxy_service(port: u16, binder: PortBinder) -> Arc<ClientProxyService> {
+    let connections = Arc::new(
+        ClientConnections::new(temporary_directory("runtime-port-owner-trust"))
+            .expect("opens proxy trust store"),
+    );
+    Arc::new(ClientProxyService::with_port_binder(
+        connections,
+        Arc::new(NetworkChannel::in_memory()),
+        Arc::new(PrintFailures::new()),
+        Arc::new(shaprint_desktop::application::PrintJobTracker::new()),
+        port,
+        binder,
+    ))
+}
+
+#[tokio::test]
+async fn stale_shaprint_owner_is_reclaimed_and_proxy_reaches_running() {
+    let held = TcpListener::bind("127.0.0.1:0").expect("holds a local port");
+    let address = held.local_addr().expect("reads held port");
+    let inspector = Arc::new(HeldTcpOwner {
+        owner: Mutex::new(Some(PortOwner::new(4321, "shaprint-desktop"))),
+        listener: Mutex::new(Some(held)),
+        terminations: AtomicUsize::new(0),
+    });
+    let proxy = proxy_service(
+        address.port(),
+        PortBinder::with_inspector(inspector.clone()),
+    );
+    let runtime = RuntimeCoordinator::new(vec![proxy.clone()]);
+
+    runtime
+        .start(ServiceId::ClientProxy)
+        .await
+        .expect("reclaims stale ShaPrint and starts proxy");
+
+    assert_eq!(
+        state(&runtime, ServiceId::ClientProxy),
+        ServiceState::Running
+    );
+    assert_eq!(inspector.terminations.load(Ordering::SeqCst), 1);
+    let bound = proxy.bound_address().expect("proxy listener is recorded");
+    assert_eq!(bound.port(), address.port());
+    runtime
+        .stop(ServiceId::ClientProxy)
+        .await
+        .expect("stops proxy");
+    let rebound = TcpListener::bind(bound).expect("stop released the proxy port");
+    drop(rebound);
+    runtime.shutdown().await.expect("shutdown is idempotent");
+}
+
+#[tokio::test]
+async fn non_shaprint_owner_is_reported_without_termination() {
+    let held = TcpListener::bind("127.0.0.1:0").expect("holds a local port");
+    let address = held.local_addr().expect("reads held port");
+    let inspector = Arc::new(HeldTcpOwner {
+        owner: Mutex::new(Some(PortOwner::new(9876, "unrelated-worker"))),
+        listener: Mutex::new(Some(held)),
+        terminations: AtomicUsize::new(0),
+    });
+    let proxy = proxy_service(
+        address.port(),
+        PortBinder::with_inspector(inspector.clone()),
+    );
+    let runtime = RuntimeCoordinator::new(vec![proxy]);
+
+    let error = runtime
+        .start(ServiceId::ClientProxy)
+        .await
+        .expect_err("must not take over an unrelated port");
+
+    assert!(error.message().contains(&address.port().to_string()));
+    assert!(error.message().contains("unrelated-worker"));
+    assert!(error.message().contains("9876"));
+    assert_eq!(inspector.terminations.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        state(&runtime, ServiceId::ClientProxy),
+        ServiceState::Failed
+    );
+    runtime
+        .shutdown()
+        .await
+        .expect("shutdown after failed start");
+}
+
+#[tokio::test]
+async fn stopping_server_sharing_releases_its_tcp_and_udp_listeners() {
+    let (sharing, endpoint) = sharing_runtime(&["HP LaserJet"]);
+    sharing
+        .set_shared(printer_names(&["HP LaserJet"]))
+        .await
+        .expect("selects a printer");
+    let channel = Arc::new(NetworkChannel::in_memory());
+    channel
+        .configure_sync("test-channel-secret")
+        .expect("configures the test Network Channel");
+    let mdns = Arc::new(MdnsAdvertiser::on(vec![0]));
+    let advertiser: Arc<dyn shaprint_desktop::application::ServerAdvertiser> = mdns.clone();
+    let service = Arc::new(ServerSharingService::new(
+        sharing,
+        Arc::clone(&endpoint),
+        advertiser,
+        support::allowed_inbound_setup(),
+        channel as Arc<dyn shaprint_desktop::application::ChannelState>,
+    ));
+    let runtime = RuntimeCoordinator::new(vec![service]);
+
+    runtime
+        .start(ServiceId::ServerSharing)
+        .await
+        .expect("starts sharing");
+    let tcp_address = endpoint.bound_address().expect("IPPS listener is recorded");
+    let udp_port = mdns.bound_port().expect("discovery listener is recorded");
+
+    runtime
+        .stop(ServiceId::ServerSharing)
+        .await
+        .expect("stops sharing");
+
+    assert!(endpoint.bound_address().is_none());
+    let tcp_rebound = TcpListener::bind(tcp_address).expect("stop released the IPPS port");
+    let udp_rebound =
+        std::net::UdpSocket::bind(("0.0.0.0", udp_port)).expect("stop released the discovery port");
+    drop((tcp_rebound, udp_rebound));
+    runtime.shutdown().await.expect("shutdown is idempotent");
 }

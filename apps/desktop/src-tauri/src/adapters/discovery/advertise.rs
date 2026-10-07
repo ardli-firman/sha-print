@@ -16,9 +16,12 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::adapters::discovery::{
-    send_to_all, wire, DISCOVERY_PORTS, MAX_DATAGRAM, MDNS_GROUP, NAME_PROPERTY, PATH_PROPERTY,
-    QUEUE_PROPERTY, READ_BACKOFF, RESOURCE_PATH, VERSION_PROPERTY,
+    active_ipv4_interfaces, send_multicast_on_interfaces, send_to_all, system_ipv4_interfaces,
+    system_multicast_interface_sender, wire, MulticastInterfaceSender, DISCOVERY_PORTS,
+    MAX_DATAGRAM, MDNS_GROUP, MDNS_MULTICAST_TTL, NAME_PROPERTY, PATH_PROPERTY, QUEUE_PROPERTY,
+    READ_BACKOFF, RESOURCE_PATH, VERSION_PROPERTY,
 };
+use crate::adapters::port_binding::PortBinder;
 use crate::application::{Advertisement, ServerAdvertiser};
 use crate::domain::{AppError, PrinterName};
 
@@ -93,6 +96,9 @@ fn properties(label: &str, printers: &[PrinterName]) -> Vec<(String, String)> {
 pub struct MdnsAdvertiser {
     ports: Vec<u16>,
     ttl: Duration,
+    binder: PortBinder,
+    interfaces: Option<Vec<Ipv4Addr>>,
+    multicast_sender: Arc<dyn MulticastInterfaceSender>,
     bound_port: Mutex<Option<u16>>,
 }
 
@@ -105,11 +111,7 @@ impl Default for MdnsAdvertiser {
 impl MdnsAdvertiser {
     /// Advertises on the local network, on the first discovery port this machine can take.
     pub fn new() -> Self {
-        Self {
-            ports: DISCOVERY_PORTS.to_vec(),
-            ttl: ADVERTISED_TTL,
-            bound_port: Mutex::new(None),
-        }
+        Self::on_with_binder(DISCOVERY_PORTS.to_vec(), PortBinder::system())
     }
 
     /// Advertises on one specific port.
@@ -117,9 +119,18 @@ impl MdnsAdvertiser {
     /// Used by tests, which cannot take the multicast port from a machine's own resolver, and by
     /// any later phase that pins discovery to one interface.
     pub fn on(ports: Vec<u16>) -> Self {
+        Self::on_with_binder(ports, PortBinder::system())
+    }
+
+    /// Uses selected ports and an injected binder for lifecycle tests.
+    pub fn on_with_binder(ports: Vec<u16>, binder: PortBinder) -> Self {
         Self {
             ports,
-            ..Self::new()
+            ttl: ADVERTISED_TTL,
+            binder,
+            interfaces: None,
+            multicast_sender: system_multicast_interface_sender(),
+            bound_port: Mutex::new(None),
         }
     }
 
@@ -127,6 +138,20 @@ impl MdnsAdvertiser {
     #[must_use]
     pub fn with_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
+        self
+    }
+
+    /// Overrides interface enumeration for a real multi-interface UDP test.
+    #[must_use]
+    pub fn with_interfaces(mut self, interfaces: Vec<Ipv4Addr>) -> Self {
+        self.interfaces = Some(active_ipv4_interfaces(interfaces));
+        self
+    }
+
+    /// Uses a multicast socket adapter for an observable UDP integration test.
+    #[must_use]
+    pub fn with_multicast_sender(mut self, sender: Arc<dyn MulticastInterfaceSender>) -> Self {
+        self.multicast_sender = sender;
         self
     }
 
@@ -139,26 +164,59 @@ impl MdnsAdvertiser {
     ///
     /// Membership of the multicast group is best effort: a machine without multicast can still
     /// answer a query sent straight to its port, and printer sharing must not depend on discovery.
-    async fn bind(&self) -> Result<Arc<UdpSocket>, AppError> {
+    async fn bind(&self) -> Result<(Arc<UdpSocket>, Arc<Vec<Ipv4Addr>>), AppError> {
+        let interfaces = self
+            .interfaces
+            .clone()
+            .unwrap_or_else(system_ipv4_interfaces);
         for port in &self.ports {
-            let socket = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, *port)).await {
+            let socket = match self
+                .binder
+                .bind_udp(SocketAddr::from((Ipv4Addr::UNSPECIFIED, *port)))
+                .await
+            {
                 Ok(socket) => socket,
                 Err(error) => {
                     log::debug!("cannot listen for discovery queries port={port} message={error}");
+                    if error.message().contains(" in use")
+                        || error
+                            .message()
+                            .contains("cannot inspect the process using UDP port")
+                        || error.message().contains("holding UDP port")
+                        || error.message().contains("did not release UDP port")
+                    {
+                        return Err(error);
+                    }
                     continue;
                 }
             };
-            // Without group membership a browser on another computer cannot reach this responder
-            // at all, because it sends its query to the group. This is worth a warning, while the
-            // advertisement still answers a query sent straight to its port.
-            if let Err(error) = socket.join_multicast_v4(MDNS_GROUP, Ipv4Addr::UNSPECIFIED) {
-                log::warn!("cannot join the discovery group, so other computers cannot find this server message={error}");
+            let mut membership_failures = 0;
+            for interface in &interfaces {
+                if let Err(error) = self
+                    .multicast_sender
+                    .join_group(&socket, MDNS_GROUP, *interface)
+                {
+                    membership_failures += 1;
+                    log::debug!(
+                        "cannot join the discovery group interface={interface} message={error}"
+                    );
+                }
+            }
+            if membership_failures > 0 {
+                let joined_interfaces = interfaces.len().saturating_sub(membership_failures);
+                log::warn!(
+                    "discovery multicast group joined on {joined_interfaces}/{} interfaces",
+                    interfaces.len()
+                );
             }
             if let Err(error) = socket.set_multicast_loop_v4(true) {
                 log::debug!("cannot enable discovery loopback message={error}");
             }
-            if let Err(error) = socket.set_multicast_ttl_v4(1) {
-                log::debug!("cannot set the discovery hop limit message={error}");
+            if let Err(error) = self
+                .multicast_sender
+                .set_hop_limit(&socket, MDNS_MULTICAST_TTL)
+            {
+                log::debug!("cannot set discovery multicast hop limit ttl={MDNS_MULTICAST_TTL} message={error}");
             }
             let bound = socket
                 .local_addr()
@@ -167,7 +225,7 @@ impl MdnsAdvertiser {
                 *current = Some(bound.port());
             }
             log::info!("discovery advertisement listening port={}", bound.port());
-            return Ok(Arc::new(socket));
+            return Ok((Arc::new(socket), Arc::new(interfaces)));
         }
         Err(AppError::internal(
             "no discovery port could be opened; another multicast DNS responder may be holding them",
@@ -182,7 +240,8 @@ impl ServerAdvertiser for MdnsAdvertiser {
         port: u16,
         printers: &[PrinterName],
     ) -> Result<Arc<dyn Advertisement>, AppError> {
-        let socket = self.bind().await?;
+        let (socket, interfaces) = self.bind().await?;
+        let multicast_lock = Arc::new(tokio::sync::Mutex::new(()));
         let label = server_label();
         let advertised = Arc::new(RwLock::new(Advertised {
             target: format!("{label}.local."),
@@ -196,6 +255,9 @@ impl ServerAdvertiser for MdnsAdvertiser {
         let responder = tokio::spawn(
             Responder {
                 socket: Arc::clone(&socket),
+                interfaces: Arc::clone(&interfaces),
+                multicast_sender: Arc::clone(&self.multicast_sender),
+                multicast_lock: Arc::clone(&multicast_lock),
                 advertised: Arc::clone(&advertised),
                 queriers: Arc::clone(&queriers),
                 bound: socket
@@ -212,6 +274,9 @@ impl ServerAdvertiser for MdnsAdvertiser {
             advertised,
             queriers,
             socket,
+            interfaces,
+            multicast_sender: Arc::clone(&self.multicast_sender),
+            multicast_lock,
             ttl: self.ttl,
             stop,
             responder: Mutex::new(Some(responder)),
@@ -235,6 +300,9 @@ struct MdnsAdvertisement {
     /// The browsers that asked recently, so a withdrawal reaches them directly.
     queriers: Arc<Mutex<Vec<SocketAddr>>>,
     socket: Arc<UdpSocket>,
+    interfaces: Arc<Vec<Ipv4Addr>>,
+    multicast_sender: Arc<dyn MulticastInterfaceSender>,
+    multicast_lock: Arc<tokio::sync::Mutex<()>>,
     ttl: Duration,
     stop: watch::Sender<bool>,
     responder: Mutex<Option<JoinHandle<()>>>,
@@ -250,11 +318,32 @@ impl MdnsAdvertisement {
                 .map_err(|_| AppError::internal("the advertisement lock is poisoned"))?;
             advertised.encode(ttl)?
         };
-        let mut destinations = vec![SocketAddr::from((MDNS_GROUP, self.bound_port()))];
-        if let Ok(queriers) = self.queriers.lock() {
-            destinations.extend(queriers.iter().copied());
+        let multicast_destination = SocketAddr::from((MDNS_GROUP, self.bound_port()));
+        let multicast_result = send_multicast_on_interfaces(
+            &self.socket,
+            &*self.multicast_sender,
+            &self.multicast_lock,
+            &self.interfaces,
+            &packet,
+            &[multicast_destination],
+            what,
+        )
+        .await;
+        let queriers = self
+            .queriers
+            .lock()
+            .map(|queriers| queriers.clone())
+            .unwrap_or_default();
+        let querier_result = send_to_all(&self.socket, &packet, &queriers, what).await;
+        let failures =
+            usize::from(multicast_result.is_err()) + usize::from(querier_result.is_err());
+        if failures == 0 {
+            Ok(())
+        } else {
+            Err(AppError::internal(format!(
+                "the discovery {what} had {failures} independent send failure(s)"
+            )))
         }
-        send_to_all(&self.socket, &packet, &destinations, what).await
     }
 
     fn bound_port(&self) -> u16 {
@@ -304,6 +393,9 @@ impl Advertisement for MdnsAdvertisement {
 /// Answers browse queries while one advertisement is live.
 struct Responder {
     socket: Arc<UdpSocket>,
+    interfaces: Arc<Vec<Ipv4Addr>>,
+    multicast_sender: Arc<dyn MulticastInterfaceSender>,
+    multicast_lock: Arc<tokio::sync::Mutex<()>>,
     advertised: Arc<RwLock<Advertised>>,
     queriers: Arc<Mutex<Vec<SocketAddr>>>,
     group: Ipv4Addr,
@@ -357,13 +449,25 @@ impl Responder {
         };
         // A browser asks for the answer on its own socket, because it is not listening on the
         // multicast port at all (RFC 6762 §5.4).
-        let destination = if asked.iter().any(|query| query.unicast_response) {
-            from
+        if asked.iter().any(|query| query.unicast_response) {
+            if let Err(error) = self.socket.send_to(&reply, from).await {
+                log::debug!("cannot answer a discovery query from={from} message={error}");
+            }
         } else {
-            SocketAddr::from((self.group, self.bound))
-        };
-        if let Err(error) = self.socket.send_to(&reply, destination).await {
-            log::debug!("cannot answer a discovery query message={error}");
+            let destination = SocketAddr::from((self.group, self.bound));
+            if let Err(error) = send_multicast_on_interfaces(
+                &self.socket,
+                &*self.multicast_sender,
+                &self.multicast_lock,
+                &self.interfaces,
+                &reply,
+                &[destination],
+                "answer",
+            )
+            .await
+            {
+                log::debug!("cannot multicast a discovery answer message={error}");
+            }
         }
     }
 

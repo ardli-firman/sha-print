@@ -14,6 +14,11 @@ const SUPPORTED_VERSIONS: [(u8, u8); 3] = [IPP_VERSION_2_0, IPP_VERSION_1_1, (1,
 /// Operation ids the sharing endpoint answers.
 pub const OPERATION_PRINT_JOB: u16 = 0x0002;
 pub const OPERATION_VALIDATE_JOB: u16 = 0x0004;
+pub const OPERATION_CREATE_JOB: u16 = 0x0005;
+pub const OPERATION_SEND_DOCUMENT: u16 = 0x0006;
+pub const OPERATION_CANCEL_JOB: u16 = 0x0008;
+pub const OPERATION_GET_JOB_ATTRIBUTES: u16 = 0x0009;
+pub const OPERATION_GET_JOBS: u16 = 0x000a;
 pub const OPERATION_GET_PRINTER_ATTRIBUTES: u16 = 0x000b;
 pub const OPERATION_GET_PRINTERS: u16 = 0x4002;
 /// `printer-state` for a queue that is idle and able to accept a job.
@@ -62,8 +67,12 @@ pub enum Status {
     BadRequest,
     /// `client-error-document-format-not-supported`.
     DocumentFormatNotSupported,
-    /// `client-error-not-found`: no such printer is shared.
+    /// `client-error-not-found`: no such printer or job is available.
     NotFound,
+    /// `client-error-not-possible`: the requested job state transition is not possible.
+    NotPossible,
+    /// `client-error-document-too-large`.
+    DocumentTooLarge,
     /// `server-error-not-accepting-jobs`.
     NotAcceptingJobs,
     /// `server-error-internal-error`.
@@ -82,6 +91,8 @@ impl Status {
             Status::AttributesOrValuesNotSupported => 0x040B,
             Status::BadRequest => 0x0400,
             Status::NotFound => 0x0406,
+            Status::NotPossible => 0x0408,
+            Status::DocumentTooLarge => 0x0409,
             Status::NotAcceptingJobs => 0x0508,
             Status::InternalError => 0x0500,
             Status::DocumentFormatNotSupported => 0x040A,
@@ -278,7 +289,7 @@ pub fn prepare_proxy_request(
         position += 1;
         if value_tag == 0x03 {
             if !replaced_printer {
-                return Err(ParseError::NotText);
+                write_text_attribute(&mut output, 0x45, "printer-uri", remote_printer_uri);
             }
             if let Some(channel) = network_channel.filter(|_| !replaced_channel) {
                 write_text_attribute(&mut output, 0x41, "network-channel", channel);
@@ -477,6 +488,19 @@ pub struct PrinterEntry {
     pub uri: String,
     /// Whether the server can accept an authorized job right now.
     pub accepting_jobs: bool,
+}
+
+/// RFC job attributes exposed by the server's short-lived IPP job registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobEntry {
+    pub id: i32,
+    pub uri: String,
+    pub printer_uri: String,
+    pub printer_name: String,
+    pub name: String,
+    pub document_count: i32,
+    /// RFC 8011 job-state enum: pending=3, processing=5, canceled=7, aborted=8, completed=9.
+    pub state: i32,
 }
 
 /// Deterministic RFC 4122 UUID for a shared printer queue.
@@ -682,11 +706,19 @@ pub fn response(
             &[
                 i32::from(OPERATION_PRINT_JOB),
                 i32::from(OPERATION_VALIDATE_JOB),
+                i32::from(OPERATION_CREATE_JOB),
+                i32::from(OPERATION_SEND_DOCUMENT),
+                i32::from(OPERATION_CANCEL_JOB),
+                i32::from(OPERATION_GET_JOB_ATTRIBUTES),
+                i32::from(OPERATION_GET_JOBS),
                 i32::from(OPERATION_GET_PRINTER_ATTRIBUTES),
                 i32::from(OPERATION_GET_PRINTERS),
             ][..]
         } else {
             &[
+                i32::from(OPERATION_CANCEL_JOB),
+                i32::from(OPERATION_GET_JOB_ATTRIBUTES),
+                i32::from(OPERATION_GET_JOBS),
                 i32::from(OPERATION_GET_PRINTER_ATTRIBUTES),
                 i32::from(OPERATION_GET_PRINTERS),
             ][..]
@@ -703,12 +735,90 @@ pub fn job_response(request_id: u32, version: (u8, u8), job_id: u32, job_uri: &s
     let mut out = response_start(request_id, version, Status::Ok, 160 + job_uri.len());
     out.push(tag::JOB_ATTRIBUTES);
     write_text(&mut out, tag::URI, "job-uri", job_uri);
-    out.push(tag::INTEGER);
-    write_name_and_value(&mut out, "job-id", &job_id.to_be_bytes());
+    write_integer(&mut out, "job-id", job_id as i32);
     write_integers(&mut out, tag::ENUM, "job-state", &[3]);
     write_text(&mut out, tag::KEYWORD, "job-state-reasons", "none");
     out.push(tag::END_OF_ATTRIBUTES);
     out
+}
+
+/// Builds a success response for Create-Job, Send-Document, or Cancel-Job.
+pub fn managed_job_response(request_id: u32, version: (u8, u8), job: &JobEntry) -> Vec<u8> {
+    let mut out = response_start(request_id, version, Status::Ok, 256);
+    write_job_attributes(&mut out, job, &[]);
+    out.push(tag::END_OF_ATTRIBUTES);
+    out
+}
+
+/// Builds a Get-Job-Attributes response honoring the requested-attributes list.
+pub fn job_attributes_response(
+    request_id: u32,
+    version: (u8, u8),
+    job: &JobEntry,
+    requested: &[&str],
+) -> Vec<u8> {
+    let mut out = response_start(request_id, version, Status::Ok, 256);
+    write_job_attributes(&mut out, job, requested);
+    out.push(tag::END_OF_ATTRIBUTES);
+    out
+}
+
+/// Builds a Get-Jobs response with one job-attributes group per matching job.
+pub fn jobs_response(
+    request_id: u32,
+    version: (u8, u8),
+    jobs: &[JobEntry],
+    requested: &[&str],
+) -> Vec<u8> {
+    let mut out = response_start(request_id, version, Status::Ok, 128 + jobs.len() * 256);
+    for job in jobs {
+        write_job_attributes(&mut out, job, requested);
+    }
+    out.push(tag::END_OF_ATTRIBUTES);
+    out
+}
+
+fn write_job_attributes(out: &mut Vec<u8>, job: &JobEntry, requested: &[&str]) {
+    out.push(tag::JOB_ATTRIBUTES);
+    if requested_attribute(requested, "job-uri") {
+        write_text(out, tag::URI, "job-uri", &job.uri);
+    }
+    if requested_attribute(requested, "job-id") {
+        write_integer(out, "job-id", job.id);
+    }
+    if requested_attribute(requested, "job-printer-uri") {
+        write_text(out, tag::URI, "job-printer-uri", &job.printer_uri);
+    }
+    if requested_attribute(requested, "job-name") {
+        write_text(out, tag::NAME, "job-name", &job.name);
+    }
+    if requested_attribute(requested, "job-state") {
+        write_integers(out, tag::ENUM, "job-state", &[job.state]);
+    }
+    if requested_attribute(requested, "job-state-reasons") {
+        let reason = match job.state {
+            7 => "job-canceled-by-user",
+            8 => "job-aborted-by-system",
+            9 => "job-completed-successfully",
+            _ => "none",
+        };
+        write_text(out, tag::KEYWORD, "job-state-reasons", reason);
+    }
+    if requested_attribute(requested, "number-of-documents") {
+        write_integer(out, "number-of-documents", job.document_count);
+    }
+}
+
+fn requested_attribute(requested: &[&str], name: &str) -> bool {
+    requested.is_empty()
+        || requested.iter().any(|attribute| {
+            attribute.eq_ignore_ascii_case("all") || attribute.eq_ignore_ascii_case(name)
+        })
+}
+
+fn write_integer(out: &mut Vec<u8>, name: &str, value: i32) {
+    out.push(tag::INTEGER);
+    write_name_and_value(out, name, &value.to_be_bytes());
 }
 
 fn write_resolution(out: &mut Vec<u8>, name: &str, xres: i32, yres: i32, units: u8) {
@@ -1160,6 +1270,13 @@ mod tests {
             vec![
                 i32::from(OPERATION_PRINT_JOB).to_be_bytes().to_vec(),
                 i32::from(OPERATION_VALIDATE_JOB).to_be_bytes().to_vec(),
+                i32::from(OPERATION_CREATE_JOB).to_be_bytes().to_vec(),
+                i32::from(OPERATION_SEND_DOCUMENT).to_be_bytes().to_vec(),
+                i32::from(OPERATION_CANCEL_JOB).to_be_bytes().to_vec(),
+                i32::from(OPERATION_GET_JOB_ATTRIBUTES)
+                    .to_be_bytes()
+                    .to_vec(),
+                i32::from(OPERATION_GET_JOBS).to_be_bytes().to_vec(),
                 i32::from(OPERATION_GET_PRINTER_ATTRIBUTES)
                     .to_be_bytes()
                     .to_vec(),

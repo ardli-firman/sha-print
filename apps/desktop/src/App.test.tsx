@@ -48,6 +48,9 @@ vi.mock("./api/serverConnections", () => ({
   inspectServerConnection: vi.fn(),
   approveServerConnection: vi.fn(),
   listServerConnectionPrinters: vi.fn(),
+  listTrustedServers: vi.fn(),
+  probeTrustedServer: vi.fn(),
+  forgetTrustedServer: vi.fn(),
   installPrinterQueue: vi.fn(),
   listRecognisedClientQueues: vi.fn(),
   openPrintersSettings: vi.fn(),
@@ -164,6 +167,8 @@ beforeEach(() => {
   vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith());
   vi.mocked(ipc.getServerIdentity).mockResolvedValue(IDENTITY);
   vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([]);
+  vi.mocked(serverConnections.listTrustedServers).mockResolvedValue([]);
+  vi.mocked(serverConnections.forgetTrustedServer).mockResolvedValue();
   vi.mocked(networkChannel.getNetworkChannelStatus).mockResolvedValue(false);
   vi.mocked(discovery.listNearbyServers).mockResolvedValue({ servers: [] });
   vi.mocked(discovery.onNearbyServers).mockResolvedValue(() => {});
@@ -491,6 +496,90 @@ describe("guided printer setup", () => {
     expect(screen.queryByLabelText("Server address")).toBeNull();
     expect(screen.queryByRole("heading", { name: "Add by address" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Inspect certificate" })).toBeNull();
+  });
+
+  it("keeps trusted servers visible with live status, refresh, printers, and forget actions", async () => {
+    const onlineAddress = "print-east.example:48631";
+    const offlineAddress = "print-west.example:48631";
+    const changedAddress = "print-old.example:48631";
+    const forgottenAddress = "print-retired.example:48631";
+    const changedFingerprint =
+      "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77";
+    vi.mocked(serverConnections.listTrustedServers).mockResolvedValue([
+      { address: onlineAddress, fingerprint: IDENTITY.fingerprint },
+      { address: offlineAddress, fingerprint: IDENTITY.fingerprint },
+      { address: changedAddress, fingerprint: IDENTITY.fingerprint },
+      { address: forgottenAddress, fingerprint: IDENTITY.fingerprint },
+    ]);
+    let offlineProbes = 0;
+    vi.mocked(serverConnections.probeTrustedServer).mockImplementation(async (address) => {
+      if (address === onlineAddress) {
+        return {
+          address,
+          status: "online",
+          approved_fingerprint: IDENTITY.fingerprint,
+          current_fingerprint: IDENTITY.fingerprint,
+          printers: ["Zebra"],
+        };
+      }
+      if (address === offlineAddress) {
+        offlineProbes += 1;
+        if (offlineProbes > 1) {
+          return {
+            address,
+            status: "online",
+            approved_fingerprint: IDENTITY.fingerprint,
+            current_fingerprint: IDENTITY.fingerprint,
+            printers: ["Receipt printer"],
+          };
+        }
+      }
+      if (address === changedAddress) {
+        return {
+          address,
+          status: "identity_changed",
+          approved_fingerprint: IDENTITY.fingerprint,
+          current_fingerprint: changedFingerprint,
+          printers: [],
+        };
+      }
+      return {
+        address,
+        status: "offline",
+        approved_fingerprint: IDENTITY.fingerprint,
+        current_fingerprint: null,
+        printers: [],
+      };
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText(onlineAddress)).toBeTruthy();
+    expect(screen.getByText(offlineAddress)).toBeTruthy();
+    expect(screen.getByText(changedAddress)).toBeTruthy();
+    expect(screen.getByText(forgottenAddress)).toBeTruthy();
+    expect(screen.getByText("Online")).toBeTruthy();
+    expect(screen.getAllByText("Offline").length).toBe(2);
+    expect(screen.getByText("Identity changed")).toBeTruthy();
+    expect(screen.getByText(/Shared printers: Zebra/)).toBeTruthy();
+    expect(screen.getByText(changedFingerprint)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: `Review shared printers for ${onlineAddress}` }),
+    ).toBeTruthy();
+    await waitFor(() => expect(serverConnections.probeTrustedServer).toHaveBeenCalledTimes(4));
+
+    fireEvent.click(screen.getByRole("button", { name: `Refresh status for ${offlineAddress}` }));
+    await waitFor(() => expect(serverConnections.probeTrustedServer).toHaveBeenCalledTimes(5));
+    expect(serverConnections.probeTrustedServer).toHaveBeenLastCalledWith(offlineAddress);
+    expect(await screen.findByText(/Shared printers: Receipt printer/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: `Forget ${forgottenAddress}` }));
+    await waitFor(() => {
+      expect(serverConnections.forgetTrustedServer).toHaveBeenCalledWith(forgottenAddress);
+      expect(screen.queryByText(forgottenAddress)).toBeNull();
+    });
+    expect(screen.getByText(offlineAddress)).toBeTruthy();
+    expect(screen.getByText(onlineAddress)).toBeTruthy();
   });
 
   it("labels advertised printer names as unverified before approval in nearby panel and guided dialog", async () => {

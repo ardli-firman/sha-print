@@ -277,6 +277,11 @@ pub fn run(background: bool) -> Result<(), AppError> {
     let stopping = AtomicBool::new(false);
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // A duplicate launch only wakes the existing UI; it never reaches setup or starts
+            // another copy of the supervised runtime services.
+            show_main_window(app);
+        }))
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
@@ -302,6 +307,9 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ipc::client_connections::inspect_server_connection,
             ipc::client_connections::approve_server_connection,
             ipc::client_connections::list_server_connection_printers,
+            ipc::client_connections::list_trusted_servers,
+            ipc::client_connections::probe_trusted_server,
+            ipc::client_connections::forget_trusted_server,
             ipc::client_connections::list_recognised_client_queues,
             ipc::commands::install_printer_queue,
             ipc::commands::open_printers_settings,

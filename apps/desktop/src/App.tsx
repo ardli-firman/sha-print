@@ -5,9 +5,11 @@ import { Button } from "@/components/ui/button";
 import {
   AddPrinterDialog,
   InstalledClientQueuesPanel,
+  TrustedServersPanel,
   useNearbyServers,
   useRecognisedClientQueues,
   useServerConnections,
+  useTrustedServers,
 } from "@/features/client-connection";
 import { NetworkChannelPanel, useNetworkChannel } from "@/features/network-channel";
 import { PrintFailuresPanel, usePrintFailures } from "@/features/print-failures";
@@ -62,6 +64,7 @@ function App() {
   const sharing = usePrinterSharing();
   const networkChannel = useNetworkChannel();
   const connections = useServerConnections();
+  const trustedServers = useTrustedServers();
   const clientQueues = useRecognisedClientQueues();
   const nearby = useNearbyServers();
   const updates = useUpdates();
@@ -172,14 +175,23 @@ function App() {
 
           <section className="page-stack" aria-label={pageContent.title}>
             {page === "my-printers" ? (
-              <InstalledClientQueuesPanel
-                clientQueues={clientQueues}
-                onAddPrinter={() => setAddPrinterOpen(true)}
-                onReverifyServer={(serverAddress) => {
-                  setAddPrinterOpen(true);
-                  void connections.reviewAddress(serverAddress);
-                }}
-              />
+              <>
+                <InstalledClientQueuesPanel
+                  clientQueues={clientQueues}
+                  onAddPrinter={() => setAddPrinterOpen(true)}
+                  onReverifyServer={(serverAddress) => {
+                    setAddPrinterOpen(true);
+                    void connections.reviewAddress(serverAddress);
+                  }}
+                />
+                <TrustedServersPanel
+                  trusted={trustedServers}
+                  onReviewServer={(serverAddress) => {
+                    setAddPrinterOpen(true);
+                    void connections.reviewAddress(serverAddress);
+                  }}
+                />
+              </>
             ) : null}
 
             {page === "share" ? (
@@ -228,6 +240,7 @@ function App() {
           setAddPrinterOpen(nextOpen);
           if (!nextOpen) {
             void clientQueues.refresh();
+            void trustedServers.reload();
           }
         }}
         nearby={nearby}

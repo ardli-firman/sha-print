@@ -152,11 +152,7 @@ impl ClientConnections {
             AppError::internal("Cannot create the app data directory for saved server approvals.")
         })?;
         let path = data_dir.as_ref().join(STORE_FILE);
-        let store = match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| AppError::internal("Saved server approvals could not be read. Restore or remove client-server-trust.json, then review each server again."))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => TrustData::default(),
-            Err(_) => return Err(AppError::internal("Saved server approvals could not be opened. Check app data directory permissions.")),
-        };
+        let store = read_trust_store(&path)?;
         Ok(Self {
             store_path: path,
             store: Mutex::new(store),
@@ -169,15 +165,61 @@ impl ClientConnections {
         ServerAddress::parse(input).map(|address| address.normalized)
     }
 
-    /// Contacts TLS only. No IPP request is sent by this operation.
-    pub async fn inspect(&self, input: &str) -> Result<ConnectionReview, AppError> {
-        let address = ServerAddress::parse(input)?;
-        let fingerprint = observe_fingerprint(&address).await?;
-        let store = self.store.lock().map_err(|_| {
+    /// Refreshes in-memory approvals from disk before a trust decision is made.
+    fn refresh_store(&self) -> Result<TrustData, AppError> {
+        let latest = read_trust_store(&self.store_path)?;
+        let mut store = self.store.lock().map_err(|_| {
             AppError::internal(
                 "Saved server approvals are unavailable; restart the app and try again.",
             )
         })?;
+        *store = latest.clone();
+        Ok(latest)
+    }
+
+    /// Lists every persisted server approval, refreshing the store from disk first.
+    pub async fn list_trusted_servers(&self) -> Result<Vec<TrustedServer>, AppError> {
+        let _approval = self.approval_lock.lock().await;
+        let store = self.refresh_store()?;
+        Ok(store
+            .servers
+            .into_iter()
+            .map(|(address, record)| TrustedServer {
+                address,
+                fingerprint: record.fingerprint,
+            })
+            .collect())
+    }
+
+    /// Removes a saved server approval. Repeating the operation is safe.
+    pub async fn forget_trusted_server(&self, input: &str) -> Result<(), AppError> {
+        let address = ServerAddress::parse(input)?;
+        let _approval = self.approval_lock.lock().await;
+        let mut updated = self.refresh_store()?;
+        if updated.servers.remove(&address.normalized).is_none() {
+            return Ok(());
+        }
+
+        let persist_path = self.store_path.clone();
+        let persist_store = updated.clone();
+        tokio::task::spawn_blocking(move || persist(&persist_path, &persist_store))
+            .await
+            .map_err(|_| AppError::internal("The server approval storage worker stopped."))??;
+        let mut store = self.store.lock().map_err(|_| {
+            AppError::internal(
+                "Saved server approvals are unavailable; restart the app and try again.",
+            )
+        })?;
+        *store = updated;
+        Ok(())
+    }
+
+    /// Contacts TLS only. No IPP request is sent by this operation.
+    pub async fn inspect(&self, input: &str) -> Result<ConnectionReview, AppError> {
+        let address = ServerAddress::parse(input)?;
+        let fingerprint = observe_fingerprint(&address).await?;
+        let _approval = self.approval_lock.lock().await;
+        let store = self.refresh_store()?;
         let approved = store
             .servers
             .get(&address.normalized)
@@ -199,21 +241,13 @@ impl ClientConnections {
             return Err(AppError::invalid_state("The server certificate changed since review. Inspect it again and approve only the fingerprint currently shown."));
         }
         let _approval = self.approval_lock.lock().await;
-        let updated = {
-            let store = self.store.lock().map_err(|_| {
-                AppError::internal(
-                    "Saved server approvals are unavailable; restart the app and try again.",
-                )
-            })?;
-            let mut updated = store.clone();
-            updated.servers.insert(
-                address.normalized.clone(),
-                TrustRecord {
-                    fingerprint: live.clone(),
-                },
-            );
-            updated
-        };
+        let mut updated = self.refresh_store()?;
+        updated.servers.insert(
+            address.normalized.clone(),
+            TrustRecord {
+                fingerprint: live.clone(),
+            },
+        );
         let persist_path = self.store_path.clone();
         let persist_store = updated.clone();
         tokio::task::spawn_blocking(move || persist(&persist_path, &persist_store))
@@ -235,7 +269,14 @@ impl ClientConnections {
 
     pub async fn printers(&self, input: &str) -> Result<ConnectionPrinters, AppError> {
         let address = ServerAddress::parse(input)?;
-        let pinned = self.store.lock().map_err(|_| AppError::internal("Saved server approvals are unavailable; restart the app and try again."))?.servers.get(&address.normalized).map(|r| r.fingerprint.clone()).ok_or_else(|| AppError::server_not_trusted("This server is not approved. Inspect its certificate fingerprint and explicitly approve it before listing shared printers."))?;
+        let _approval = self.approval_lock.lock().await;
+        let pinned = self
+            .refresh_store()?
+            .servers
+            .get(&address.normalized)
+            .map(|record| record.fingerprint.clone())
+            .ok_or_else(|| AppError::server_not_trusted("This server is not approved. Inspect its certificate fingerprint and explicitly approve it before listing shared printers."))?;
+        drop(_approval);
         let (stream, live) = connect(&address).await?;
         if live != pinned {
             return Err(AppError::server_identity_changed(format!("The server certificate changed. Previously approved: {pinned}. Currently presented: {live}. Shared printers are blocked; inspect the current fingerprint and explicitly reapprove it only if you trust the change.")));
@@ -245,6 +286,59 @@ impl ClientConnections {
             address: address.normalized,
             printers: names,
         })
+    }
+
+    /// Probes a saved server over unicast TLS, returning offline/identity-change states without
+    /// dropping the persisted approval. Printer names are queried only when the pinned identity
+    /// still matches.
+    pub async fn probe_trusted_server(&self, input: &str) -> Result<TrustedServerProbe, AppError> {
+        let address = ServerAddress::parse(input)?;
+        let _approval = self.approval_lock.lock().await;
+        let pinned = self
+            .refresh_store()?
+            .servers
+            .get(&address.normalized)
+            .map(|record| record.fingerprint.clone())
+            .ok_or_else(|| AppError::server_not_trusted("This server is not approved. Inspect its certificate fingerprint and explicitly approve it before probing its status."))?;
+        drop(_approval);
+
+        let (stream, current) = match connect(&address).await {
+            Ok(connection) => connection,
+            Err(_) => {
+                return Ok(TrustedServerProbe {
+                    address: address.normalized,
+                    status: TrustedServerStatus::Offline,
+                    approved_fingerprint: pinned,
+                    current_fingerprint: None,
+                    printers: Vec::new(),
+                });
+            }
+        };
+        if current != pinned {
+            return Ok(TrustedServerProbe {
+                address: address.normalized,
+                status: TrustedServerStatus::IdentityChanged,
+                approved_fingerprint: pinned,
+                current_fingerprint: Some(current),
+                printers: Vec::new(),
+            });
+        }
+        match query_printers(stream, &address).await {
+            Ok(printers) => Ok(TrustedServerProbe {
+                address: address.normalized,
+                status: TrustedServerStatus::Online,
+                approved_fingerprint: pinned,
+                current_fingerprint: Some(current),
+                printers,
+            }),
+            Err(_) => Ok(TrustedServerProbe {
+                address: address.normalized,
+                status: TrustedServerStatus::Offline,
+                approved_fingerprint: pinned,
+                current_fingerprint: Some(current),
+                printers: Vec::new(),
+            }),
+        }
     }
 
     /// Sends one IPP request to a previously approved server, preserving its pinned certificate
@@ -257,14 +351,14 @@ impl ClientConnections {
         network_channel: Option<&str>,
     ) -> Result<Vec<u8>, AppError> {
         let address = ServerAddress::parse(input)?;
+        let _approval = self.approval_lock.lock().await;
         let pinned = self
-            .store
-            .lock()
-            .map_err(|_| AppError::internal("Saved server approvals are unavailable; restart the app and try again."))?
+            .refresh_store()?
             .servers
             .get(&address.normalized)
             .map(|record| record.fingerprint.clone())
             .ok_or_else(|| AppError::server_not_trusted("This server is not approved. Inspect its certificate fingerprint and explicitly approve it before printing."))?;
+        drop(_approval);
         let (mut tls, live) = connect(&address).await?;
         if live != pinned {
             return Err(AppError::server_identity_changed("The server certificate changed. Printing is blocked until you inspect the current fingerprint and explicitly reapprove the server."));
@@ -279,9 +373,10 @@ impl ClientConnections {
             address.socket(),
             request.len()
         );
-        let response = timeout(Duration::from_secs(30), async {
+        let response = timeout(Duration::from_secs(120), async {
             tls.write_all(head.as_bytes()).await?;
             tls.write_all(&request).await?;
+            tls.flush().await?;
             let mut response = Vec::new();
             tls.take((MAX_RESPONSE + 8192) as u64)
                 .read_to_end(&mut response)
@@ -315,16 +410,51 @@ impl ClientConnections {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedServer {
+    pub address: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionReview {
     pub address: String,
     pub current_fingerprint: String,
     pub previous_fingerprint: Option<String>,
     pub trusted: bool,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustedServerStatus {
+    Online,
+    Offline,
+    IdentityChanged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedServerProbe {
+    pub address: String,
+    pub status: TrustedServerStatus,
+    pub approved_fingerprint: String,
+    pub current_fingerprint: Option<String>,
+    pub printers: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionPrinters {
     pub address: String,
     pub printers: Vec<String>,
+}
+
+fn read_trust_store(path: &Path) -> Result<TrustData, AppError> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {
+            AppError::internal("Saved server approvals could not be read. Restore or remove client-server-trust.json, then review each server again.")
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(TrustData::default()),
+        Err(_) => Err(AppError::internal(
+            "Saved server approvals could not be opened. Check app data directory permissions.",
+        )),
+    }
 }
 
 fn persist(path: &Path, store: &TrustData) -> Result<(), AppError> {
@@ -450,6 +580,7 @@ async fn query_printers(
     let response = timeout(Duration::from_secs(8), async {
         tls.write_all(request.as_bytes()).await?;
         tls.write_all(&ipp).await?;
+        tls.flush().await?;
         let mut response = Vec::new();
         tls.take((MAX_RESPONSE + 8192) as u64)
             .read_to_end(&mut response)

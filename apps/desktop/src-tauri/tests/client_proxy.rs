@@ -5,6 +5,7 @@ mod support;
 
 // `Command`, the two ports, and the tokio time helpers are only used by the Windows-only smoke
 // test below, so they are gated with it instead of warning on every other platform.
+use std::path::PathBuf;
 #[cfg(windows)]
 use std::process::Command;
 use std::sync::{
@@ -57,11 +58,26 @@ struct FakeSubmitter {
     render: AtomicBool,
     pages: Mutex<Vec<RasterPage>>,
     submitted: tokio::sync::Notify,
+    submission_gate: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
 }
 
 #[async_trait]
 impl PrintJobSubmitter for FakeSubmitter {
     async fn submit(&self, printer: &PrinterName, job: PrintJob) -> Result<u32, AppError> {
+        let gate = self
+            .submission_gate
+            .lock()
+            .expect("reads submission gate")
+            .take();
+        if let Some((entered, release)) = gate {
+            let _ = entered.send(());
+            let _ = release.await;
+        }
         if self.render.load(Ordering::Relaxed) {
             // Same decoder the real Windows adapter runs before invoking the installed driver.
             let pages = decode_pwg(job.document())?;
@@ -85,6 +101,8 @@ struct RunningPair {
     proxy: Arc<ClientProxyService>,
     failures: Arc<PrintFailures>,
     server_address: String,
+    trust_directory: PathBuf,
+    server_tracker: Arc<shaprint_desktop::application::PrintJobTracker>,
     submitter: Arc<FakeSubmitter>,
 }
 
@@ -119,7 +137,7 @@ impl RunningPair {
             server_channel,
             submitter.clone(),
             Arc::new(PrintFailures::new()),
-            server_tracker,
+            server_tracker.clone(),
         ));
         let server = Arc::new(RuntimeCoordinator::new(vec![Arc::new(
             support::sharing_service(sharing, endpoint.clone()),
@@ -130,10 +148,9 @@ impl RunningPair {
             .expect("starts server IPPS endpoint");
         let server_address = endpoint.bound_address().expect("server is listening");
 
-        let client_connections = Arc::new(
-            ClientConnections::new(temporary_directory("client-proxy-trust"))
-                .expect("opens client trust store"),
-        );
+        let trust_directory = temporary_directory("client-proxy-trust");
+        let client_connections =
+            Arc::new(ClientConnections::new(&trust_directory).expect("opens client trust store"));
         let review = client_connections
             .inspect(&format!("127.0.0.1:{}", server_address.port()))
             .await
@@ -175,6 +192,8 @@ impl RunningPair {
             proxy,
             failures,
             server_address: format!("127.0.0.1:{}", server_address.port()),
+            trust_directory,
+            server_tracker,
             submitter,
         }
     }
@@ -226,6 +245,33 @@ fn validate_job(printer_uri: &str) -> Vec<u8> {
     body
 }
 
+fn operation_request(operation: u16, request_id: u32, printer_uri: &str) -> Vec<u8> {
+    let mut body = vec![2, 0];
+    body.extend(operation.to_be_bytes());
+    body.extend(request_id.to_be_bytes());
+    body.push(1);
+    text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
+    text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
+    text_attribute(&mut body, 0x45, "printer-uri", printer_uri);
+    body
+}
+
+fn integer_attribute(body: &mut Vec<u8>, name: &str, value: i32) {
+    body.push(0x21);
+    body.extend((name.len() as u16).to_be_bytes());
+    body.extend(name.as_bytes());
+    body.extend(4u16.to_be_bytes());
+    body.extend(value.to_be_bytes());
+}
+
+fn boolean_attribute(body: &mut Vec<u8>, name: &str, value: bool) {
+    body.push(0x22);
+    body.extend((name.len() as u16).to_be_bytes());
+    body.extend(name.as_bytes());
+    body.extend(1u16.to_be_bytes());
+    body.push(u8::from(value));
+}
+
 fn text_attribute(body: &mut Vec<u8>, tag: u8, name: &str, value: &str) {
     body.push(tag);
     body.extend((name.len() as u16).to_be_bytes());
@@ -243,11 +289,20 @@ async fn submit_to_local_queue(
 }
 
 async fn submit_request_to_local_queue(address: &str, body: Vec<u8>) -> (u16, Vec<u8>) {
+    submit_request_with_headers(address, "/ipp/print", "application/ipp", body).await
+}
+
+async fn submit_request_with_headers(
+    address: &str,
+    path: &str,
+    content_type: &str,
+    body: Vec<u8>,
+) -> (u16, Vec<u8>) {
     let mut stream = TcpStream::connect(address)
         .await
         .expect("connects to local proxy");
     let request = format!(
-        "POST /ipp/print HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream
@@ -255,6 +310,10 @@ async fn submit_request_to_local_queue(address: &str, body: Vec<u8>) -> (u16, Ve
         .await
         .expect("writes local IPP request");
     stream.write_all(&body).await.expect("writes print job");
+    stream
+        .shutdown()
+        .await
+        .expect("half-closes the request after its declared body");
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
@@ -402,6 +461,387 @@ async fn print_job_from_a_native_queue_reaches_the_selected_server_printer() {
     }
     // A job that reached the queue is not a failure the user has to act on.
     assert_eq!(pair.failures.latest(), None);
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn http_localhost_uri_and_parameterized_ipp_content_type_print_successfully() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let uri = local_printer_uri(&proxy_address, &pair.server_address)
+        .replace("ipp://127.0.0.1", "http://localhost");
+
+    let (http_status, response) = submit_request_with_headers(
+        &proxy_address,
+        "/ipp/print",
+        "Application/IPP; charset=utf-8",
+        print_job(&uri, &document_bytes()),
+    )
+    .await;
+
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    assert_eq!(pair.submitter.jobs.lock().expect("reads jobs").len(), 1);
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn multi_megabyte_raster_payload_reaches_the_server_intact() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let uri = local_printer_uri(&proxy_address, &pair.server_address);
+    let document = vec![0x5a; 2 * 1024 * 1024];
+
+    let (http_status, response) = submit_to_local_queue(&proxy_address, &uri, &document).await;
+
+    assert_eq!(http_status, 200);
+    let proxy_failure = pair
+        .failures
+        .latest()
+        .map(|failure| format!("{}: {}", failure.message(), failure.recovery()))
+        .unwrap_or_else(|| "none".to_owned());
+    let submitted_jobs = pair
+        .submitter
+        .jobs
+        .lock()
+        .expect("reads submitted jobs")
+        .len();
+    assert_eq!(
+        ipp_status(&response),
+        0x0000,
+        "unexpected IPP response; submitted_jobs={submitted_jobs}; proxy_failure={proxy_failure}"
+    );
+    {
+        let jobs = pair.submitter.jobs.lock().expect("reads submitted jobs");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].1.document(), document);
+    }
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn request_path_routes_print_job_when_printer_uri_is_missing_or_rewritten() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let path = format!(
+        "/ipp/print/{}/{}",
+        protocol::percent_encode(&pair.server_address),
+        protocol::percent_encode(SERVER_QUEUE),
+    );
+    let mut request = vec![2, 0, 0, 2, 0, 0, 0, 47, 1];
+    text_attribute(&mut request, 0x47, "attributes-charset", "utf-8");
+    text_attribute(&mut request, 0x48, "attributes-natural-language", "en");
+    text_attribute(&mut request, 0x49, "document-format", "image/pwg-raster");
+    request.push(3);
+    request.extend(document_bytes());
+
+    let (http_status, response) =
+        submit_request_with_headers(&proxy_address, &path, "application/ipp", request).await;
+
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+
+    let rewritten_uri = "http://spooler-rewrote-authority.invalid/ipp/print/wrong/queue";
+    let (http_status, response) = submit_request_with_headers(
+        &proxy_address,
+        &path,
+        "application/ipp",
+        print_job(rewritten_uri, &document_bytes()),
+    )
+    .await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    assert_eq!(pair.submitter.jobs.lock().expect("reads jobs").len(), 2);
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn create_send_and_job_queries_complete_over_the_local_proxy() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let printer_uri = local_printer_uri(&proxy_address, &pair.server_address);
+
+    let mut create = operation_request(0x0005, 51, &printer_uri);
+    text_attribute(&mut create, 0x44, "media", "iso_a4_210x297mm");
+    integer_attribute(&mut create, "copies", 2);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+    let job_id = created.integer("job-id").expect("server assigned a job id");
+    assert!(job_id > 0);
+    assert!(created.value("job-uri").is_some());
+
+    let first_document = document_bytes();
+    let final_document = b"second PWG Raster document".to_vec();
+    let mut send_first = operation_request(0x0006, 52, &printer_uri);
+    integer_attribute(&mut send_first, "job-id", job_id);
+    text_attribute(&mut send_first, 0x49, "document-format", "image/pwg-raster");
+    boolean_attribute(&mut send_first, "last-document", false);
+    send_first.push(3);
+    send_first.extend(&first_document);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, send_first).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let pending =
+        protocol::Request::parse(&response).expect("valid pending Send-Document response");
+    assert_eq!(pending.integer("job-state"), Some(3));
+    assert!(pair.submitter.jobs.lock().expect("reads jobs").is_empty());
+
+    let mut send_final = operation_request(0x0006, 53, &printer_uri);
+    integer_attribute(&mut send_final, "job-id", job_id);
+    boolean_attribute(&mut send_final, "last-document", true);
+    send_final.push(3);
+    send_final.extend(&final_document);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, send_final).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let mut document = first_document;
+    document.extend(final_document);
+
+    let mut get_job = operation_request(0x0009, 54, &printer_uri);
+    integer_attribute(&mut get_job, "job-id", job_id);
+    text_attribute(&mut get_job, 0x44, "requested-attributes", "job-id");
+    text_attribute(&mut get_job, 0x44, "", "job-state");
+    get_job.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, get_job).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let attributes =
+        protocol::Request::parse(&response).expect("valid Get-Job-Attributes response");
+    assert_eq!(attributes.integer("job-id"), Some(job_id));
+    assert_eq!(attributes.integer("job-state"), Some(9));
+
+    let mut get_jobs = operation_request(0x000a, 55, &printer_uri);
+    text_attribute(&mut get_jobs, 0x44, "which-jobs", "completed");
+    get_jobs.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, get_jobs).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let jobs = protocol::Request::parse(&response).expect("valid Get-Jobs response");
+    assert_eq!(jobs.integer("job-id"), Some(job_id));
+    assert_eq!(jobs.integer("job-state"), Some(9));
+    assert_eq!(jobs.integer("number-of-documents"), Some(2));
+
+    let mut cancel = operation_request(0x0008, 56, &printer_uri);
+    integer_attribute(&mut cancel, "job-id", job_id);
+    cancel.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, cancel).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0408);
+    {
+        let submitted = pair.submitter.jobs.lock().expect("reads submitted jobs");
+        assert_eq!(submitted.len(), 1);
+        assert_eq!(submitted[0].1.document(), document);
+        assert_eq!(submitted[0].1.settings().copies, Some(2));
+    }
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn multi_step_send_document_counts_the_pending_job_once() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let printer_uri = local_printer_uri(&proxy_address, &pair.server_address);
+
+    let mut create = operation_request(0x0005, 57, &printer_uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+    let job_id = created.integer("job-id").expect("server assigned a job id");
+    assert_eq!(pair.server_tracker.active_count(), 1);
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    *pair
+        .submitter
+        .submission_gate
+        .lock()
+        .expect("sets submission gate") = Some((entered_tx, release_rx));
+
+    let mut send = operation_request(0x0006, 58, &printer_uri);
+    integer_attribute(&mut send, "job-id", job_id);
+    boolean_attribute(&mut send, "last-document", true);
+    send.push(3);
+    send.extend(document_bytes());
+    let send_task =
+        tokio::spawn(async move { submit_request_to_local_queue(&proxy_address, send).await });
+
+    entered_rx.await.expect("final document reached submitter");
+    assert_eq!(
+        pair.server_tracker.active_count(),
+        1,
+        "Send-Document must not count its existing Create-Job twice"
+    );
+    release_tx.send(()).expect("releases print submission");
+    let (http_status, response) = send_task.await.expect("Send-Document task completes");
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    assert_eq!(pair.server_tracker.active_count(), 0);
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn terminal_job_history_does_not_reject_new_job_at_capacity() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let printer_uri = local_printer_uri(&proxy_address, &pair.server_address);
+    let mut oldest_job_id = None;
+
+    for index in 0..256u32 {
+        let create_request_id = 1_000 + index * 2;
+        let mut create = operation_request(0x0005, create_request_id, &printer_uri);
+        create.push(3);
+        let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+        assert_eq!(http_status, 200, "Create-Job request {index}");
+        assert_eq!(ipp_status(&response), 0x0000, "Create-Job request {index}");
+        let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+        let job_id = created.integer("job-id").expect("server assigned a job id");
+        oldest_job_id.get_or_insert(job_id);
+
+        let mut cancel = operation_request(0x0008, create_request_id + 1, &printer_uri);
+        integer_attribute(&mut cancel, "job-id", job_id);
+        cancel.push(3);
+        let (http_status, response) = submit_request_to_local_queue(&proxy_address, cancel).await;
+        assert_eq!(http_status, 200, "Cancel-Job request {index}");
+        assert_eq!(ipp_status(&response), 0x0000, "Cancel-Job request {index}");
+    }
+
+    let mut create = operation_request(0x0005, 2_000, &printer_uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(
+        ipp_status(&response),
+        0x0000,
+        "terminal history must not block a new Create-Job"
+    );
+    let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+    let new_job_id = created.integer("job-id").expect("server assigned a job id");
+
+    let mut get_oldest = operation_request(0x0009, 2_001, &printer_uri);
+    integer_attribute(
+        &mut get_oldest,
+        "job-id",
+        oldest_job_id.expect("created at least one job"),
+    );
+    get_oldest.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, get_oldest).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(
+        ipp_status(&response),
+        0x0406,
+        "oldest terminal job is evicted"
+    );
+
+    let mut cancel = operation_request(0x0008, 2_002, &printer_uri);
+    integer_attribute(&mut cancel, "job-id", new_job_id);
+    cancel.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, cancel).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn canceling_a_pending_job_releases_its_restart_guard() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let printer_uri = local_printer_uri(&proxy_address, &pair.server_address);
+
+    let mut create = operation_request(0x0005, 61, &printer_uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+    let job_id = created.integer("job-id").expect("server assigned a job id");
+    assert_eq!(pair.server_tracker.active_count(), 1);
+
+    let mut cancel = operation_request(0x0008, 62, &printer_uri);
+    integer_attribute(&mut cancel, "job-id", job_id);
+    cancel.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, cancel).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let canceled = protocol::Request::parse(&response).expect("valid Cancel-Job response");
+    assert_eq!(canceled.integer("job-id"), Some(job_id));
+    assert_eq!(canceled.integer("job-state"), Some(7));
+    assert_eq!(pair.server_tracker.active_count(), 0);
+
+    let mut get_jobs = operation_request(0x000a, 63, &printer_uri);
+    text_attribute(&mut get_jobs, 0x44, "which-jobs", "canceled");
+    get_jobs.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, get_jobs).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let jobs = protocol::Request::parse(&response).expect("valid canceled Get-Jobs response");
+    assert_eq!(jobs.integer("job-id"), Some(job_id));
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn stopping_server_sharing_releases_pending_job_guard() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let printer_uri = local_printer_uri(&proxy_address, &pair.server_address);
+    let mut create = operation_request(0x0005, 66, &printer_uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    assert_eq!(pair.server_tracker.active_count(), 1);
+    let tracker = Arc::clone(&pair.server_tracker);
+
+    pair.stop().await;
+
+    assert_eq!(tracker.active_count(), 0);
+}
+
+#[tokio::test]
+async fn create_job_requires_authorization_and_a_shared_printer() {
+    let pair = RunningPair::start(false).await;
+    let proxy_address = pair.proxy_address();
+    let uri = local_printer_uri(&proxy_address, &pair.server_address);
+    let mut create = operation_request(0x0005, 71, &uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0403);
+    assert_eq!(pair.server_tracker.active_count(), 0);
+    pair.stop().await;
+
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let unshared_uri = client_queue_uri(&proxy_address, &pair.server_address, "NotShared")
+        .expect("builds an unshared local queue URI");
+    let mut create = operation_request(0x0005, 72, &unshared_uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0406);
+    assert_eq!(pair.server_tracker.active_count(), 0);
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn running_proxy_observes_trusted_server_removal_from_disk() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let uri = local_printer_uri(&proxy_address, &pair.server_address);
+    let trust_store = pair.trust_directory.join("client-server-trust.json");
+    std::fs::write(&trust_store, r#"{"servers":{}}"#)
+        .expect("replaces the persisted Trusted server approvals");
+
+    let (http_status, response) =
+        submit_to_local_queue(&proxy_address, &uri, &document_bytes()).await;
+
+    assert_eq!(http_status, 200);
+    assert_ne!(ipp_status(&response), 0x0000);
+    assert!(pair.submitter.jobs.lock().expect("reads jobs").is_empty());
     pair.stop().await;
 }
 

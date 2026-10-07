@@ -1,7 +1,9 @@
 //! Observable manual-IPPS trust seam: TLS certificate review, explicit pinning and Get-Printers.
 
 use rustls::ServerConfig;
-use shaprint_desktop::adapters::client_connections::{ClientConnections, ServerAddress};
+use shaprint_desktop::adapters::client_connections::{
+    ClientConnections, ServerAddress, TrustedServerStatus,
+};
 use shaprint_desktop::adapters::ServerIdentity;
 use std::{
     fs,
@@ -232,4 +234,141 @@ fn addresses_normalize_case_and_apply_default_port() {
     );
     assert!(ServerAddress::parse("https://printer.local").is_err());
     assert!(ServerAddress::parse("printer.local:0").is_err());
+}
+
+#[tokio::test]
+async fn trusted_server_directory_lists_persisted_entries_and_forget_removes_one() {
+    let path = temp_dir();
+    let first = TestServer::start().await;
+    let second = TestServer::start().await;
+    let first_address = endpoint(&first);
+    let second_address = endpoint(&second);
+    let client = ClientConnections::new(&path).unwrap_or_else(|error| panic!("store: {error}"));
+    let mut expected = Vec::new();
+
+    for address in [&first_address, &second_address] {
+        let review = client
+            .inspect(address)
+            .await
+            .unwrap_or_else(|error| panic!("inspect: {error}"));
+        client
+            .approve(address, &review.current_fingerprint)
+            .await
+            .unwrap_or_else(|error| panic!("approve: {error}"));
+        expected.push(
+            shaprint_desktop::adapters::client_connections::TrustedServer {
+                address: review.address,
+                fingerprint: review.current_fingerprint,
+            },
+        );
+    }
+    expected.sort_by(|left, right| left.address.cmp(&right.address));
+
+    assert_eq!(
+        client
+            .list_trusted_servers()
+            .await
+            .unwrap_or_else(|error| panic!("list trusted servers: {error}")),
+        expected
+    );
+    client
+        .forget_trusted_server(&first_address)
+        .await
+        .unwrap_or_else(|error| panic!("forget trusted server: {error}"));
+    let remaining = vec![expected
+        .iter()
+        .find(|server| server.address == second_address)
+        .expect("the second server remains")
+        .clone()];
+    assert_eq!(
+        client
+            .list_trusted_servers()
+            .await
+            .unwrap_or_else(|error| panic!("list after forget: {error}")),
+        remaining
+    );
+    drop(client);
+
+    let reopened =
+        ClientConnections::new(&path).unwrap_or_else(|error| panic!("reopen store: {error}"));
+    assert_eq!(
+        reopened
+            .list_trusted_servers()
+            .await
+            .unwrap_or_else(|error| panic!("list after reopen: {error}")),
+        remaining
+    );
+    let persisted = fs::read_to_string(path.join("client-server-trust.json"))
+        .unwrap_or_else(|error| panic!("read trust file: {error}"));
+    assert!(!persisted.contains(&first_address));
+    assert!(persisted.contains(&second_address));
+
+    drop(reopened);
+    let _ = fs::remove_dir_all(path);
+}
+
+#[tokio::test]
+async fn trusted_server_probe_reports_live_printers_offline_state_and_changed_identity() {
+    let path = temp_dir();
+    let server = TestServer::start().await;
+    let socket = server.address;
+    let address = endpoint(&server);
+    let client = ClientConnections::new(&path).unwrap_or_else(|error| panic!("store: {error}"));
+    let review = client
+        .inspect(&address)
+        .await
+        .unwrap_or_else(|error| panic!("inspect: {error}"));
+    client
+        .approve(&address, &review.current_fingerprint)
+        .await
+        .unwrap_or_else(|error| panic!("approve: {error}"));
+
+    let online = client
+        .probe_trusted_server(&address)
+        .await
+        .unwrap_or_else(|error| panic!("online probe: {error}"));
+    assert_eq!(online.status, TrustedServerStatus::Online);
+    assert_eq!(online.approved_fingerprint, review.current_fingerprint);
+    assert_eq!(
+        online.current_fingerprint.as_deref(),
+        Some(review.current_fingerprint.as_str())
+    );
+    assert_eq!(online.printers, vec!["Zebra"]);
+    assert_eq!(server.queries.load(Ordering::SeqCst), 1);
+
+    server.stop().await;
+    let offline = client
+        .probe_trusted_server(&address)
+        .await
+        .unwrap_or_else(|error| panic!("offline probe: {error}"));
+    assert_eq!(offline.status, TrustedServerStatus::Offline);
+    assert_eq!(offline.current_fingerprint, None);
+    assert!(offline.printers.is_empty());
+    assert_eq!(client.list_trusted_servers().await.unwrap().len(), 1);
+
+    let replacement = TestServer::start_on(Some(socket)).await;
+    let changed = client
+        .probe_trusted_server(&address)
+        .await
+        .unwrap_or_else(|error| panic!("changed identity probe: {error}"));
+    assert_eq!(changed.status, TrustedServerStatus::IdentityChanged);
+    assert_eq!(changed.approved_fingerprint, review.current_fingerprint);
+    assert_ne!(
+        changed.current_fingerprint.as_deref(),
+        Some(review.current_fingerprint.as_str())
+    );
+    assert!(changed.printers.is_empty());
+    assert_eq!(replacement.queries.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        client
+            .list_trusted_servers()
+            .await
+            .unwrap()
+            .first()
+            .map(|trusted| trusted.fingerprint.as_str()),
+        Some(review.current_fingerprint.as_str())
+    );
+
+    drop(client);
+    let _ = fs::remove_dir_all(path);
 }

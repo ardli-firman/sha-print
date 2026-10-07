@@ -9,31 +9,26 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::{TcpListener, TcpStream},
+    net::TcpStream,
     sync::Mutex,
     task::JoinSet,
     time::timeout,
 };
 
 use crate::{
-    adapters::{client_connections::ClientConnections, ipps::protocol, ipps::NetworkChannel},
+    adapters::{
+        client_connections::ClientConnections, ipps::protocol, ipps::NetworkChannel,
+        port_binding::PortBinder,
+    },
     application::{PrintFailures, PrintJobTracker, RuntimeService, ServiceContext},
     domain::{AppError, ErrorCode, PrintFailure, PrinterName, ServiceId},
 };
 
 /// Default loopback IPP port used by native client queues (ADR 0014).
 pub const CLIENT_PROXY_DEFAULT_PORT: u16 = 48632;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_HEAD_BYTES: usize = 8 * 1024;
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
-const ISSUE34_TRACE_ENV: &str = "SHAPRINT_ISSUE34_IPP_TRACE";
-
-fn trace_issue34(message: &str) {
-    if std::env::var_os(ISSUE34_TRACE_ENV).is_some() {
-        eprintln!("[DEBUG-34IPP] {message}");
-    }
-}
-
 /// Supervises the local client proxy.
 pub struct ClientProxyService {
     connections: Arc<ClientConnections>,
@@ -41,6 +36,7 @@ pub struct ClientProxyService {
     failures: Arc<PrintFailures>,
     tracker: Arc<PrintJobTracker>,
     port: u16,
+    binder: PortBinder,
     bound: Mutex<Option<SocketAddr>>,
 }
 
@@ -77,12 +73,32 @@ impl ClientProxyService {
         tracker: Arc<PrintJobTracker>,
         port: u16,
     ) -> Self {
+        Self::with_port_binder(
+            connections,
+            channel,
+            failures,
+            tracker,
+            port,
+            PortBinder::system(),
+        )
+    }
+
+    /// Builds the loopback endpoint with an injected port binder for lifecycle tests.
+    pub fn with_port_binder(
+        connections: Arc<ClientConnections>,
+        channel: Arc<NetworkChannel>,
+        failures: Arc<PrintFailures>,
+        tracker: Arc<PrintJobTracker>,
+        port: u16,
+        binder: PortBinder,
+    ) -> Self {
         Self {
             connections,
             channel,
             failures,
             tracker,
             port,
+            binder,
             bound: Mutex::new(None),
         }
     }
@@ -121,12 +137,10 @@ impl RuntimeService for ClientProxyService {
     }
 
     async fn run(&self, context: ServiceContext) -> Result<(), AppError> {
-        let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], self.port)))
-            .await
-            .map_err(|_| AppError::internal(format!(
-                "Could not start the local print proxy on port {}. Close the program using that port, then restart ShaPrint.",
-                self.port
-            )))?;
+        let listener = self
+            .binder
+            .bind_tcp(SocketAddr::from(([127, 0, 0, 1], self.port)))
+            .await?;
         let local = listener
             .local_addr()
             .map_err(|_| AppError::internal("Could not read the local print proxy address."))?;
@@ -139,8 +153,7 @@ impl RuntimeService for ClientProxyService {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 Some(_) = connections.join_next(), if !connections.is_empty() => {}
-                accepted = listener.accept() => if let Ok((stream, peer)) = accepted {
-                    trace_issue34(&format!("accepted-peer={peer}"));
+                accepted = listener.accept() => if let Ok((stream, _)) = accepted {
                     let client_connections = Arc::clone(&self.connections);
                     let channel = Arc::clone(&self.channel);
                     let failures = Arc::clone(&self.failures);
@@ -157,7 +170,6 @@ impl RuntimeService for ClientProxyService {
                         )
                         .await
                         {
-                            trace_issue34(&format!("request-error={}: {}", error.code_str(), error.message()));
                             log::warn!(
                                 "local proxy request failed code={}: {}",
                                 error.code_str(),
@@ -189,21 +201,12 @@ async fn serve_client(
         .map_err(|_| {
             AppError::timeout("The local printer did not finish its request in time.")
         })??;
-    trace_issue34(&format!(
-        "http-method={} target={}",
-        head.method,
-        if head.path.starts_with("/ipp/print") {
-            "ipp-print"
-        } else {
-            "other"
-        }
-    ));
     if head.method != "POST"
         || !head.path.starts_with("/ipp/print")
         || !head
             .content_type
             .as_deref()
-            .is_some_and(|value| value.eq_ignore_ascii_case("application/ipp"))
+            .is_some_and(is_ipp_content_type)
     {
         write_http(&mut write, "400 Bad Request", &[]).await?;
         return Ok(());
@@ -216,7 +219,6 @@ async fn serve_client(
         }
     };
     if head.expects_continue {
-        trace_issue34("sending 100-continue");
         write
             .write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
             .await
@@ -228,7 +230,6 @@ async fn serve_client(
         })?;
     }
     let body = if head.is_chunked {
-        trace_issue34("reading-chunked-body");
         timeout(REQUEST_TIMEOUT, read_chunked_body(&mut reader))
             .await
             .map_err(|_| {
@@ -239,7 +240,6 @@ async fn serve_client(
             write_http(&mut write, "413 Payload Too Large", &[]).await?;
             return Ok(());
         }
-        trace_issue34(&format!("reading-body length={length}"));
         let mut buf = vec![0; length];
         timeout(REQUEST_TIMEOUT, reader.read_exact(&mut buf))
             .await
@@ -265,11 +265,6 @@ async fn serve_client(
     let request_id = request.request_id();
     let operation = request.operation();
     let version = request.response_version();
-    trace_issue34(&format!(
-        "operation=0x{operation:04x} req_id={request_id} uri={:?} req_attrs={:?}",
-        request.value("printer-uri"),
-        request.text_values("requested-attributes")
-    ));
     if !request.version_is_supported() {
         let response = protocol::response(
             request_id,
@@ -284,6 +279,11 @@ async fn serve_client(
         operation,
         protocol::OPERATION_PRINT_JOB
             | protocol::OPERATION_VALIDATE_JOB
+            | protocol::OPERATION_CREATE_JOB
+            | protocol::OPERATION_SEND_DOCUMENT
+            | protocol::OPERATION_CANCEL_JOB
+            | protocol::OPERATION_GET_JOB_ATTRIBUTES
+            | protocol::OPERATION_GET_JOBS
             | protocol::OPERATION_GET_PRINTER_ATTRIBUTES
             | protocol::OPERATION_GET_PRINTERS
     ) {
@@ -296,21 +296,23 @@ async fn serve_client(
         write_http(&mut write, "200 OK", &response).await?;
         return Ok(());
     }
-    let Some(local_uri) = request.value("printer-uri") else {
-        trace_issue34("printer-uri=missing");
-        write_ipp_error(&mut write, protocol::Status::BadRequest).await?;
+    let route_from_uri = request.value("printer-uri").and_then(|local_uri| {
+        route_uri(local_uri, authority)
+            .ok()
+            .map(|(server, printer)| (server, printer, local_uri.to_owned()))
+    });
+    let route_from_path = route_from_request_path(&head.path, authority).ok();
+    let Some((server_address, printer_name, local_uri)) = route_from_uri.or(route_from_path) else {
+        write_ipp_error(&mut write, protocol::Status::NotFound).await?;
         return Ok(());
     };
-    let (server_address, printer_name) = match route_uri(local_uri, authority) {
-        Ok(route) => route,
-        Err(_) => {
-            trace_issue34("route=rejected");
-            write_ipp_error(&mut write, protocol::Status::NotFound).await?;
-            return Ok(());
-        }
-    };
-    trace_issue34("route=accepted");
-    let _job_lease = if operation == protocol::OPERATION_PRINT_JOB {
+    let _job_lease = if matches!(
+        operation,
+        protocol::OPERATION_PRINT_JOB
+            | protocol::OPERATION_CREATE_JOB
+            | protocol::OPERATION_SEND_DOCUMENT
+            | protocol::OPERATION_CANCEL_JOB
+    ) {
         if !request_lease.mark_print_job() {
             let response =
                 protocol::response(request_id, version, protocol::Status::NotAcceptingJobs, &[]);
@@ -326,9 +328,16 @@ async fn serve_client(
         "ipps://{server_address}/ipp/print/{}",
         protocol::percent_encode(printer_name.as_str())
     );
-    let credential = if operation == protocol::OPERATION_PRINT_JOB
-        || operation == protocol::OPERATION_VALIDATE_JOB
-    {
+    let credential = if matches!(
+        operation,
+        protocol::OPERATION_PRINT_JOB
+            | protocol::OPERATION_VALIDATE_JOB
+            | protocol::OPERATION_CREATE_JOB
+            | protocol::OPERATION_SEND_DOCUMENT
+            | protocol::OPERATION_CANCEL_JOB
+            | protocol::OPERATION_GET_JOB_ATTRIBUTES
+            | protocol::OPERATION_GET_JOBS
+    ) {
         match channel.client_credential() {
             Some(secret) => Some(secret),
             None => {
@@ -353,13 +362,9 @@ async fn serve_client(
             let status = match response.get(2..4) {
                 Some(bytes) => {
                     let status = u16::from_be_bytes([bytes[0], bytes[1]]);
-                    trace_issue34(&format!("response-status=0x{status:04x}"));
                     Some(status)
                 }
-                None => {
-                    trace_issue34("response=truncated");
-                    None
-                }
+                None => None,
             };
             if operation == protocol::OPERATION_PRINT_JOB {
                 // A query the driver makes while probing is not a print failure; a rejected job is.
@@ -372,7 +377,7 @@ async fn serve_client(
                 }
             }
             let response = if operation == protocol::OPERATION_GET_PRINTER_ATTRIBUTES {
-                match protocol::rewrite_printer_uri_supported(&response, &remote_uri, local_uri) {
+                match protocol::rewrite_printer_uri_supported(&response, &remote_uri, &local_uri) {
                     Ok(response) => response,
                     Err(_) => protocol::response(
                         request_id,
@@ -387,7 +392,6 @@ async fn serve_client(
             write_http(&mut write, "200 OK", &response).await
         }
         Err(error) => {
-            trace_issue34(&format!("forward-error={}", error.code_str()));
             if operation == protocol::OPERATION_PRINT_JOB {
                 failures.report(PrintFailure::client(error.code(), Some(&printer_name)));
             }
@@ -596,12 +600,76 @@ async fn read_head<R: tokio::io::AsyncBufRead + Unpin>(
     })
 }
 
-/// Splits a local queue URI into the server it targets and the validated queue name.
+/// Accepts the IPP media type while ignoring optional HTTP parameters.
+fn is_ipp_content_type(value: &str) -> bool {
+    value
+        .split(';')
+        .next()
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/ipp"))
+}
+
+/// Splits a loopback queue URI into the server it targets and the validated queue name.
 fn route_uri(uri: &str, proxy_authority: &str) -> Result<(String, PrinterName), AppError> {
-    let prefix = format!("ipp://{proxy_authority}/ipp/print/");
-    let route = uri.strip_prefix(&prefix).ok_or_else(|| {
+    let (scheme, remainder) = uri.split_once("://").ok_or_else(|| {
         AppError::invalid_input("The printer queue does not point to this local proxy.")
     })?;
+    if !scheme.eq_ignore_ascii_case("ipp") && !scheme.eq_ignore_ascii_case("http") {
+        return Err(AppError::invalid_input(
+            "The printer queue does not point to this local proxy.",
+        ));
+    }
+    let (authority, path) = remainder.split_once('/').ok_or_else(|| {
+        AppError::invalid_input("The local printer queue has an invalid destination.")
+    })?;
+    let (host, uri_port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (
+            host,
+            Some(port.parse::<u16>().map_err(|_| {
+                AppError::invalid_input("The local printer queue has an invalid destination.")
+            })?),
+        ),
+        None => (authority, None),
+    };
+    if !host.eq_ignore_ascii_case("localhost") && host != "127.0.0.1" {
+        return Err(AppError::invalid_input(
+            "The printer queue does not point to this local proxy.",
+        ));
+    }
+    let proxy_port = proxy_authority
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok());
+    if uri_port.is_some_and(|port| Some(port) != proxy_port) {
+        return Err(AppError::invalid_input(
+            "The printer queue does not point to this local proxy.",
+        ));
+    }
+
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let route = path.strip_prefix("ipp/print/").ok_or_else(|| {
+        AppError::invalid_input("The local printer queue has an invalid destination.")
+    })?;
+    parse_route(route)
+}
+
+/// Uses the HTTP request path when the spooler omitted or rewrote `printer-uri`.
+fn route_from_request_path(
+    path: &str,
+    proxy_authority: &str,
+) -> Result<(String, PrinterName, String), AppError> {
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let route = path.strip_prefix("/ipp/print/").ok_or_else(|| {
+        AppError::invalid_input("The HTTP request path has no printer destination.")
+    })?;
+    let (server_address, printer_name) = parse_route(route)?;
+    let local_uri = format!(
+        "ipp://{proxy_authority}/ipp/print/{}/{}",
+        protocol::percent_encode(&server_address),
+        protocol::percent_encode(printer_name.as_str()),
+    );
+    Ok((server_address, printer_name, local_uri))
+}
+
+fn parse_route(route: &str) -> Result<(String, PrinterName), AppError> {
     let mut segments = route.split('/');
     let server = segments.next().unwrap_or_default();
     let printer = segments.next().unwrap_or_default();
