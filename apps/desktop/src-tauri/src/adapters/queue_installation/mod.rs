@@ -92,6 +92,11 @@ mod tests {
     }
 
     #[test]
+    fn proxy_authority_defaults_to_port_48632() {
+        assert_eq!(proxy_authority(), "127.0.0.1:48632");
+    }
+
+    #[test]
     fn an_installed_queue_points_at_the_local_proxy() {
         assert_eq!(
             queue_uri(&proxy_authority(), &request()).expect("builds a queue URI"),

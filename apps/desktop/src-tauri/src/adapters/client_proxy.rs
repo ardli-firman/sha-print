@@ -21,8 +21,8 @@ use crate::{
     domain::{AppError, ErrorCode, PrintFailure, PrinterName, ServiceId},
 };
 
-/// Default loopback IPP port used by native client queues.
-pub const CLIENT_PROXY_DEFAULT_PORT: u16 = 8632;
+/// Default loopback IPP port used by native client queues (ADR 0014).
+pub const CLIENT_PROXY_DEFAULT_PORT: u16 = 48632;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HEAD_BYTES: usize = 8 * 1024;
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -769,5 +769,10 @@ mod tests {
             ipp_status_for(ErrorCode::InvalidState),
             protocol::Status::NotAuthorized
         );
+    }
+
+    #[test]
+    fn client_proxy_defaults_to_port_48632() {
+        assert_eq!(CLIENT_PROXY_DEFAULT_PORT, 48632);
     }
 }

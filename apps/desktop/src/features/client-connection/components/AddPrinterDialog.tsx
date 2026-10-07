@@ -295,7 +295,7 @@ export function AddPrinterDialog({
             <form onSubmit={(e) => void handleManualSubmit(e)} className="flex gap-2">
               <Input
                 id="wizard-server-address"
-                placeholder="printer.local or 192.168.1.50:8631"
+                placeholder="printer.local or 192.168.1.50:48631"
                 value={manualAddress}
                 onChange={(e) => setManualAddress(e.target.value)}
                 autoComplete="off"

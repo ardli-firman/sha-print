@@ -33,9 +33,9 @@ use support::{get_printer_attributes, temporary_directory, FakeCatalog};
 
 const SERVER_QUEUE: &str = "Office Printer";
 #[cfg(windows)]
-const NATIVE_SMOKE_SERVER_PORT: u16 = 8631;
+const NATIVE_SMOKE_SERVER_PORT: u16 = 48631;
 #[cfg(windows)]
-const NATIVE_SMOKE_PROXY_PORT: u16 = 8632;
+const NATIVE_SMOKE_PROXY_PORT: u16 = 48632;
 
 fn channel_secret() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);

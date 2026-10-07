@@ -208,58 +208,68 @@ impl SpoolerRecord {
     pub fn classify(&self, proxy_authority: &str) -> SpoolerRecordClassification {
         let name_trimmed = self.name.trim();
         let port_trimmed = self.port.trim();
-
-        let ipp_prefix = format!("ipp://{proxy_authority}/ipp/print/");
-        let http_prefix = format!("http://{proxy_authority}/ipp/print/");
-
         let port_lower = port_trimmed.to_ascii_lowercase();
-        let ipp_lower = ipp_prefix.to_ascii_lowercase();
-        let http_lower = http_prefix.to_ascii_lowercase();
 
-        if port_lower.starts_with(&ipp_lower) || port_lower.starts_with(&http_lower) {
-            let prefix_len = if port_lower.starts_with(&ipp_lower) {
-                ipp_prefix.len()
-            } else {
-                http_prefix.len()
-            };
-            let remainder = &port_trimmed[prefix_len..];
-            let segments: Vec<&str> = remainder.split('/').collect();
-            if segments.len() != 2 || segments[0].is_empty() || segments[1].is_empty() {
-                return SpoolerRecordClassification::AmbiguousClientQueue;
+        let scheme_rest = if port_lower.starts_with("ipp://") {
+            Some(&port_trimmed[6..])
+        } else if port_lower.starts_with("http://") {
+            Some(&port_trimmed[7..])
+        } else {
+            None
+        };
+
+        if let Some(rest) = scheme_rest {
+            if let Some((authority, path)) = rest.split_once('/') {
+                let path_with_slash = format!("/{path}");
+                let path_lower = path_with_slash.to_ascii_lowercase();
+                if is_loopback_authority(authority, proxy_authority)
+                    && path_lower.starts_with("/ipp/print/")
+                {
+                    let remainder = &path_with_slash["/ipp/print/".len()..];
+                    let segments: Vec<&str> = remainder.split('/').collect();
+                    if segments.len() != 2 || segments[0].is_empty() || segments[1].is_empty() {
+                        return SpoolerRecordClassification::AmbiguousClientQueue;
+                    }
+
+                    let server_decoded = percent_decode(segments[0]);
+                    if validate_address(&server_decoded).is_err() {
+                        return SpoolerRecordClassification::AmbiguousClientQueue;
+                    }
+
+                    let printer_decoded = percent_decode(segments[1]);
+                    let Ok(printer_name) = PrinterName::parse(&printer_decoded) else {
+                        return SpoolerRecordClassification::AmbiguousClientQueue;
+                    };
+
+                    let Ok(expected_queue_name) =
+                        ClientQueueName::for_shared_printer(&printer_name, &server_decoded)
+                    else {
+                        return SpoolerRecordClassification::AmbiguousClientQueue;
+                    };
+
+                    if expected_queue_name.as_str() == name_trimmed {
+                        return SpoolerRecordClassification::RecognisedClientQueue(
+                            RecognisedClientQueue {
+                                queue_name: expected_queue_name,
+                                server_address: server_decoded,
+                                printer_name,
+                            },
+                        );
+                    } else {
+                        return SpoolerRecordClassification::AmbiguousClientQueue;
+                    }
+                }
             }
+        }
 
-            let server_decoded = percent_decode(segments[0]);
-            if validate_address(&server_decoded).is_err() {
-                return SpoolerRecordClassification::AmbiguousClientQueue;
-            }
+        let is_loopback = scheme_rest.is_some_and(|rest| {
+            let authority = rest.split_once('/').map(|(a, _)| a).unwrap_or(rest);
+            is_loopback_authority(authority, proxy_authority)
+        });
 
-            let printer_decoded = percent_decode(segments[1]);
-            let Ok(printer_name) = PrinterName::parse(&printer_decoded) else {
-                return SpoolerRecordClassification::AmbiguousClientQueue;
-            };
-
-            let Ok(expected_queue_name) =
-                ClientQueueName::for_shared_printer(&printer_name, &server_decoded)
-            else {
-                return SpoolerRecordClassification::AmbiguousClientQueue;
-            };
-
-            if expected_queue_name.as_str() == name_trimmed {
-                SpoolerRecordClassification::RecognisedClientQueue(RecognisedClientQueue {
-                    queue_name: expected_queue_name,
-                    server_address: server_decoded,
-                    printer_name,
-                })
-            } else {
-                // Port points to proxy endpoint, but name does not match derived identity
-                SpoolerRecordClassification::AmbiguousClientQueue
-            }
-        } else if port_lower.contains(&proxy_authority.to_ascii_lowercase())
+        if port_lower.contains(&proxy_authority.to_ascii_lowercase())
             || port_lower.contains("/ipp/print/")
-            || port_lower.starts_with("ipp://127.0.0.1")
-            || port_lower.starts_with("http://127.0.0.1")
-            || port_lower.starts_with("ipp://localhost")
-            || port_lower.starts_with("http://localhost")
+            || is_loopback
         {
             // Mentions loopback proxy or IPP print endpoint, but failed valid client queue criteria
             SpoolerRecordClassification::AmbiguousClientQueue
@@ -271,6 +281,41 @@ impl SpoolerRecord {
             }
         }
     }
+}
+
+fn is_loopback_authority(authority: &str, proxy_authority: &str) -> bool {
+    if authority.eq_ignore_ascii_case(proxy_authority) {
+        return true;
+    }
+    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        if let Some((ipv6, after)) = rest.split_once(']') {
+            let port = if after.is_empty() {
+                ""
+            } else if let Some(p) = after.strip_prefix(':') {
+                p
+            } else {
+                return false;
+            };
+            (ipv6, port)
+        } else {
+            return false;
+        }
+    } else if let Some((h, p)) = authority.split_once(':') {
+        (h, p)
+    } else {
+        (authority, "")
+    };
+
+    let is_host_loopback = host.eq_ignore_ascii_case("127.0.0.1")
+        || host.eq_ignore_ascii_case("localhost")
+        || host == "::1";
+    if !is_host_loopback {
+        return false;
+    }
+    if port.is_empty() {
+        return true;
+    }
+    port.parse::<u16>().is_ok()
 }
 
 fn percent_decode(value: &str) -> String {
@@ -539,6 +584,72 @@ mod tests {
             }
             other => panic!("expected RecognisedClientQueue, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn spooler_record_classifies_existing_queue_on_older_or_different_loopback_proxy_port_as_recognised(
+    ) {
+        let current_authority = "127.0.0.1:48632";
+        // An existing queue installed earlier when proxy listened on legacy 8632
+        let legacy_queue = SpoolerRecord::new(
+            "Office Printer (ShaPrint 10.0.0.5-8631)",
+            "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Printer",
+        );
+        match legacy_queue.classify(current_authority) {
+            SpoolerRecordClassification::RecognisedClientQueue(q) => {
+                assert_eq!(
+                    q.queue_name().as_str(),
+                    "Office Printer (ShaPrint 10.0.0.5-8631)"
+                );
+                assert_eq!(q.server_address(), "10.0.0.5:8631");
+                assert_eq!(q.printer_name().as_str(), "Office Printer");
+            }
+            other => panic!("expected RecognisedClientQueue, got {other:?}"),
+        }
+
+        // An existing queue with localhost authority
+        let localhost_queue = SpoolerRecord::new(
+            "Office Printer (ShaPrint 10.0.0.5-8631)",
+            "http://localhost:8632/ipp/print/10.0.0.5%3A8631/Office%20Printer",
+        );
+        match localhost_queue.classify(current_authority) {
+            SpoolerRecordClassification::RecognisedClientQueue(q) => {
+                assert_eq!(
+                    q.queue_name().as_str(),
+                    "Office Printer (ShaPrint 10.0.0.5-8631)"
+                );
+                assert_eq!(q.server_address(), "10.0.0.5:8631");
+                assert_eq!(q.printer_name().as_str(), "Office Printer");
+            }
+            other => panic!("expected RecognisedClientQueue, got {other:?}"),
+        }
+
+        // An existing queue with IPv6 loopback authority [::1]:48632
+        let ipv6_queue = SpoolerRecord::new(
+            "Office Printer (ShaPrint 10.0.0.5-8631)",
+            "ipp://[::1]:48632/ipp/print/10.0.0.5%3A8631/Office%20Printer",
+        );
+        match ipv6_queue.classify(current_authority) {
+            SpoolerRecordClassification::RecognisedClientQueue(q) => {
+                assert_eq!(
+                    q.queue_name().as_str(),
+                    "Office Printer (ShaPrint 10.0.0.5-8631)"
+                );
+                assert_eq!(q.server_address(), "10.0.0.5:8631");
+                assert_eq!(q.printer_name().as_str(), "Office Printer");
+            }
+            other => panic!("expected RecognisedClientQueue, got {other:?}"),
+        }
+
+        // A malformed IPv6 authority without colon separator is not treated as loopback
+        let malformed_ipv6 = SpoolerRecord::new(
+            "Office Printer (ShaPrint 10.0.0.5-8631)",
+            "ipp://[::1]48632/ipp/print/10.0.0.5%3A8631/Office%20Printer",
+        );
+        assert_eq!(
+            malformed_ipv6.classify(current_authority),
+            SpoolerRecordClassification::AmbiguousClientQueue
+        );
     }
 
     #[test]

@@ -533,8 +533,8 @@ async fn windows_installs_a_native_queue_that_prints_through_the_proxy() {
     let _trace_environment = TraceEnvironment;
     std::env::set_var("SHAPRINT_ISSUE34_IPP_TRACE", "1");
 
-    const NATIVE_SERVER_PORT: u16 = 8631;
-    const NATIVE_PROXY_PORT: u16 = 8632;
+    const NATIVE_SERVER_PORT: u16 = 48631;
+    const NATIVE_PROXY_PORT: u16 = 48632;
     let client = RunningClient::start_on_ports(true, NATIVE_SERVER_PORT, NATIVE_PROXY_PORT).await;
     let request = ClientQueueRequest::new(
         &format!("127.0.0.1:{NATIVE_SERVER_PORT}"),

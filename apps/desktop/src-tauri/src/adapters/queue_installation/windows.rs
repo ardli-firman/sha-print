@@ -35,11 +35,12 @@ pub const FAILURE_MARKER: &str = "SHAPRINT-FAIL";
 /// Longest slice of PowerShell's own diagnostics the helper keeps.
 const MAX_DETAIL: usize = 400;
 
-/// The script that creates the queue, or reports that the name is already taken.
+/// The script that creates the queue, updates an older ShaPrint client queue, or reports a conflict.
 ///
-/// It never removes a queue: the name is derived from the printer and the server address, so a queue
-/// that already uses it is either the queue being installed — in which case re-running the install
-/// must leave it alone — or something unrelated the user owns, which only the user should remove.
+/// When an existing queue's port points to an older ShaPrint loopback proxy URL (including legacy port
+/// 8632 or legacy server port 8631), it automatically updates/replaces the queue with the new loopback
+/// proxy port and target server address (ADR 0014). When an existing queue points to an unrelated
+/// non-ShaPrint destination, it leaves the queue untouched and reports an existing-queue conflict.
 pub const SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
 if (-not (Get-Command -Name Add-Printer -ErrorAction SilentlyContinue)) {
     Write-Output 'SHAPRINT-FAIL unsupported'
@@ -61,6 +62,11 @@ try {
     if ($existing) {
         $port = "$($existing.PortName)"
         if ($port -eq $url -or $port -eq $url.Replace('ipp://', 'http://')) {
+            exit 0
+        }
+        if ($port -match '^(?i)(ipp|http)://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/ipp/print/') {
+            Remove-Printer -Name $name -ErrorAction Stop
+            Add-Printer -Name $name -IppURL $url -ErrorAction Stop
             exit 0
         }
         Write-Output 'SHAPRINT-FAIL existing-queue-conflict'
@@ -224,32 +230,29 @@ mod tests {
     }
 
     #[test]
-    fn the_script_never_removes_a_queue() {
-        // Re-installing must not destroy a working queue, and a name collision belongs to the user
-        // to resolve: the script reports it instead of taking the queue away.
-        assert!(
-            !SCRIPT.contains("Remove-Printer"),
-            "the installer removes a queue"
-        );
-
-        let existing_check = SCRIPT
+    fn the_script_updates_older_shaprint_loopback_queue_and_rejects_unrelated_queue() {
+        // Re-installing an existing queue pointing to an older ShaPrint loopback proxy port
+        // replaces/updates the queue (ADR 0014), while unrelated non-ShaPrint queues report a conflict.
+        let identical_check = SCRIPT
             .find("$port -eq $url")
-            .expect("compares the existing destination");
-        let add = SCRIPT
-            .find("Add-Printer -Name $name -IppURL")
-            .expect("creates the queue");
-        assert!(
-            existing_check < add,
-            "the script adds the queue before checking the name"
-        );
-        assert!(
-            SCRIPT[existing_check..add].contains("exit 0"),
-            "an equivalent queue is not reported as already installed"
-        );
-        assert!(
-            SCRIPT[existing_check..add].contains("existing-queue-conflict"),
-            "a collision is not reported as a conflict"
-        );
+            .expect("compares the existing destination for exact match");
+        let loopback_match = SCRIPT
+            .find("if ($port -match '^(?i)(ipp|http)://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:\\d+)?/ipp/print/')")
+            .expect("identifies ShaPrint loopback proxy destinations");
+        let remove = SCRIPT
+            .find("Remove-Printer -Name $name")
+            .expect("removes older ShaPrint loopback queue");
+        let re_add = SCRIPT
+            .find("Add-Printer -Name $name -IppURL $url")
+            .expect("re-creates updated queue");
+        let conflict = SCRIPT
+            .find("existing-queue-conflict")
+            .expect("reports conflict for unrelated queues");
+
+        assert!(identical_check < loopback_match);
+        assert!(loopback_match < remove);
+        assert!(remove < re_add);
+        assert!(re_add < conflict);
     }
 
     #[test]
