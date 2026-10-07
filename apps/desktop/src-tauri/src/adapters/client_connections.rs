@@ -27,11 +27,13 @@ use tokio_rustls::{
 };
 
 use crate::{
-    adapters::ipps::protocol::{self, OPERATION_GET_PRINTERS},
+    adapters::ipps::{
+        protocol::{self, OPERATION_GET_PRINTERS},
+        DEFAULT_PORT,
+    },
     domain::AppError,
 };
 
-const DEFAULT_PORT: u16 = 8631;
 const STORE_FILE: &str = "client-server-trust.json";
 const REQUEST_ID: u32 = 1;
 const MAX_RESPONSE: usize = 1024 * 1024;
@@ -53,7 +55,7 @@ impl ServerAddress {
             || value.contains('#')
             || value.contains(char::is_whitespace)
         {
-            return Err(AppError::invalid_input("Enter a server host or host:port (for example printer.local or printer.local:8631); do not include a URL or credentials."));
+            return Err(AppError::invalid_input("Enter a server host or host:port (for example printer.local or printer.local:48631); do not include a URL or credentials."));
         }
         let (host, port) = if value.starts_with('[') {
             let end = value.find(']').ok_or_else(invalid_address)?;
@@ -79,7 +81,7 @@ impl ServerAddress {
             let maybe_port = parts.next();
             if parts.next().is_some() {
                 return Err(AppError::invalid_input(
-                    "For IPv6 addresses, use brackets, for example [2001:db8::1]:8631.",
+                    "For IPv6 addresses, use brackets, for example [2001:db8::1]:48631.",
                 ));
             }
             if host.is_empty()

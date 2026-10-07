@@ -74,7 +74,7 @@ export function ServerConnectionsPanel({
             id="server-address"
             value={address}
             onChange={(event) => setAddress(event.currentTarget.value)}
-            placeholder="printer.local or 192.168.1.20:8631"
+            placeholder="printer.local or 192.168.1.20:48631"
             autoComplete="off"
             disabled={busy !== null}
             className="flex-1"

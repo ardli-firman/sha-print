@@ -249,6 +249,50 @@ fn start_helper(request: &HelperRequest) -> Result<(), SetupFailure> {
     ))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) struct InboundRule {
+    pub name: String,
+    pub protocol: &'static str,
+    pub port: u16,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn inbound_rules() -> Vec<InboundRule> {
+    let mut rules = vec![InboundRule {
+        name: format!("ShaPrint ({})", crate::adapters::ipps::DEFAULT_PORT),
+        protocol: "TCP",
+        port: crate::adapters::ipps::DEFAULT_PORT,
+    }];
+    rules.extend(
+        crate::adapters::discovery::DISCOVERY_PORTS
+            .iter()
+            .map(|port| InboundRule {
+                name: format!("ShaPrint discovery ({port})"),
+                protocol: "UDP",
+                port: *port,
+            }),
+    );
+    rules
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn netsh_add_rule_args(rule: &InboundRule) -> Vec<String> {
+    vec![
+        "advfirewall".to_owned(),
+        "firewall".to_owned(),
+        "add".to_owned(),
+        "rule".to_owned(),
+        format!("name={}", rule.name),
+        "dir=in".to_owned(),
+        "action=allow".to_owned(),
+        format!("protocol={}", rule.protocol),
+        format!("localport={}", rule.port),
+        "profile=any".to_owned(),
+        "remoteip=any".to_owned(),
+    ]
+}
+
 #[cfg(windows)]
 fn start_helper(request: &HelperRequest) -> Result<(), SetupFailure> {
     windows::start_helper(request)
@@ -273,9 +317,7 @@ mod windows {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-    use super::{helper_parameters, HelperRequest};
-    use crate::adapters::discovery::DISCOVERY_PORTS;
-    use crate::adapters::ipps::DEFAULT_PORT;
+    use super::{helper_parameters, inbound_rules, netsh_add_rule_args, HelperRequest};
     use crate::domain::{SetupAction, SetupFailure, SetupFailureKind};
 
     /// Windows error raised when the user declines the UAC prompt.
@@ -409,26 +451,6 @@ mod windows {
                 format!("{} does not need administrator permission", action.as_str()),
             )),
         }
-    }
-
-    struct InboundRule {
-        name: String,
-        protocol: &'static str,
-        port: u16,
-    }
-
-    fn inbound_rules() -> Vec<InboundRule> {
-        let mut rules = vec![InboundRule {
-            name: format!("ShaPrint ({DEFAULT_PORT})"),
-            protocol: "TCP",
-            port: DEFAULT_PORT,
-        }];
-        rules.extend(DISCOVERY_PORTS.iter().map(|port| InboundRule {
-            name: format!("ShaPrint discovery ({port})"),
-            protocol: "UDP",
-            port: *port,
-        }));
-        rules
     }
 
     /// Reads effective firewall policy, including rules installed by an administrator under a
@@ -597,26 +619,17 @@ try {{
     /// refuses to create a duplicate name.
     fn allow_inbound_sharing() -> Result<(), SetupFailure> {
         let rules = inbound_rules();
+        remove_rule("ShaPrint (8631)");
+        remove_rule("ShaPrint discovery (5353)");
+        remove_rule("ShaPrint discovery (5354)");
         for rule in &rules {
             remove_rule(&rule.name);
         }
 
         for rule in &rules {
-            run(
-                "netsh",
-                &[
-                    "advfirewall",
-                    "firewall",
-                    "add",
-                    "rule",
-                    &format!("name={}", rule.name),
-                    "dir=in",
-                    "action=allow",
-                    &format!("protocol={}", rule.protocol),
-                    &format!("localport={}", rule.port),
-                    "profile=any",
-                ],
-            )?;
+            let args = netsh_add_rule_args(rule);
+            let arg_slices: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            run("netsh", &arg_slices)?;
         }
         Ok(())
     }
@@ -936,5 +949,26 @@ mod tests {
     fn a_rejected_request_reports_the_stable_error_code() {
         let failure = SetupFailure::new(SetupFailureKind::InvalidRequest, "refused");
         assert_eq!(failure.kind().error_code(), ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn inbound_firewall_rules_cover_dedicated_ports_and_unrestricted_remote_address() {
+        let rules = inbound_rules();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].protocol, "TCP");
+        assert_eq!(rules[0].port, 48631);
+        assert_eq!(rules[0].name, "ShaPrint (48631)");
+
+        assert_eq!(rules[1].protocol, "UDP");
+        assert_eq!(rules[1].port, 48633);
+        assert_eq!(rules[1].name, "ShaPrint discovery (48633)");
+
+        for rule in &rules {
+            let args = netsh_add_rule_args(rule);
+            assert!(args.contains(&"remoteip=any".to_owned()));
+            assert!(args.contains(&"profile=any".to_owned()));
+            assert!(args.contains(&"dir=in".to_owned()));
+            assert!(args.contains(&"action=allow".to_owned()));
+        }
     }
 }

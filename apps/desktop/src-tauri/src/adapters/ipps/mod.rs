@@ -28,11 +28,8 @@ use crate::application::{
 };
 use crate::domain::{AppError, CertificateFingerprint};
 
-/// Port the sharing endpoint listens on.
-///
-/// Deliberately not 631: that port belongs to the Windows IPP service when the Internet Printing
-/// feature is installed, and the MVP endpoint must not compete for it (ADR 0003).
-pub const DEFAULT_PORT: u16 = 8631;
+/// Port the sharing endpoint listens on (ADR 0014).
+pub const DEFAULT_PORT: u16 = 48631;
 
 /// How long a client has for the TLS handshake before the connection is dropped.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);

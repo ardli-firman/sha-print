@@ -24,12 +24,11 @@ use crate::domain::AppError;
 /// The multicast group every multicast DNS responder listens on (RFC 6762 §3).
 pub const MDNS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 
-/// Ports a ShaPrint responder listens on, in the order it tries them.
-///
-/// 5353 is the registered multicast DNS port; 5354 is the fallback for the common case where the
-/// operating system already runs a multicast DNS responder of its own and holds 5353. A browser
-/// asks on every port in this list, because it cannot know which one a server managed to take.
-pub const DISCOVERY_PORTS: [u16; 2] = [5353, 5354];
+/// Dedicated multicast DNS discovery port (ADR 0014).
+pub const DISCOVERY_PORT: u16 = 48633;
+
+/// Ports a ShaPrint responder listens on, in the order it tries them (ADR 0014).
+pub const DISCOVERY_PORTS: [u16; 1] = [DISCOVERY_PORT];
 
 /// Largest datagram discovery reads or writes.
 pub const MAX_DATAGRAM: usize = 1500;
@@ -69,5 +68,15 @@ async fn send_to_all(
     match failure {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_port_is_dedicated_48633() {
+        assert_eq!(DISCOVERY_PORTS, [48633]);
     }
 }

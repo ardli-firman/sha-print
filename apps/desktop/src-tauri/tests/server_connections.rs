@@ -222,7 +222,7 @@ fn addresses_normalize_case_and_apply_default_port() {
         ServerAddress::parse("PrintServer.local")
             .ok()
             .map(|a| a.normalized),
-        Some("printserver.local:8631".to_owned())
+        Some("printserver.local:48631".to_owned())
     );
     assert_eq!(
         ServerAddress::parse("192.0.2.4:9100")

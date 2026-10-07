@@ -98,7 +98,7 @@ const nearbyWith = (...names: string[]): NearbyServers => ({
 
 const IDENTITY: ServerIdentity = {
   fingerprint: "5F:3A:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD",
-  port: 8631,
+  port: 48631,
 };
 
 const printersWith = (...shared: string[]): LocalPrinters => ({
@@ -1062,7 +1062,7 @@ describe("shared printers panel", () => {
 
     const fingerprint = await screen.findByTestId("server-fingerprint");
     expect(fingerprint.textContent).toBe(IDENTITY.fingerprint);
-    expect(screen.getByText("Port 8631")).toBeTruthy();
+    expect(screen.getByText("Port 48631")).toBeTruthy();
     expect(screen.getByText(/Clients verify this fingerprint/)).toBeTruthy();
   });
 
