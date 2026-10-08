@@ -349,9 +349,7 @@ mod windows {
             if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
                 return false;
             }
-            let mut elevation = TOKEN_ELEVATION {
-                TokenIsElevated: 0,
-            };
+            let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
             let mut size = size_of::<TOKEN_ELEVATION>() as u32;
             let success = GetTokenInformation(
                 token,
@@ -1011,4 +1009,3 @@ mod tests {
         let _ = windows::is_elevated();
     }
 }
-

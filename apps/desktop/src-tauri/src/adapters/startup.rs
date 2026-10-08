@@ -224,7 +224,9 @@ mod task_scheduler {
         let _ = std::fs::remove_file(&temp_xml);
 
         let status = status.map_err(|error| {
-            AppError::internal(format!("cannot execute schtasks.exe to create task: {error}"))
+            AppError::internal(format!(
+                "cannot execute schtasks.exe to create task: {error}"
+            ))
         })?;
 
         if !status.success() {
@@ -519,7 +521,10 @@ mod tests {
 
     #[test]
     fn task_xml_contains_highest_available_and_logon_trigger() {
-        let xml = generate_task_xml("C:\\Program Files\\ShaPrint\\shaprint-desktop.exe", BACKGROUND_ARG);
+        let xml = generate_task_xml(
+            "C:\\Program Files\\ShaPrint\\shaprint-desktop.exe",
+            BACKGROUND_ARG,
+        );
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(xml.contains("<LogonTrigger>"));
         assert!(xml.contains("<GroupId>S-1-5-32-545</GroupId>"));
