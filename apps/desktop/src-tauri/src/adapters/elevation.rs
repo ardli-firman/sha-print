@@ -337,8 +337,39 @@ mod windows {
         Unreported,
     }
 
+    /// Returns whether the current process is running with elevated (administrator) privileges.
+    pub(super) fn is_elevated() -> bool {
+        use windows_sys::Win32::Security::{
+            GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+        };
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        unsafe {
+            let mut token: HANDLE = std::ptr::null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return false;
+            }
+            let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+            let mut size = size_of::<TOKEN_ELEVATION>() as u32;
+            let success = GetTokenInformation(
+                token,
+                TokenElevation,
+                &mut elevation as *mut _ as *mut _,
+                size,
+                &mut size,
+            );
+            CloseHandle(token);
+            success != 0 && elevation.TokenIsElevated != 0
+        }
+    }
+
     /// Re-runs this executable elevated and waits for the helper to finish.
     pub(super) fn start_helper(request: &HelperRequest) -> Result<(), SetupFailure> {
+        if is_elevated() {
+            log::info!("current process is already elevated; performing action directly");
+            return super::run_elevated(request.clone());
+        }
+
         let executable = std::env::current_exe().map_err(|error| {
             SetupFailure::new(
                 SetupFailureKind::Other,
@@ -970,5 +1001,11 @@ mod tests {
             assert!(args.contains(&"dir=in".to_owned()));
             assert!(args.contains(&"action=allow".to_owned()));
         }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn is_elevated_runs_without_panicking() {
+        let _ = windows::is_elevated();
     }
 }
