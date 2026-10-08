@@ -58,17 +58,86 @@ fn decode_registry_string(bytes: &[u8]) -> String {
     String::from_utf16_lossy(&units)
 }
 
-/// Reads and writes the per-user login registration.
+/// Name of the elevated task registered in Windows Task Scheduler.
+#[cfg(windows)]
+pub const TASK_NAME: &str = "ShaPrint_Startup";
+
+/// Generates the XML definition for a Scheduled Task running with HighestAvailable privileges.
+#[cfg(any(windows, test))]
+pub fn generate_task_xml(exe_path: &str, argument: &str) -> String {
+    let escaped_exe = escape_xml(exe_path);
+    let escaped_arg = escape_xml(argument);
+    let exe_dir = std::path::Path::new(exe_path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let escaped_dir = escape_xml(&exe_dir);
+
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <GroupId>S-1-5-32-545</GroupId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>&quot;{escaped_exe}&quot;</Command>
+      <Arguments>{escaped_arg}</Arguments>
+      <WorkingDirectory>{escaped_dir}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>"#
+    )
+}
+
+#[cfg(any(windows, test))]
+fn escape_xml(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// Reads and writes the per-user login registration using Windows Task Scheduler (HighestAvailable)
+/// with backward-compatible fallback to the Run key.
 #[cfg(windows)]
 pub struct WindowsStartup {
     command: String,
+    executable_path: String,
 }
 
 #[cfg(windows)]
 impl WindowsStartup {
     pub fn new() -> Self {
+        let executable_path = match std::env::current_exe() {
+            Ok(exe) => exe.to_string_lossy().to_string(),
+            Err(_) => String::new(),
+        };
         Self {
             command: login_command(),
+            executable_path,
         }
     }
 }
@@ -83,24 +152,106 @@ impl Default for WindowsStartup {
 #[cfg(windows)]
 impl StartupRegistration for WindowsStartup {
     fn registered_command(&self) -> Result<Option<String>, AppError> {
+        if task_scheduler::is_task_enabled(TASK_NAME)? {
+            return Ok(Some(self.command.clone()));
+        }
+
         read_run_value(RUN_VALUE)
     }
 
     fn set_enabled(&self, enabled: bool) -> Result<(), AppError> {
+        let _ = delete_run_value(RUN_VALUE);
+
         if enabled {
-            if self.command.is_empty() {
+            if self.executable_path.is_empty() {
                 return Err(AppError::unsupported(
                     "Cannot locate the ShaPrint program to start it at login.",
                 ));
             }
-            write_run_value(RUN_VALUE, &self.command)
+            task_scheduler::create_task(TASK_NAME, &self.executable_path, BACKGROUND_ARG)?;
         } else {
-            delete_run_value(RUN_VALUE)
+            task_scheduler::delete_task(TASK_NAME)?;
         }
+        Ok(())
     }
 
     fn command(&self) -> String {
         self.command.clone()
+    }
+}
+
+#[cfg(windows)]
+mod task_scheduler {
+    use super::AppError;
+    use std::os::windows::process::CommandExt;
+    use std::path::Path;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    pub(super) fn is_task_enabled(task_name: &str) -> Result<bool, AppError> {
+        let output = std::process::Command::new("schtasks.exe")
+            .args(["/query", "/tn", task_name])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|error| {
+                AppError::internal(format!("cannot query Windows Task Scheduler: {error}"))
+            })?;
+
+        Ok(output.status.success())
+    }
+
+    pub(super) fn create_task(task_name: &str, exe_path: &str, arg: &str) -> Result<(), AppError> {
+        let xml = super::generate_task_xml(exe_path, arg);
+        let temp_dir = std::env::temp_dir();
+        let temp_xml = temp_dir.join(format!("{task_name}.xml"));
+
+        write_utf16le_file(&temp_xml, &xml).map_err(|error| {
+            AppError::internal(format!("cannot write Task Scheduler XML: {error}"))
+        })?;
+
+        let status = std::process::Command::new("schtasks.exe")
+            .args([
+                "/create",
+                "/tn",
+                task_name,
+                "/xml",
+                &temp_xml.to_string_lossy(),
+                "/f",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+
+        let _ = std::fs::remove_file(&temp_xml);
+
+        let status = status.map_err(|error| {
+            AppError::internal(format!("cannot execute schtasks.exe to create task: {error}"))
+        })?;
+
+        if !status.success() {
+            return Err(AppError::internal(format!(
+                "schtasks.exe failed to create task (exit code {:?})",
+                status.code()
+            )));
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn delete_task(task_name: &str) -> Result<(), AppError> {
+        let _ = std::process::Command::new("schtasks.exe")
+            .args(["/delete", "/tn", task_name, "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+
+        Ok(())
+    }
+
+    fn write_utf16le_file(path: &Path, content: &str) -> std::io::Result<()> {
+        let mut bytes = vec![0xFF, 0xFE]; // UTF-16 LE BOM
+        for unit in content.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        std::fs::write(path, bytes)
     }
 }
 
@@ -191,6 +342,7 @@ mod registry {
     }
 
     /// Writes one string value into the per-user `Run` key, creating the key when needed.
+    #[allow(dead_code)]
     pub(super) fn write_run_value(name: &str, value: &str) -> Result<(), AppError> {
         let Some(key) = open_run_key(KEY_SET_VALUE, true)? else {
             return Err(AppError::internal(
@@ -289,7 +441,7 @@ mod registry {
 }
 
 #[cfg(windows)]
-use registry::{delete_run_value, read_run_value, write_run_value};
+use registry::{delete_run_value, read_run_value};
 
 #[cfg(test)]
 mod tests {
@@ -363,5 +515,16 @@ mod tests {
 
         assert_eq!(decode_registry_string(&bytes), "ab");
         assert_eq!(decode_registry_string(&[]), "");
+    }
+
+    #[test]
+    fn task_xml_contains_highest_available_and_logon_trigger() {
+        let xml = generate_task_xml("C:\\Program Files\\ShaPrint\\shaprint-desktop.exe", BACKGROUND_ARG);
+        assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
+        assert!(xml.contains("<LogonTrigger>"));
+        assert!(xml.contains("<GroupId>S-1-5-32-545</GroupId>"));
+        assert!(xml.contains("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>"));
+        assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        assert!(xml.contains(&format!("<Arguments>{BACKGROUND_ARG}</Arguments>")));
     }
 }
