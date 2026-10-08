@@ -101,7 +101,7 @@ pub fn generate_task_xml(exe_path: &str, argument: &str) -> String {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>&quot;{escaped_exe}&quot;</Command>
+      <Command>{escaped_exe}</Command>
       <Arguments>{escaped_arg}</Arguments>
       <WorkingDirectory>{escaped_dir}</WorkingDirectory>
     </Exec>
@@ -209,7 +209,7 @@ mod task_scheduler {
             AppError::internal(format!("cannot write Task Scheduler XML: {error}"))
         })?;
 
-        let status = std::process::Command::new("schtasks.exe")
+        let output = std::process::Command::new("schtasks.exe")
             .args([
                 "/create",
                 "/tn",
@@ -219,20 +219,22 @@ mod task_scheduler {
                 "/f",
             ])
             .creation_flags(CREATE_NO_WINDOW)
-            .status();
+            .output();
 
         let _ = std::fs::remove_file(&temp_xml);
 
-        let status = status.map_err(|error| {
+        let output = output.map_err(|error| {
             AppError::internal(format!(
                 "cannot execute schtasks.exe to create task: {error}"
             ))
         })?;
 
-        if !status.success() {
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(AppError::internal(format!(
-                "schtasks.exe failed to create task (exit code {:?})",
-                status.code()
+                "schtasks.exe failed to create task (exit code {:?}): {}",
+                output.status.code(),
+                stderr.trim()
             )));
         }
 
@@ -531,5 +533,9 @@ mod tests {
         assert!(xml.contains("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>"));
         assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
         assert!(xml.contains(&format!("<Arguments>{BACKGROUND_ARG}</Arguments>")));
+        assert!(
+            xml.contains("<Command>C:\\Program Files\\ShaPrint\\shaprint-desktop.exe</Command>")
+        );
+        assert!(!xml.contains("&quot;"));
     }
 }
