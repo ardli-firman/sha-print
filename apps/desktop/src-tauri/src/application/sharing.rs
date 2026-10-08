@@ -183,6 +183,10 @@ impl Sharing {
     /// the selection is empty and autostart will be false.
     pub async fn restore(&self) -> Result<(), AppError> {
         let queues = self.catalog.local_printers().await?;
+        if queues.is_empty() {
+            log::info!("local printer catalog reported no queues during restore; preserving saved selection");
+            return Ok(());
+        }
         let mut updated_selection = Vec::new();
         let mut changed = false;
         {
@@ -674,6 +678,29 @@ mod tests {
         sharing.restore().await.expect("restore succeeds");
 
         // The client queue was filtered out; only the real local printer was restored
+        assert_eq!(sharing.shared_printers(), vec![name("Brother HL-L2350DW")]);
+        assert!(sharing.is_autostart_enabled());
+
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn restore_preserves_selection_and_enabled_when_catalog_returns_empty() {
+        let path = temporary_directory("restore-empty-catalog");
+        let saved_json = r#"{
+            "enabled": true,
+            "printers": [
+                "Brother HL-L2350DW"
+            ]
+        }"#;
+        std::fs::write(path.join("sharing_state.json"), saved_json).expect("writes state");
+
+        let catalog = FakeCatalog::new(&[]);
+        let sharing = Sharing::with_persistence(catalog, Some(&path));
+
+        sharing.restore().await.expect("restore succeeds");
+
+        // The selection and enabled state must be preserved even if spooler reported no queues
         assert_eq!(sharing.shared_printers(), vec![name("Brother HL-L2350DW")]);
         assert!(sharing.is_autostart_enabled());
 
