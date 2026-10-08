@@ -262,6 +262,23 @@ impl SpoolerRecord {
             }
         }
 
+        // On Windows 10/11, queues created via Add-Printer -IppURL are managed by the WSD port monitor
+        // with ports named "WSD-<GUID>". Recognise genuine ShaPrint client queues on WSD ports by
+        // their derived naming identity.
+        if port_lower.starts_with("wsd-") {
+            if let Some((printer_name, server_address, queue_name)) =
+                parse_client_queue_name(name_trimmed)
+            {
+                return SpoolerRecordClassification::RecognisedClientQueue(RecognisedClientQueue {
+                    queue_name,
+                    server_address,
+                    printer_name,
+                });
+            } else if name_trimmed.contains(" (ShaPrint ") {
+                return SpoolerRecordClassification::AmbiguousClientQueue;
+            }
+        }
+
         let is_loopback = scheme_rest.is_some_and(|rest| {
             let authority = rest.split_once('/').map(|(a, _)| a).unwrap_or(rest);
             is_loopback_authority(authority, proxy_authority)
@@ -342,6 +359,35 @@ fn hex_val(b: u8) -> Option<u8> {
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
     }
+}
+
+fn parse_client_queue_name(name: &str) -> Option<(PrinterName, String, ClientQueueName)> {
+    let name_trimmed = name.trim();
+    let without_suffix = name_trimmed.strip_suffix(')')?;
+    let (printer_raw, label) = without_suffix.rsplit_once(" (ShaPrint ")?;
+    let printer_name = PrinterName::parse(printer_raw).ok()?;
+
+    let candidate_address = if let Some((host_part, port_part)) = label.rsplit_once('-') {
+        if !port_part.is_empty() && port_part.chars().all(|c| c.is_ascii_digit()) {
+            format!("{host_part}:{port_part}")
+        } else {
+            label.to_owned()
+        }
+    } else {
+        label.to_owned()
+    };
+
+    if validate_address(&candidate_address).is_err() {
+        return None;
+    }
+
+    let expected_queue_name =
+        ClientQueueName::for_shared_printer(&printer_name, &candidate_address).ok()?;
+    if expected_queue_name.as_str() != name_trimmed {
+        return None;
+    }
+
+    Some((printer_name, candidate_address, expected_queue_name))
 }
 
 /// Accepts only the canonical `host:port` shapes the client trust store produces.
@@ -709,6 +755,40 @@ mod tests {
             SpoolerRecord::new("Unknown Spooler Entry", "ipp://127.0.0.1:8632/corrupt");
         assert_eq!(
             loopback_misc.classify(authority),
+            SpoolerRecordClassification::AmbiguousClientQueue
+        );
+    }
+
+    #[test]
+    fn spooler_record_classifies_genuine_client_queue_on_windows_wsd_port() {
+        let authority = "127.0.0.1:48632";
+        let record = SpoolerRecord::new(
+            "EPSON L3210 Series (Copy 1) (ShaPrint 10.102.10.21-48631)",
+            "WSD-3b5a3ba4-1211-4937-8b8b-ad7bf63e5a22",
+        );
+
+        match record.classify(authority) {
+            SpoolerRecordClassification::RecognisedClientQueue(q) => {
+                assert_eq!(
+                    q.queue_name().as_str(),
+                    "EPSON L3210 Series (Copy 1) (ShaPrint 10.102.10.21-48631)"
+                );
+                assert_eq!(q.server_address(), "10.102.10.21:48631");
+                assert_eq!(q.printer_name().as_str(), "EPSON L3210 Series (Copy 1)");
+            }
+            other => panic!("expected RecognisedClientQueue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spooler_record_classifies_malformed_wsd_shaprint_queue_as_ambiguous() {
+        let authority = "127.0.0.1:48632";
+        let record = SpoolerRecord::new(
+            "Office Printer (ShaPrint bad--address--)",
+            "WSD-3b5a3ba4-1211-4937-8b8b-ad7bf63e5a22",
+        );
+        assert_eq!(
+            record.classify(authority),
             SpoolerRecordClassification::AmbiguousClientQueue
         );
     }

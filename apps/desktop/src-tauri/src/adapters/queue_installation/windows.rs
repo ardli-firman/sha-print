@@ -61,7 +61,7 @@ try {
     $existing = Get-Printer -Name $name -ErrorAction SilentlyContinue
     if ($existing) {
         $port = "$($existing.PortName)"
-        if ($port -eq $url -or $port -eq $url.Replace('ipp://', 'http://')) {
+        if ($port -eq $url -or $port -eq $url.Replace('ipp://', 'http://') -or $port -like 'WSD-*') {
             exit 0
         }
         if ($port -match '^(?i)(ipp|http)://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/ipp/print/') {

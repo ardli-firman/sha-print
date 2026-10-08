@@ -352,3 +352,33 @@ pub(super) fn spooler_error(message: &str) -> AppError {
     let code = unsafe { GetLastError() };
     AppError::internal(format!("{message} (Windows error {code})"))
 }
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use crate::application::LocalPrinterCatalog;
+
+    #[tokio::test]
+    async fn real_windows_spooler_enumeration_succeeds_and_excludes_recognised_queues() {
+        let catalog = WindowsPrinterCatalog::new();
+        let queues = catalog
+            .recognised_client_queues()
+            .await
+            .expect("reads queues");
+        let local = catalog
+            .local_printers()
+            .await
+            .expect("reads local printers");
+
+        for queue in &queues {
+            let in_local = local
+                .iter()
+                .any(|p| p.as_str() == queue.queue_name().as_str());
+            assert!(
+                !in_local,
+                "Client queue {} must not appear in local printers",
+                queue.queue_name()
+            );
+        }
+    }
+}

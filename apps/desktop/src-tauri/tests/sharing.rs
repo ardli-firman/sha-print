@@ -231,7 +231,7 @@ async fn sharing_boundary_rejects_client_queues_and_restores_safely_with_interch
     let spooler = Arc::new(TestSpooler(vec![
         SpoolerRecord::new("HP LaserJet", "USB001"),
         // Lookalike on a real port remains selectable
-        SpoolerRecord::new("Office Printer (ShaPrint 10.0.0.5-8631)", "WSD-1"),
+        SpoolerRecord::new("Office Printer (ShaPrint 10.0.0.5-8631)", "USB002"),
         // Native client queue on loopback IPP
         SpoolerRecord::new(
             "Client Queue (ShaPrint 10.0.0.5-8631)",

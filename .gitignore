@@ -12,6 +12,7 @@ dist-ssr/
 
 # Rust / Tauri
 target/
+.cargo/
 **/*.rs.bk
 
 # IDE & Editors
