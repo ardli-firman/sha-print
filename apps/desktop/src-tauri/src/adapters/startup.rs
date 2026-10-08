@@ -135,9 +135,32 @@ impl WindowsStartup {
             Ok(exe) => exe.to_string_lossy().to_string(),
             Err(_) => String::new(),
         };
-        Self {
+        let startup = Self {
             command: login_command(),
             executable_path,
+        };
+        startup.migrate_legacy_run_key();
+        startup
+    }
+
+    /// Automatically migrates any legacy registry Run key to Windows Task Scheduler (HighestAvailable)
+    /// or cleans up obsolete Run keys if the Task Scheduler task is already registered.
+    fn migrate_legacy_run_key(&self) {
+        if matches!(task_scheduler::is_task_enabled(TASK_NAME), Ok(true)) {
+            let _ = delete_run_value(RUN_VALUE);
+            return;
+        }
+
+        if matches!(read_run_value(RUN_VALUE), Ok(Some(_))) {
+            log::info!("migrating legacy Run key to Windows Task Scheduler ({TASK_NAME}) with HighestAvailable");
+            let _ = delete_run_value(RUN_VALUE);
+            if !self.executable_path.is_empty() {
+                if let Err(error) =
+                    task_scheduler::create_task(TASK_NAME, &self.executable_path, BACKGROUND_ARG)
+                {
+                    log::warn!("cannot migrate legacy Run key to Task Scheduler: {error}");
+                }
+            }
         }
     }
 }
@@ -153,10 +176,22 @@ impl Default for WindowsStartup {
 impl StartupRegistration for WindowsStartup {
     fn registered_command(&self) -> Result<Option<String>, AppError> {
         if task_scheduler::is_task_enabled(TASK_NAME)? {
+            let _ = delete_run_value(RUN_VALUE);
             return Ok(Some(self.command.clone()));
         }
 
-        read_run_value(RUN_VALUE)
+        if read_run_value(RUN_VALUE)?.is_some() {
+            log::info!(
+                "found legacy Run key during registered_command query; migrating to Task Scheduler"
+            );
+            let _ = delete_run_value(RUN_VALUE);
+            if !self.executable_path.is_empty() {
+                task_scheduler::create_task(TASK_NAME, &self.executable_path, BACKGROUND_ARG)?;
+                return Ok(Some(self.command.clone()));
+            }
+        }
+
+        Ok(None)
     }
 
     fn set_enabled(&self, enabled: bool) -> Result<(), AppError> {

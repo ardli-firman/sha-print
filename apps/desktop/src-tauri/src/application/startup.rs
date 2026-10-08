@@ -102,7 +102,15 @@ impl Startup {
     /// "off" — a launch leaves the registration exactly as the user left it.
     pub fn apply_default(&self) -> Result<(), AppError> {
         self.require_supported()?;
-        if self.preference().is_some() {
+        if let Some(enabled) = self.preference() {
+            if enabled {
+                let command = self.require_command()?;
+                if self.registration.registered_command()?.as_deref() != Some(command.as_str()) {
+                    self.registration.set_enabled(true)?;
+                }
+            } else if self.registration.registered_command()?.is_some() {
+                self.registration.set_enabled(false)?;
+            }
             return Ok(());
         }
         let command = self.require_command()?;
@@ -453,6 +461,21 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::Unsupported);
         assert!(registration.writes().is_empty());
         assert!(!directory.join(PREFERENCE_FILE).exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn upgrade_with_saved_enabled_preference_repairs_missing_registration() {
+        let directory = temporary_directory("upgrade-repair");
+        std::fs::write(directory.join(PREFERENCE_FILE), "{\"enabled\": true}")
+            .expect("writes enabled preference");
+        let registration = FakeRegistration::new(None);
+        let startup = startup(Arc::clone(&registration), &directory);
+
+        startup.apply_default().expect("synchronizes registration");
+
+        assert_eq!(registration.writes(), vec![true]);
+        assert_eq!(registration.registered().as_deref(), Some(COMMAND));
         let _ = std::fs::remove_dir_all(&directory);
     }
 }
