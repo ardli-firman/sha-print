@@ -30,6 +30,19 @@ A feature or bug fix is not done until the changed surface was actually exercise
 - Architecture decisions are recorded as ADRs in `docs/adr`; add one when a decision outlives the PR.
 - Never put credentials, Network Channel values, IPP URLs with keys, or print job content in logs, status payloads, IPC DTOs, test fixtures, or commits. The Tauri app's multicast DNS discovery is unsigned by design, because identity there is pinned by the TLS certificate fingerprint (ADR 0004).
 
+## Breaking changes & Stable ↔ Nightly compatibility (Mandatory for AI Agents)
+
+On every task, implementation, review, or release discussion, **you must explicitly tell the user whether the work introduces any breaking changes or not**:
+
+1. **Cross-Version Printing Compatibility (Stable ↔ Nightly)**:
+   - State clearly whether a Stable Client can still print to a Nightly Server (and vice versa).
+   - Flag any change to dedicated ports (`48631` IPPS Server, `48632` Client Proxy, `48633` Discovery), IPPS wire protocol, Network Channel authentication headers, printer queue URI paths (`/ipp/print/...`), or TLS identity/fingerprint storage as a **Breaking Change**.
+2. **Settings & State Backward Compatibility**:
+   - State clearly whether persisted settings, Trusted Servers, shared printer selections, or Network Channel storage remain backward-compatible if a user downgrades from Nightly back to Stable.
+   - If not backward-compatible, instruct the user to pass `SETTINGS_RISK=true` when dispatching a nightly (`make release-nightly SETTINGS_RISK=true`).
+3. **Commit & Release Marking**:
+   - Whenever a change is breaking, use the Conventional Commit `!` marker (`feat(scope)!: ...` or `fix(scope)!: ...`) and a `BREAKING CHANGE: <explanation>` footer in the commit body and PR title. `scripts/nightly/index.ts` automatically scans commits since the last stable tag (`vX.Y.Z`) and highlights breaking changes in both the `make release-nightly` terminal summary and the published GitHub Release notes.
+
 ## Pull requests
 
 1. Read `.github/pull_request_template.md` and fill every section — that file is the contract for what a PR must state.

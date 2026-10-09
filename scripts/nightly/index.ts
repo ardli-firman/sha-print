@@ -7,7 +7,11 @@ import {
   formatNightlyTag,
   parseNightlyVersion,
 } from "./version";
-import { generateNightlyReleaseNotes } from "./notes";
+import {
+  detectBreakingChanges,
+  generateNightlyReleaseNotes,
+  type CommitSummary,
+} from "./notes";
 import { determinePrunePlan, type GitHubReleaseItem } from "./prune";
 import { applyProjectVersionAndEndpoint } from "./prepare-build";
 
@@ -42,6 +46,55 @@ export function getCurrentBaseVersion(rootDir: string = process.cwd()): string {
     const pkgPath = resolve(rootDir, "apps/desktop/package.json");
     const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
     return pkg.version;
+  }
+}
+
+/**
+ * Finds the most recent stable tag (`vX.Y.Z`) reachable from `targetSha` and scans
+ * all commits since that tag for breaking changes (`type!:` or `BREAKING CHANGE:`).
+ */
+export function scanBreakingChangesSinceStable(
+  targetSha: string,
+  cwd?: string,
+): { baseStableTag?: string; breakingChanges: string[] } {
+  let baseStableTag: string | undefined;
+  try {
+    const tag = execGit(
+      `git describe --tags --abbrev=0 --match "v[0-9]*.[0-9]*.[0-9]*" --exclude "*-*" "${targetSha}"`,
+      cwd,
+    );
+    if (/^v\d+\.\d+\.\d+$/.test(tag)) {
+      baseStableTag = tag;
+    }
+  } catch {
+    baseStableTag = undefined;
+  }
+
+  if (!baseStableTag) {
+    return { breakingChanges: [] };
+  }
+
+  try {
+    const logRaw = execGit(
+      `git log "${baseStableTag}..${targetSha}" --format="%H%x1f%s%x1f%b%x1e"`,
+      cwd,
+    );
+    const commits: CommitSummary[] = logRaw
+      .split("\x1e")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const [sha = "", subject = "", body = ""] = entry.split("\x1f");
+        return { sha: sha.trim(), subject: subject.trim(), body: body.trim() };
+      })
+      .filter((c) => Boolean(c.sha && c.subject));
+
+    return {
+      baseStableTag,
+      breakingChanges: detectBreakingChanges(commits),
+    };
+  } catch {
+    return { baseStableTag, breakingChanges: [] };
   }
 }
 
@@ -120,10 +173,17 @@ export async function runCli(args: string[]): Promise<void> {
       throw new Error("--version and --source-sha are required for generate-notes");
     }
 
+    const { baseStableTag, breakingChanges } = scanBreakingChangesSinceStable(
+      sourceSha,
+      rootDir,
+    );
+
     const notes = generateNightlyReleaseNotes({
       version,
       sourceSha,
-      settingsCompatibilityRisk: settingsRisk,
+      settingsCompatibilityRisk: settingsRisk || breakingChanges.length > 0,
+      baseStableTag,
+      breakingChanges,
     });
 
     if (outFile) {
@@ -177,7 +237,7 @@ export async function runCli(args: string[]): Promise<void> {
   if (command === "trigger") {
     const sourceSha = (getArgValue(args, "--source-sha") || "").trim();
     const settingsRiskRaw = (getArgValue(args, "--settings-risk") || "").trim().toLowerCase();
-    const settingsRisk =
+    const explicitSettingsRisk =
       args.includes("--settings-risk") &&
       (settingsRiskRaw === "" || settingsRiskRaw === "true" || settingsRiskRaw === "1");
     const dryRun = args.includes("--dry-run");
@@ -212,19 +272,42 @@ export async function runCli(args: string[]): Promise<void> {
       existingTagsOrVersions: existingTags,
     });
 
+    const { baseStableTag, breakingChanges } = scanBreakingChangesSinceStable(
+      commitRes.sha,
+      rootDir,
+    );
+    const hasBreaking = breakingChanges.length > 0;
+    const effectiveSettingsRisk = explicitSettingsRisk || hasBreaking;
+
     console.log("==================================================");
     console.log("  ShaPrint Manual Nightly Release Dispatch");
     console.log("==================================================");
-    console.log(`  Target Commit : ${commitRes.shortSha} (${commitRes.sha})`);
-    console.log(`  Is main HEAD  : ${commitRes.isHead ? "Yes" : "No (historical commit)"}`);
-    console.log(`  Next Version  : ${nextVer.version} (tag: ${nextVer.tag})`);
-    console.log(`  Settings Risk : ${settingsRisk ? "Yes" : "No"}`);
+    console.log(`  Target Commit    : ${commitRes.shortSha} (${commitRes.sha})`);
+    console.log(`  Is main HEAD     : ${commitRes.isHead ? "Yes" : "No (historical commit)"}`);
+    console.log(`  Base Stable Tag  : ${baseStableTag || "N/A"}`);
+    console.log(`  Next Version     : ${nextVer.version} (tag: ${nextVer.tag})`);
+    console.log(
+      `  Breaking Changes : ${
+        hasBreaking
+          ? `⚠️  YES (${breakingChanges.length} detected since ${baseStableTag})`
+          : "✅ None (Compatible with Stable)"
+      }`,
+    );
+    console.log(`  Settings Risk    : ${effectiveSettingsRisk ? "Yes" : "No"}`);
     console.log("==================================================");
+
+    if (hasBreaking) {
+      console.log("\nDetected Breaking Commits:");
+      for (const item of breakingChanges) {
+        console.log(`  - ${item}`);
+      }
+      console.log("");
+    }
 
     const ghArgs = [
       "workflow run nightly-desktop.yml --ref main",
       sourceSha ? `-f source_sha="${commitRes.sha}"` : "",
-      settingsRisk ? `-f settings_risk="true"` : "",
+      effectiveSettingsRisk ? `-f settings_risk="true"` : "",
     ]
       .filter(Boolean)
       .join(" ");
