@@ -1,0 +1,53 @@
+name: Nightly Tag CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/nightly-desktop.yml'
+      - '.github/workflows/nightly-tag-ci.yml'
+      - 'scripts/nightly/tag-source.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nightly-tag:
+    name: Annotated tag identity (no publish)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create an annotated tag without runner Git identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          script_path="$PWD/scripts/nightly/tag-source.sh"
+          test_repo="$(mktemp -d)"
+          trap 'rm -rf "$test_repo"' EXIT
+
+          git -C "$test_repo" init -q
+          git -C "$test_repo" config user.useConfigOnly true
+          git -C "$test_repo" \
+            -c user.name="Fixture Author" \
+            -c user.email="fixture@example.invalid" \
+            -c commit.gpgsign=false \
+            commit --allow-empty -m "fixture"
+
+          target_sha="$(git -C "$test_repo" rev-parse HEAD)"
+          NIGHTLY_TAG="v0.0.0-tag-identity-test"
+          (
+            cd "$test_repo"
+            TARGET_SHA="$target_sha" NIGHTLY_TAG="$NIGHTLY_TAG" bash "$script_path"
+          )
+
+          tag_object="$(git -C "$test_repo" cat-file -p "refs/tags/$NIGHTLY_TAG")"
+          if [[ "$tag_object" != *"object $target_sha"* ]]; then
+            echo "The annotated tag points to the wrong commit." >&2
+            exit 1
+          fi
+          if [[ "$tag_object" != *"tagger github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"* ]]; then
+            echo "The annotated tag has the wrong tagger identity." >&2
+            exit 1
+          fi
+          printf 'Created %s for %s with the expected tagger identity.\n' "$NIGHTLY_TAG" "$target_sha"
