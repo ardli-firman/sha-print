@@ -1,6 +1,8 @@
 import { RefreshCw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { isNightly } from "@/lib/version";
 import type { useUpdates } from "../hooks/useUpdates";
 
 export interface SoftwareUpdatesPanelProps {
@@ -11,6 +13,7 @@ export function SoftwareUpdatesPanel({ updates }: SoftwareUpdatesPanelProps) {
   const { status, error, checking, check, restart } = updates;
   const update = status?.update;
   const isReady = update?.state === "ready_to_restart";
+  const nightly = isNightly(status?.current_version);
 
   return (
     <Card className="panel space-y-3" aria-labelledby="software-updates-heading">
@@ -20,9 +23,19 @@ export function SoftwareUpdatesPanel({ updates }: SoftwareUpdatesPanelProps) {
             <Sparkles size={16} />
           </div>
           <div>
-            <h2 id="software-updates-heading" className="text-base font-semibold leading-none">
-              Software updates
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 id="software-updates-heading" className="text-base font-semibold leading-none">
+                Software updates
+              </h2>
+              {status?.current_version && (
+                <Badge
+                  variant={nightly ? "warning" : "muted"}
+                  className="text-[10px] tracking-wide"
+                >
+                  {nightly ? "Nightly Channel" : "Stable"}
+                </Badge>
+              )}
+            </div>
             <p className="hint text-xs mt-1 text-muted-foreground">
               Current version {status?.current_version ? `v${status.current_version}` : "installed"}. Updates are downloaded and verified automatically.
             </p>

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { checkVersionDrift, compareSemver, parseSemver } from "./version";
+import {
+  checkVersionDrift,
+  compareSemver,
+  getReleaseChannel,
+  isNightly,
+  parseSemver,
+} from "./version";
 
 describe("version parsing and comparison", () => {
   it("parses valid semver versions", () => {
@@ -38,5 +44,16 @@ describe("version parsing and comparison", () => {
     expect(checkVersionDrift(null, "3.0.0").hasDrift).toBe(false);
     expect(checkVersionDrift(undefined, "3.0.0").hasDrift).toBe(false);
     expect(checkVersionDrift("", "3.0.0").hasDrift).toBe(false);
+  });
+
+  it("identifies nightly vs stable release channels", () => {
+    expect(isNightly("3.4.0-nightly.1")).toBe(true);
+    expect(isNightly("v3.4.0-nightly.15")).toBe(true);
+    expect(isNightly("3.4.0")).toBe(false);
+    expect(isNightly("v3.4.0")).toBe(false);
+    expect(isNightly(null)).toBe(false);
+
+    expect(getReleaseChannel("3.4.0-nightly.1")).toBe("nightly");
+    expect(getReleaseChannel("3.4.0")).toBe("stable");
   });
 });
