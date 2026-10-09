@@ -19,6 +19,8 @@ Run `make release-nightly` to dispatch the manual workflow in `.github/workflows
 
 Nightly source tags use the `github-actions[bot]` identity explicitly; GitHub-hosted runners do not provide a repository `user.name` and `user.email` by default.
 
+`.github/workflows/nightly-tag-ci.yml` runs a non-publishing Windows smoke for tag identity changes in a temporary Git repository.
+
 ## v2.0.0-community (LTS Archive)
 
 The legacy .NET 8 WPF application:
