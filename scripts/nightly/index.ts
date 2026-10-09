@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { execSync } from "node:child_process";
+import { execGit } from "./git";
 import { resolveAndVerifyCommit } from "./commit";
 import {
   calculateNextNightlyVersion,
@@ -8,12 +8,6 @@ import {
   parseNightlyVersion,
 } from "./version";
 import { generateNightlyReleaseNotes } from "./notes";
-import {
-  canAdvanceFeed,
-  prepareFeedMetadata,
-  validateFeedUpdate,
-  type UpdaterMetadata,
-} from "./feed";
 import { determinePrunePlan, type GitHubReleaseItem } from "./prune";
 import { applyProjectVersionAndEndpoint } from "./prepare-build";
 
@@ -21,25 +15,8 @@ export const DEFAULT_NIGHTLY_ENDPOINT =
   "https://github.com/ardli-firman/sha-print/releases/download/nightly/latest.json";
 export const FEED_HOLDER_TAG = "nightly";
 
-function cleanGitEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  delete env.GIT_CONFIG_COUNT;
-  delete env.GIT_CONFIG_VALUE_0;
-  delete env.GIT_CONFIG_VALUE_1;
-  return env;
-}
-
-function execGit(cmd: string, cwd?: string): string {
-  return execSync(cmd, {
-    cwd: cwd || process.cwd(),
-    encoding: "utf-8",
-    env: cleanGitEnv(),
-    stdio: ["pipe", "pipe", "pipe"],
-  }).trim();
-}
-
 /**
- * Retrieves all git tags and GitHub releases to find existing versions.
+ * Retrieves all git tags to find existing versions.
  */
 export function getExistingTags(cwd?: string): string[] {
   try {
@@ -54,12 +31,18 @@ export function getExistingTags(cwd?: string): string[] {
 }
 
 /**
- * Retrieves current base version from apps/desktop/package.json.
+ * Retrieves current base version from origin/main's apps/desktop/package.json
+ * falling back to local apps/desktop/package.json.
  */
 export function getCurrentBaseVersion(rootDir: string = process.cwd()): string {
-  const pkgPath = resolve(rootDir, "apps/desktop/package.json");
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-  return pkg.version;
+  try {
+    const mainPkg = execGit("git show origin/main:apps/desktop/package.json", rootDir);
+    return JSON.parse(mainPkg).version;
+  } catch {
+    const pkgPath = resolve(rootDir, "apps/desktop/package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    return pkg.version;
+  }
 }
 
 /**
@@ -85,10 +68,10 @@ export async function runCli(args: string[]): Promise<void> {
     const runNumberStr = getArgValue(args, "--run-number");
     const runNumber = runNumberStr ? parseInt(runNumberStr, 10) : undefined;
 
-    // Read base version from main HEAD or current repo
+    // Read base version from main
     const currentMainBase = getCurrentBaseVersion(rootDir);
 
-    // If commitSha was provided and differs, we can read its package.json if needed
+    // If commitSha was provided and differs, read its package.json
     let commitBase: string | undefined = undefined;
     if (commitSha) {
       try {
@@ -149,34 +132,6 @@ export async function runCli(args: string[]): Promise<void> {
     } else {
       console.log(notes);
     }
-    return;
-  }
-
-  if (command === "prepare-feed-metadata") {
-    const rawFile = getArgValue(args, "--input");
-    const outFile = getArgValue(args, "--output");
-    const targetTag = getArgValue(args, "--tag");
-
-    if (!rawFile || !outFile || !targetTag) {
-      throw new Error("--input, --output, and --tag are required for prepare-feed-metadata");
-    }
-
-    const raw = JSON.parse(readFileSync(resolve(rootDir, rawFile), "utf-8")) as UpdaterMetadata;
-    const prepared = prepareFeedMetadata({
-      rawMetadata: raw,
-      targetTag,
-    });
-
-    // Validate
-    const validation = validateFeedUpdate({
-      newMetadata: prepared,
-    });
-    if (!validation.allowed) {
-      throw new Error(`Invalid feed metadata: ${validation.reason}`);
-    }
-
-    writeFileSync(resolve(rootDir, outFile), JSON.stringify(prepared, null, 2) + "\n", "utf-8");
-    console.log(`Successfully prepared feed metadata at ${outFile}`);
     return;
   }
 

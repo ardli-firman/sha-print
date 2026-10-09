@@ -1,17 +1,14 @@
 export interface GenerateNotesOptions {
   version: string;
   sourceSha: string;
-  shortSha?: string;
-  isHead?: boolean;
   settingsCompatibilityRisk?: boolean;
-  customNotes?: string;
 }
 
 /**
  * Generates release notes for a nightly prerelease according to ADR 0015.
  */
 export function generateNightlyReleaseNotes(options: GenerateNotesOptions): string {
-  const shortSha = options.shortSha || options.sourceSha.slice(0, 7);
+  const shortSha = options.sourceSha.slice(0, 7);
   const version = options.version.replace(/^v/, "");
 
   let notes = `## ShaPrint Nightly Desktop (${version})
@@ -31,13 +28,6 @@ export function generateNightlyReleaseNotes(options: GenerateNotesOptions): stri
 ### ⚠️ Settings Compatibility Risk
 This nightly build introduces configuration or state changes that may not be backward-compatible with older stable versions.
 If you return to a stable release after testing this build, you may need to reconfigure your printer sharing settings or Network Channel manually.
-`;
-  }
-
-  if (options.customNotes?.trim()) {
-    notes += `
-### Notes
-${options.customNotes.trim()}
 `;
   }
 

@@ -1,6 +1,6 @@
-import { execSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { execGh } from "./git";
 import {
   canAdvanceFeed,
   prepareFeedMetadata,
@@ -15,23 +15,6 @@ export interface ReleaseClient {
   getFeedMetadata(feedTag: string): Promise<UpdaterMetadata | null>;
   uploadFeedAsset(feedTag: string, latestJsonPath: string): Promise<void>;
   deleteReleaseAndTag(tagName: string): Promise<void>;
-}
-
-function cleanGitEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  delete env.GIT_CONFIG_COUNT;
-  delete env.GIT_CONFIG_VALUE_0;
-  delete env.GIT_CONFIG_VALUE_1;
-  return env;
-}
-
-function execGh(cmd: string, cwd?: string): string {
-  return execSync(`gh ${cmd}`, {
-    cwd: cwd || process.cwd(),
-    encoding: "utf-8",
-    env: cleanGitEnv(),
-    stdio: ["pipe", "pipe", "pipe"],
-  }).trim();
 }
 
 /**
@@ -135,6 +118,13 @@ export async function updateNightlyFeed(options: {
   if (!validation.allowed) {
     throw new Error(`Feed update rejected: ${validation.reason}`);
   }
+
+  // Write prepared metadata containing the versioned release URLs to disk
+  writeFileSync(
+    options.latestJsonPath,
+    JSON.stringify(preparedMetadata, null, 2) + "\n",
+    "utf-8",
+  );
 
   // Upload to feed holder release
   await client.uploadFeedAsset(feedTag, options.latestJsonPath);

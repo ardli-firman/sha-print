@@ -12,10 +12,6 @@ on:
         type: boolean
         required: false
         default: false
-      custom_notes:
-        description: 'Optional additional release notes for this nightly build'
-        required: false
-        default: ''
 
 concurrency:
   group: nightly-desktop-release
@@ -61,12 +57,6 @@ jobs:
           echo "TARGET_SHA=$SHA" >> "$GITHUB_ENV"
           echo "TARGET_SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
 
-      - name: Check out selected commit for build
-        shell: bash
-        run: |
-          echo "Checking out exact commit: $TARGET_SHA"
-          git checkout "$TARGET_SHA"
-
       - name: Resolve unique increasing SemVer version
         id: resolve-version
         shell: bash
@@ -90,7 +80,33 @@ jobs:
             --source-sha "$TARGET_SHA" \
             $SETTINGS_FLAG \
             --out-file release-notes.md
-          cat release-notes.md
+
+          {
+            echo "RELEASE_BODY<<EOF"
+            cat release-notes.md
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Backup nightly scripts for checkout
+        shell: bash
+        run: |
+          mkdir -p ../_scripts_backup
+          cp -r scripts/nightly ../_scripts_backup/
+
+      - name: Check out selected commit for build
+        shell: bash
+        run: |
+          echo "Checking out exact commit: $TARGET_SHA"
+          git checkout "$TARGET_SHA"
+          # Restore nightly automation scripts on historical checkout
+          mkdir -p scripts
+          cp -r ../_scripts_backup/nightly scripts/
+
+      - name: Tag source commit
+        shell: bash
+        run: |
+          git tag -a "$NIGHTLY_TAG" "$TARGET_SHA" -m "ShaPrint $NIGHTLY_TAG"
+          git push origin "$NIGHTLY_TAG"
 
       - name: Prepare build configuration (version and nightly feed endpoint)
         shell: bash
@@ -126,19 +142,28 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ env.NIGHTLY_TAG }}
           releaseName: 'ShaPrint ${{ env.NIGHTLY_TAG }} (Nightly)'
-          releaseBodyFile: release-notes.md
-          releaseDraft: false
+          releaseBody: ${{ env.RELEASE_BODY }}
+          releaseDraft: true
           prerelease: true
+
+      - name: Publish Nightly Prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          echo "Publishing prerelease $NIGHTLY_TAG from draft"
+          gh release edit "$NIGHTLY_TAG" --draft=false --prerelease
 
       - name: Locate updater metadata
         id: locate-updater-metadata
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           # Locate latest.json produced by tauri build
           METADATA_PATH=$(find apps/desktop/src-tauri/target/release -name "latest.json" -type f | head -n 1)
           if [ -z "$METADATA_PATH" ]; then
-            # Alternatively download from newly published prerelease
-            echo "latest.json not found in target; downloading from release $NIGHTLY_TAG"
+            echo "latest.json not found in target; downloading from published release $NIGHTLY_TAG"
             gh release download "$NIGHTLY_TAG" -p "latest.json" -D .temp-metadata
             METADATA_PATH=".temp-metadata/latest.json"
           fi
