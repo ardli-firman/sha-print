@@ -79,13 +79,8 @@ jobs:
             --version "$NIGHTLY_VERSION" \
             --source-sha "$TARGET_SHA" \
             $SETTINGS_FLAG \
-            --out-file release-notes.md
-
-          {
-            echo "RELEASE_BODY<<EOF"
-            cat release-notes.md
-            echo "EOF"
-          } >> "$GITHUB_ENV"
+            --out-file release-notes.md \
+            --github-env-file "$GITHUB_ENV"
 
       - name: Backup nightly scripts for checkout
         shell: bash
