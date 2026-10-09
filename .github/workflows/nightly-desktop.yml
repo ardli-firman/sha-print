@@ -100,7 +100,9 @@ jobs:
       - name: Tag source commit
         shell: bash
         run: |
-          git tag -a "$NIGHTLY_TAG" "$TARGET_SHA" -m "ShaPrint $NIGHTLY_TAG"
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            tag -a "$NIGHTLY_TAG" "$TARGET_SHA" -m "ShaPrint $NIGHTLY_TAG"
           git push origin "$NIGHTLY_TAG"
 
       - name: Prepare build configuration (version and nightly feed endpoint)
