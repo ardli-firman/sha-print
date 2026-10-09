@@ -279,6 +279,41 @@ describe("updater", () => {
     }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
+
+  it("displays prominent nightly badges and top bar when running on a nightly build", async () => {
+    vi.mocked(updatesApi.getUpdateStatus).mockResolvedValue({
+      current_version: "3.4.0-nightly.1",
+      update: { state: "idle" },
+      waiting_for_jobs: false,
+    });
+    render(<App />);
+
+    // Top banner and sidebar indicator
+    expect(await screen.findByText(/ShaPrint Nightly/i)).toBeTruthy();
+    expect(screen.getByText("Pre-release Test Build")).toBeTruthy();
+    expect(screen.getByText("Nightly")).toBeTruthy();
+
+    // Settings page software updates panel
+    navigateTo("Settings");
+    expect(await screen.findByText("Nightly Channel")).toBeTruthy();
+    expect(screen.getByText("Nightly Channel Active")).toBeTruthy();
+  });
+
+  it("omits nightly branding and displays stable indicator when on a stable build", async () => {
+    vi.mocked(updatesApi.getUpdateStatus).mockResolvedValue({
+      current_version: "3.4.0",
+      update: { state: "idle" },
+      waiting_for_jobs: false,
+    });
+    render(<App />);
+
+    expect(screen.queryByText("Pre-release Test Build")).toBeNull();
+    expect(screen.queryByText("Nightly")).toBeNull();
+
+    navigateTo("Settings");
+    expect(await screen.findByText("Stable")).toBeTruthy();
+    expect(screen.queryByText("Nightly Channel Active")).toBeNull();
+  });
 });
 
 describe("workspace navigation", () => {
@@ -1399,7 +1434,7 @@ describe("nearby servers panel", () => {
           name: "DESKTOP-NEWER",
           address: "192.0.2.11:8631",
           printers: ["Canon"],
-          version: "3.4.0",
+          version: "4.0.0",
         },
         {
           name: "DESKTOP-LEGACY",
@@ -1432,7 +1467,7 @@ describe("nearby servers panel", () => {
 
     // Newer server displays version badge AND version-drift advisory badge
     expect(await within(dialog).findByText("DESKTOP-NEWER")).toBeTruthy();
-    expect(within(dialog).getByText("v3.4.0")).toBeTruthy();
+    expect(within(dialog).getByText("v4.0.0")).toBeTruthy();
     const driftBadge = within(dialog).getByText(/Newer server release/);
     expect(driftBadge).toBeTruthy();
 

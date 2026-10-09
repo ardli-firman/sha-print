@@ -1,0 +1,191 @@
+name: Nightly Desktop Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 'Optional commit SHA reachable from main (defaults to current main HEAD)'
+        required: false
+        default: ''
+      settings_risk:
+        description: 'Flag if this build has settings compatibility risk with stable releases'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: nightly-desktop-release
+  cancel-in-progress: false
+
+jobs:
+  build-and-release-nightly:
+    name: Build & Release Nightly Desktop (Windows)
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Resolve and verify commit reachability
+        id: resolve-commit
+        shell: bash
+        run: |
+          RESULT=$(bun run scripts/nightly/index.ts resolve-commit --source-sha "${{ inputs.source_sha }}")
+          echo "Commit result: $RESULT"
+          SHA=$(echo "$RESULT" | jq -r '.sha')
+          SHORT_SHA=$(echo "$RESULT" | jq -r '.shortSha')
+          echo "TARGET_SHA=$SHA" >> "$GITHUB_ENV"
+          echo "TARGET_SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
+
+      - name: Resolve unique increasing SemVer version
+        id: resolve-version
+        shell: bash
+        run: |
+          VERSION_RESULT=$(bun run scripts/nightly/index.ts resolve-version --commit-sha "$TARGET_SHA" --run-number "${{ github.run_number }}")
+          echo "Version result: $VERSION_RESULT"
+          VERSION=$(echo "$VERSION_RESULT" | jq -r '.version')
+          TAG=$(echo "$VERSION_RESULT" | jq -r '.tag')
+          echo "NIGHTLY_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "NIGHTLY_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          SETTINGS_FLAG=""
+          if [ "${{ inputs.settings_risk }}" = "true" ]; then
+            SETTINGS_FLAG="--settings-risk"
+          fi
+          bun run scripts/nightly/index.ts generate-notes \
+            --version "$NIGHTLY_VERSION" \
+            --source-sha "$TARGET_SHA" \
+            $SETTINGS_FLAG \
+            --out-file release-notes.md
+
+          {
+            echo "RELEASE_BODY<<EOF"
+            cat release-notes.md
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Backup nightly scripts for checkout
+        shell: bash
+        run: |
+          mkdir -p ../_scripts_backup
+          cp -r scripts/nightly ../_scripts_backup/
+
+      - name: Check out selected commit for build
+        shell: bash
+        run: |
+          echo "Checking out exact commit: $TARGET_SHA"
+          git checkout "$TARGET_SHA"
+          # Restore nightly automation scripts on historical checkout
+          mkdir -p scripts
+          cp -r ../_scripts_backup/nightly scripts/
+
+      - name: Tag source commit
+        shell: bash
+        run: |
+          git tag -a "$NIGHTLY_TAG" "$TARGET_SHA" -m "ShaPrint $NIGHTLY_TAG"
+          git push origin "$NIGHTLY_TAG"
+
+      - name: Prepare build configuration (version and nightly feed endpoint)
+        shell: bash
+        run: |
+          bun run scripts/nightly/index.ts prepare-build \
+            --version "$NIGHTLY_VERSION" \
+            --endpoint "https://github.com/ardli-firman/sha-print/releases/download/nightly/latest.json"
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: bun install
+
+      - name: Verify frontend (typecheck & test)
+        working-directory: apps/desktop
+        run: |
+          bun run typecheck
+          bun run test
+
+      - name: Verify Rust (format, lint, test)
+        working-directory: apps/desktop/src-tauri
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      - name: Build Tauri Desktop (NSIS, MSI & Signed Update Bundles)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ env.NIGHTLY_TAG }}
+          releaseName: 'ShaPrint ${{ env.NIGHTLY_TAG }} (Nightly)'
+          releaseBody: ${{ env.RELEASE_BODY }}
+          releaseDraft: true
+          prerelease: true
+
+      - name: Publish Nightly Prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          echo "Publishing prerelease $NIGHTLY_TAG from draft"
+          gh release edit "$NIGHTLY_TAG" --draft=false --prerelease
+
+      - name: Locate updater metadata
+        id: locate-updater-metadata
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          # Locate latest.json produced by tauri build
+          METADATA_PATH=$(find apps/desktop/src-tauri/target/release -name "latest.json" -type f | head -n 1)
+          if [ -z "$METADATA_PATH" ]; then
+            echo "latest.json not found in target; downloading from published release $NIGHTLY_TAG"
+            gh release download "$NIGHTLY_TAG" -p "latest.json" -D .temp-metadata
+            METADATA_PATH=".temp-metadata/latest.json"
+          fi
+          echo "Found metadata at: $METADATA_PATH"
+          echo "METADATA_PATH=$METADATA_PATH" >> "$GITHUB_ENV"
+
+      - name: Update Nightly Feed Holder
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          bun run scripts/nightly/index.ts update-feed \
+            --latest-json "$METADATA_PATH" \
+            --tag "$NIGHTLY_TAG" \
+            --feed-tag "nightly"
+
+      - name: Prune old nightly releases (retain 10 newest)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          bun run scripts/nightly/index.ts prune-releases \
+            --active-feed-tag "$NIGHTLY_TAG" \
+            --retain-count 10 \
+            --feed-tag "nightly"

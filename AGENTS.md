@@ -26,7 +26,7 @@ A feature or bug fix is not done until the changed surface was actually exercise
 
 - Commits and PR titles use Conventional Commits: `<type>(<scope>): <imperative summary>`. Types in use: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `build`, `style`.
 - Branch names: `feat/<name>`, `fix/<name>`, `docs/<name>`, `review/<name>`.
-- Base branch: `dev-tauri` for Tauri/IPP work, `main` for release. Release PRs go `dev-tauri` → `main` (or `develop` → `main`) and are titled `release: ...`.
+- Base branch: `main`.
 - Architecture decisions are recorded as ADRs in `docs/adr`; add one when a decision outlives the PR.
 - Never put credentials, Network Channel values, IPP URLs with keys, or print job content in logs, status payloads, IPC DTOs, test fixtures, or commits. The Tauri app's multicast DNS discovery is unsigned by design, because identity there is pinned by the TLS certificate fingerprint (ADR 0004).
 
@@ -34,14 +34,14 @@ A feature or bug fix is not done until the changed surface was actually exercise
 
 1. Read `.github/pull_request_template.md` and fill every section — that file is the contract for what a PR must state.
 2. Title: Conventional Commit.
-3. Link issues in the template body: `Closes #N` auto-closes on merge **into the default branch (`main`)**. A PR based on `dev-tauri` does not auto-close anything — use `Relates to #N` and close the ticket from the release PR or by hand.
+3. Link issues in the template body: `Closes #N` auto-closes on merge into the default branch (`main`).
 4. Verification section: exact commands plus the observed output, and a runtime check of the changed surface. An unevidenced acceptance criterion is an open criterion — say so instead of asserting success.
 5. Mentions: request the review agent with `@ebra-reviewer review`, or @ a human reviewer.
 
 ```bash
 # 1. Write the filled template (comments removed) to a scratch file.
 # 2. Create the PR with that file as the body.
-gh pr create --base dev-tauri --title "feat(scope): summary" --body-file /tmp/pr-body.md
+gh pr create --base main --title "feat(scope): summary" --body-file /tmp/pr-body.md
 ```
 
 ## Agent skills

@@ -1,17 +1,21 @@
-.PHONY: help keys release-patch release-minor release-major test typecheck check lint
+.PHONY: help keys release-nightly release-patch release-minor release-major test typecheck check lint
 
 help:
 	@echo "Available commands in ShaPrint:"
 	@echo "  make keys            - Generate Minisign signing key pair for Tauri updater"
+	@echo "  make release-nightly - Trigger manual Nightly release from main (optional: SHA=<sha> SETTINGS_RISK=true)"
 	@echo "  make release-patch   - Bump patch version (x.y.Z+1), commit, and create git tag"
 	@echo "  make release-minor   - Bump minor version (x.Y+1.0), commit, and create git tag"
 	@echo "  make release-major   - Bump major version (X+1.0.0), commit, and create git tag"
-	@echo "  make test            - Run all frontend and backend tests"
+	@echo "  make test            - Run all frontend, backend, and nightly script tests"
 	@echo "  make typecheck       - Run frontend TypeScript typecheck"
 	@echo "  make lint            - Run cargo fmt check and cargo clippy"
 
 keys:
 	bun run scripts/generate-keys.ts
+
+release-nightly:
+	bun run scripts/nightly/index.ts trigger --source-sha "$(SHA)" --settings-risk "$(SETTINGS_RISK)"
 
 release-patch:
 	bun run scripts/release.ts patch
@@ -23,6 +27,7 @@ release-major:
 	bun run scripts/release.ts major
 
 test:
+	bun test scripts/nightly/
 	bun run --filter shaprint-desktop test
 	cd apps/desktop/src-tauri && cargo test
 

@@ -30,6 +30,15 @@ export function compareSemver(a: string, b: string): number | null {
   return pa.patch - pb.patch;
 }
 
+export function isNightly(version?: string | null): boolean {
+  if (!version) return false;
+  return version.toLowerCase().includes("-nightly");
+}
+
+export function getReleaseChannel(version?: string | null): "nightly" | "stable" {
+  return isNightly(version) ? "nightly" : "stable";
+}
+
 export function checkVersionDrift(
   serverVersion?: string | null,
   clientVersion: string = CLIENT_VERSION
