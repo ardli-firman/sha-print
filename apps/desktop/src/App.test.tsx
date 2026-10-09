@@ -279,6 +279,41 @@ describe("updater", () => {
     }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
+
+  it("displays prominent nightly badges and top bar when running on a nightly build", async () => {
+    vi.mocked(updatesApi.getUpdateStatus).mockResolvedValue({
+      current_version: "3.4.0-nightly.1",
+      update: { state: "idle" },
+      waiting_for_jobs: false,
+    });
+    render(<App />);
+
+    // Top banner and sidebar indicator
+    expect(await screen.findByText(/ShaPrint Nightly/i)).toBeTruthy();
+    expect(screen.getByText("Pre-release Test Build")).toBeTruthy();
+    expect(screen.getByText("Nightly")).toBeTruthy();
+
+    // Settings page software updates panel
+    navigateTo("Settings");
+    expect(await screen.findByText("Nightly Channel")).toBeTruthy();
+    expect(screen.getByText("Nightly Channel Active")).toBeTruthy();
+  });
+
+  it("omits nightly branding and displays stable indicator when on a stable build", async () => {
+    vi.mocked(updatesApi.getUpdateStatus).mockResolvedValue({
+      current_version: "3.4.0",
+      update: { state: "idle" },
+      waiting_for_jobs: false,
+    });
+    render(<App />);
+
+    expect(screen.queryByText("Pre-release Test Build")).toBeNull();
+    expect(screen.queryByText("Nightly")).toBeNull();
+
+    navigateTo("Settings");
+    expect(await screen.findByText("Stable")).toBeTruthy();
+    expect(screen.queryByText("Nightly Channel Active")).toBeNull();
+  });
 });
 
 describe("workspace navigation", () => {

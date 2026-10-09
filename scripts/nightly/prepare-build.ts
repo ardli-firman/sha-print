@@ -31,6 +31,11 @@ export function updateProjectVersionAndEndpoint(
   // Update tauri.conf.json
   const tauri = JSON.parse(options.tauriConfContent);
   tauri.version = version;
+  if (version.includes("-nightly")) {
+    if (tauri.app?.windows?.[0]) {
+      tauri.app.windows[0].title = "ShaPrint (Nightly)";
+    }
+  }
   if (options.endpoint) {
     if (!tauri.plugins) tauri.plugins = {};
     if (!tauri.plugins.updater) tauri.plugins.updater = {};

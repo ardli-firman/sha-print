@@ -1,7 +1,9 @@
-import { Network, Printer, Settings2, ShieldAlert, Wrench } from "lucide-react";
+import { FlaskConical, Network, Printer, Settings2, ShieldAlert, Wrench } from "lucide-react";
 import { useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CLIENT_VERSION, isNightly } from "@/lib/version";
 import {
   AddPrinterDialog,
   InstalledClientQueuesPanel,
@@ -68,6 +70,8 @@ function App() {
   const clientQueues = useRecognisedClientQueues();
   const nearby = useNearbyServers();
   const updates = useUpdates();
+  const currentAppVersion = updates.status?.current_version || CLIENT_VERSION;
+  const isNightlyBuild = isNightly(currentAppVersion);
   const pageContent = PAGE_CONTENT[page];
 
   const hasFailedService =
@@ -111,8 +115,20 @@ function App() {
             <Printer size={19} strokeWidth={2.2} />
           </span>
           <span className="brand-copy">
-            <span className="brand-name">ShaPrint</span>
-            <span className="brand-caption">Windows print sharing</span>
+            <span className="flex items-center gap-1.5">
+              <span className="brand-name">ShaPrint</span>
+              {isNightlyBuild && (
+                <Badge
+                  variant="warning"
+                  className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border-amber-600/40 bg-amber-500/15 text-amber-900 dark:text-amber-200"
+                >
+                  Nightly
+                </Badge>
+              )}
+            </span>
+            <span className="brand-caption">
+              {isNightlyBuild ? `Nightly preview (v${currentAppVersion})` : "Windows print sharing"}
+            </span>
           </span>
         </div>
 
@@ -141,6 +157,21 @@ function App() {
       </aside>
 
       <main className="workspace">
+        {isNightlyBuild && (
+          <div
+            className="nightly-top-bar flex items-center justify-between px-4 py-1.5 border-b text-xs font-medium bg-amber-500/10 border-amber-500/25 text-amber-950 dark:text-amber-200"
+            role="status"
+            aria-label="Nightly preview build notice"
+          >
+            <div className="flex items-center gap-2">
+              <FlaskConical size={14} className="text-amber-600 dark:text-amber-400 shrink-0" aria-hidden="true" />
+              <span>
+                <strong className="font-semibold">ShaPrint Nightly</strong> (v{currentAppVersion}) &bull; Experimental tester channel
+              </span>
+            </div>
+            <span className="text-[11px] font-medium opacity-80 hidden sm:inline">Pre-release Test Build</span>
+          </div>
+        )}
         <header className="workspace-header">
           <div className="page-heading">
             <h1>{pageContent.title}</h1>
