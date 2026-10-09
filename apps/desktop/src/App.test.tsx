@@ -1399,7 +1399,7 @@ describe("nearby servers panel", () => {
           name: "DESKTOP-NEWER",
           address: "192.0.2.11:8631",
           printers: ["Canon"],
-          version: "3.4.0",
+          version: "4.0.0",
         },
         {
           name: "DESKTOP-LEGACY",
@@ -1432,7 +1432,7 @@ describe("nearby servers panel", () => {
 
     // Newer server displays version badge AND version-drift advisory badge
     expect(await within(dialog).findByText("DESKTOP-NEWER")).toBeTruthy();
-    expect(within(dialog).getByText("v3.4.0")).toBeTruthy();
+    expect(within(dialog).getByText("v4.0.0")).toBeTruthy();
     const driftBadge = within(dialog).getByText(/Newer server release/);
     expect(driftBadge).toBeTruthy();
 

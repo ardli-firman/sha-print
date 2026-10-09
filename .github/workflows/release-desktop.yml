@@ -3,7 +3,9 @@ name: Release Desktop
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
+      - '!*nightly*'
+      - '!*-*'
   workflow_dispatch:
     inputs:
       tag:
@@ -20,6 +22,15 @@ jobs:
       contents: write
 
     steps:
+      - name: Validate stable release tag
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name || inputs.tag }}"
+          echo "Validating release tag: $TAG"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' is not a valid stable version tag (expected format: vX.Y.Z). Nightly or prerelease tags cannot run the stable publishing workflow."
+            exit 1
+          fi
       - name: Checkout code
         uses: actions/checkout@v4
         with:
