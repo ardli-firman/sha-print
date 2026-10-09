@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { execGit } from "./git";
+import { execGh, execGit } from "./git";
 import { resolveAndVerifyCommit } from "./commit";
 import {
   calculateNextNightlyVersion,
@@ -171,6 +171,73 @@ export async function runCli(args: string[]): Promise<void> {
       feedHolderTag: feedTag,
     });
     console.log(`Pruned ${count} old nightly release(s)`);
+    return;
+  }
+
+  if (command === "trigger") {
+    const sourceSha = (getArgValue(args, "--source-sha") || "").trim();
+    const settingsRiskRaw = (getArgValue(args, "--settings-risk") || "").trim().toLowerCase();
+    const settingsRisk =
+      args.includes("--settings-risk") &&
+      (settingsRiskRaw === "" || settingsRiskRaw === "true" || settingsRiskRaw === "1");
+    const dryRun = args.includes("--dry-run");
+
+    if (!dryRun) {
+      try {
+        execGit("git fetch origin main --tags", rootDir);
+      } catch {
+        // Proceed with local refs if offline
+      }
+    }
+
+    const commitRes = resolveAndVerifyCommit({
+      cwd: rootDir,
+      sourceSha: sourceSha || undefined,
+      mainRef: "origin/main",
+    });
+
+    const currentMainBase = getCurrentBaseVersion(rootDir);
+    let commitBase: string | undefined = undefined;
+    try {
+      const pkgRaw = execGit(`git show "${commitRes.sha}:apps/desktop/package.json"`, rootDir);
+      commitBase = JSON.parse(pkgRaw).version;
+    } catch {
+      commitBase = currentMainBase;
+    }
+
+    const existingTags = getExistingTags(rootDir);
+    const nextVer = calculateNextNightlyVersion({
+      currentMainBaseVersion: currentMainBase,
+      commitBaseVersion: commitBase,
+      existingTagsOrVersions: existingTags,
+    });
+
+    console.log("==================================================");
+    console.log("  ShaPrint Manual Nightly Release Dispatch");
+    console.log("==================================================");
+    console.log(`  Target Commit : ${commitRes.shortSha} (${commitRes.sha})`);
+    console.log(`  Is main HEAD  : ${commitRes.isHead ? "Yes" : "No (historical commit)"}`);
+    console.log(`  Next Version  : ${nextVer.version} (tag: ${nextVer.tag})`);
+    console.log(`  Settings Risk : ${settingsRisk ? "Yes" : "No"}`);
+    console.log("==================================================");
+
+    const ghArgs = [
+      "workflow run nightly-desktop.yml --ref main",
+      sourceSha ? `-f source_sha="${commitRes.sha}"` : "",
+      settingsRisk ? `-f settings_risk="true"` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    if (dryRun) {
+      console.log(`[Dry Run] Would execute: gh ${ghArgs}`);
+      return;
+    }
+
+    execGh(ghArgs, rootDir);
+    console.log("\nNightly release workflow dispatched on GitHub Actions!");
+    console.log("Monitor progress with:");
+    console.log("  gh run list --workflow=nightly-desktop.yml --limit 5\n");
     return;
   }
 

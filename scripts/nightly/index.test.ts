@@ -2,19 +2,15 @@ import { describe, expect, it } from "bun:test";
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
 import { readFileSync, unlinkSync } from "node:fs";
+import { cleanGitEnv } from "./git";
 
 const rootDir = resolve(import.meta.dirname, "../..");
 
 function runCliCmd(cmdArgs: string): string {
-  const env = { ...process.env };
-  delete env.GIT_CONFIG_COUNT;
-  delete env.GIT_CONFIG_VALUE_0;
-  delete env.GIT_CONFIG_VALUE_1;
-
   return execSync(`bun run scripts/nightly/index.ts ${cmdArgs}`, {
     cwd: rootDir,
     encoding: "utf-8",
-    env,
+    env: cleanGitEnv(),
   }).trim();
 }
 
@@ -49,5 +45,11 @@ describe("nightly CLI commands", () => {
         unlinkSync(resolve(rootDir, tempFile));
       } catch {}
     }
+  });
+
+  it("runs trigger with --dry-run and prints workflow dispatch preview", () => {
+    const output = runCliCmd("trigger --dry-run");
+    expect(output).toContain("ShaPrint Manual Nightly Release Dispatch");
+    expect(output).toContain("workflow run nightly-desktop.yml --ref main");
   });
 });
