@@ -17,6 +17,8 @@ The current product architecture:
 
 Run `make release-nightly` to dispatch the manual workflow in `.github/workflows/nightly-desktop.yml`. The workflow generates release notes with `scripts/nightly/index.ts` and passes them as the `RELEASE_BODY` environment value. Its multiline environment entry uses a unique delimiter so notes without a final newline remain valid.
 
+Nightly source tags use the `github-actions[bot]` identity explicitly; GitHub-hosted runners do not provide a repository `user.name` and `user.email` by default.
+
 ## v2.0.0-community (LTS Archive)
 
 The legacy .NET 8 WPF application:
