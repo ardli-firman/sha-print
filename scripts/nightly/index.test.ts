@@ -47,6 +47,30 @@ describe("nightly CLI commands", () => {
     }
   });
 
+  it("writes release notes to a valid multiline GitHub environment entry", () => {
+    const tempFile = "test-notes-env-output.md";
+    const envFile = "test-notes-github-env";
+    try {
+      runCliCmd(
+        `generate-notes --version 3.4.0-nightly.1 --source-sha 4c9001d1234567890abcdef1234567890abcdef1 --out-file ${tempFile} --github-env-file ${envFile}`,
+      );
+      const notes = readFileSync(resolve(rootDir, tempFile), "utf-8");
+      const envText = readFileSync(resolve(rootDir, envFile), "utf-8");
+      const [header, ...lines] = envText.split("\n");
+      const delimiter = header.match(/^RELEASE_BODY<<(.+)$/)?.[1];
+      expect(delimiter).toBeDefined();
+      const delimiterIndex = lines.indexOf(delimiter ?? "");
+      expect(delimiterIndex).toBeGreaterThanOrEqual(0);
+      expect(lines.slice(0, delimiterIndex).join("\n")).toBe(notes);
+    } finally {
+      for (const file of [tempFile, envFile]) {
+        try {
+          unlinkSync(resolve(rootDir, file));
+        } catch {}
+      }
+    }
+  });
+
   it("runs trigger with --dry-run and prints workflow dispatch preview", () => {
     const output = runCliCmd("trigger --dry-run");
     expect(output).toContain("ShaPrint Manual Nightly Release Dispatch");

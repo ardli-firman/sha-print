@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { execGh, execGit } from "./git";
 import { resolveAndVerifyCommit } from "./commit";
@@ -168,6 +169,7 @@ export async function runCli(args: string[]): Promise<void> {
     const sourceSha = getArgValue(args, "--source-sha");
     const settingsRisk = args.includes("--settings-risk");
     const outFile = getArgValue(args, "--out-file");
+    const githubEnvFile = getArgValue(args, "--github-env-file");
 
     if (!version || !sourceSha) {
       throw new Error("--version and --source-sha are required for generate-notes");
@@ -191,6 +193,9 @@ export async function runCli(args: string[]): Promise<void> {
       console.log(`Wrote release notes to ${outFile}`);
     } else {
       console.log(notes);
+    }
+    if (githubEnvFile) {
+      appendReleaseBodyToGitHubEnv(resolve(rootDir, githubEnvFile), notes);
     }
     return;
   }
@@ -334,6 +339,10 @@ function getArgValue(args: string[], flag: string): string | null {
     return args[idx + 1];
   }
   return null;
+}
+function appendReleaseBodyToGitHubEnv(path: string, body: string): void {
+  const delimiter = `SHA_PRINT_${randomUUID()}`;
+  appendFileSync(path, `RELEASE_BODY<<${delimiter}\n${body}\n${delimiter}\n`, "utf-8");
 }
 
 if (import.meta.main) {
