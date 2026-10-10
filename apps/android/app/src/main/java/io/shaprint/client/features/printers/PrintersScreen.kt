@@ -8,30 +8,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import io.shaprint.client.core.domain.model.RequestedMedia
 import io.shaprint.client.core.domain.model.SharedPrinter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PrintersScreen(
-    onNavigateBack: () -> Unit,
-    onSelectPrinter: (SharedPrinter) -> Unit
+    uiState: PrintersUiState = PrintersUiState(),
+    onRefresh: () -> Unit = {},
+    onNavigateBack: () -> Unit = {},
+    onSelectPrinter: (SharedPrinter) -> Unit = {}
 ) {
-    val printers = remember {
-        mutableStateListOf(
-            SharedPrinter(
-                name = "Epson L3210 Series",
-                serverCanonicalAddress = "192.168.1.100:48631",
-                isOnline = true
-            ),
-            SharedPrinter(
-                name = "HP LaserJet Pro M404",
-                serverCanonicalAddress = "192.168.1.100:48631",
-                isOnline = true
-            )
-        )
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -39,6 +25,11 @@ fun PrintersScreen(
                 navigationIcon = {
                     TextButton(onClick = onNavigateBack) {
                         Text("Back")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = onRefresh, enabled = !uiState.isLoading) {
+                        Text("Refresh")
                     }
                 }
             )
@@ -51,30 +42,62 @@ fun PrintersScreen(
                 .padding(16.dp)
         ) {
             Text(
-                text = "Available Shared Printers",
+                text = "Available Shared Printers (${uiState.printers.size})",
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "Printers shared by your trusted servers on port 48631.",
+                text = "Queried dynamically from your trusted servers over IPPS port 48631.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            if (printers.isEmpty()) {
+            if (uiState.isLoading) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            if (uiState.errorMessage != null) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = uiState.errorMessage,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            if (uiState.printers.isEmpty() && !uiState.isLoading) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("No shared printers found on trusted servers.")
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("No shared printers found on trusted servers.")
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Ensure your trusted servers are running and sharing print queues.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
                 }
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.weight(1f)
                 ) {
-                    items(printers) { printer ->
+                    items(uiState.printers) { printer ->
                         Card(
                             onClick = { onSelectPrinter(printer) },
                             modifier = Modifier.fillMaxWidth()
@@ -82,7 +105,8 @@ fun PrintersScreen(
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
                                         text = printer.name,
@@ -99,9 +123,21 @@ fun PrintersScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.outline
                                 )
-                                Spacer(modifier = Modifier.height(6.dp))
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                val mediaNames = printer.capabilities.supportedMedia.map { it.displayName }
                                 Text(
-                                    text = "Supported: A4, Letter, F4/Folio (300 DPI PWG Raster)",
+                                    text = "Supported Media: ${mediaNames.joinToString(", ")}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                val colorNames = printer.capabilities.supportedColorModes.map { it.displayName }
+                                Text(
+                                    text = "Color Modes: ${colorNames.joinToString(", ")}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                val duplexNames = printer.capabilities.supportedDuplexModes.map { it.displayName }
+                                Text(
+                                    text = "Duplex: ${duplexNames.joinToString(", ")}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
