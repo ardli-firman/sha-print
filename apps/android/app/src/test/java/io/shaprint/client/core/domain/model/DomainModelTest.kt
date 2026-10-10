@@ -31,4 +31,23 @@ class DomainModelTest {
         assertEquals(RequestedMedia.NA_LETTER, RequestedMedia.fromIppName("na_letter_8.5x11in"))
         assertNotNull(RequestedMedia.fromIppName("na_legal_8.5x14in"))
     }
+
+    @Test
+    fun percentEncodesPrinterNameInPrintJobRequestUri() {
+        val requestWithSpaces = PrintJobRequest(
+            printerName = "HP LaserJet Pro MFP",
+            serverCanonicalAddress = "192.168.1.100:48631"
+        )
+        assertEquals("HP%20LaserJet%20Pro%20MFP", requestWithSpaces.encodedPrinterName)
+        assertEquals(
+            "ipp://192.168.1.100:48631/ipp/print/HP%20LaserJet%20Pro%20MFP",
+            requestWithSpaces.printerIppUri
+        )
+
+        val requestWithSymbols = PrintJobRequest(
+            printerName = "Queue#1/2 (Office)",
+            serverCanonicalAddress = "192.168.1.100:48631"
+        )
+        assertEquals("Queue%231%2F2%20%28Office%29", requestWithSymbols.encodedPrinterName)
+    }
 }

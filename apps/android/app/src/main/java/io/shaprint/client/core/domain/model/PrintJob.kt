@@ -27,8 +27,33 @@ data class PrintJobRequest(
     val copies: Int = 1,
     val fitToPage: Boolean = true
 ) {
+    val encodedPrinterName: String
+        get() = percentEncodeUriSegment(printerName)
+
     val printerIppUri: String
-        get() = "ipp://$serverCanonicalAddress/ipp/print/$printerName"
+        get() = "ipp://$serverCanonicalAddress/ipp/print/$encodedPrinterName"
+
+    companion object {
+        /**
+         * Percent-encodes a printer name segment per RFC 3986 matching the Rust server's `percent_encode`.
+         */
+        fun percentEncodeUriSegment(value: String): String {
+            val sb = StringBuilder(value.length)
+            for (byte in value.toByteArray(Charsets.UTF_8)) {
+                val b = byte.toInt() and 0xFF
+                val isUnreserved = (b in 'a'.code..'z'.code) ||
+                    (b in 'A'.code..'Z'.code) ||
+                    (b in '0'.code..'9'.code) ||
+                    b == '-'.code || b == '.'.code || b == '_'.code || b == '~'.code
+                if (isUnreserved) {
+                    sb.append(b.toChar())
+                } else {
+                    sb.append(String.format("%%%02X", b))
+                }
+            }
+            return sb.toString()
+        }
+    }
 }
 
 data class PrintJobProgress(

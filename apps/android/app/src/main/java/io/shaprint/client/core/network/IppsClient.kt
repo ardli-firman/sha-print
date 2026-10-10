@@ -1,22 +1,23 @@
 package io.shaprint.client.core.network
 
+import android.net.Uri
 import io.shaprint.client.core.domain.model.PrintJobRequest
 import io.shaprint.client.core.domain.model.SharedPrinter
 import io.shaprint.client.core.domain.model.TrustedServer
+import io.shaprint.client.core.ipp.IppConstants
 import io.shaprint.client.core.ipp.IppMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.HttpURLConnection
 import java.net.URL
 import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLException
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
@@ -45,6 +46,11 @@ class DefaultIppsClient : IppsClient {
         }
 
         val parsed = IppMessage.parseResponse(responseBytes, server.canonicalAddress)
+        if (parsed.statusCode != IppConstants.STATUS_OK &&
+            parsed.statusCode != IppConstants.STATUS_OK_IGNORED_OR_SUBSTITUTED
+        ) {
+            throw IOException("IPP query-printers failed with status: 0x${String.format("%04X", parsed.statusCode)}")
+        }
         parsed.printers
     }
 
@@ -58,7 +64,12 @@ class DefaultIppsClient : IppsClient {
             networkChannel = server.networkChannel
         )
 
-        val targetUrl = "https://${server.canonicalAddress}/ipp/print/${jobRequest.printerName}"
+        val encodedPrinterName = try {
+            Uri.encode(jobRequest.printerName) ?: jobRequest.encodedPrinterName
+        } catch (_: Throwable) {
+            jobRequest.encodedPrinterName
+        }
+        val targetUrl = "https://${server.canonicalAddress}/ipp/print/$encodedPrinterName"
         val responseBytes = postIpp(targetUrl, server.sha256Fingerprint, chunked = true) { os ->
             os.write(headerBytes)
             streamRasterPayload(os)
@@ -84,7 +95,7 @@ class DefaultIppsClient : IppsClient {
 
                 val actualFingerprint = TlsFingerprint.computeSha256(cert)
                 if (!TlsFingerprint.matches(actualFingerprint, expectedFingerprint)) {
-                    throw SSLException(
+                    throw CertificateException(
                         "Certificate fingerprint mismatch! Expected $expectedFingerprint but got $actualFingerprint"
                     )
                 }
