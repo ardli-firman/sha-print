@@ -16,7 +16,8 @@ class PwgRasterConstantsTest {
         assertEquals(3, PwgRasterConstants.BYTES_PER_PIXEL_SRGB)
         assertEquals(1, PwgRasterConstants.BYTES_PER_PIXEL_SGRAY)
 
-        val expectedSync = byteArrayOf('R'.code.toByte(), 'a'.code.toByte(), 'S'.code.toByte(), 't'.code.toByte())
+        val expectedSync = byteArrayOf('R'.code.toByte(), 'a'.code.toByte(), 'S'.code.toByte(), '2'.code.toByte())
         assertArrayEquals(expectedSync, PwgRasterConstants.SYNC_WORD)
+        assertEquals(1796, PwgRasterConstants.HEADER_BYTES)
     }
 }
