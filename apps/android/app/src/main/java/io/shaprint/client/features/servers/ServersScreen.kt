@@ -13,21 +13,14 @@ import io.shaprint.client.core.domain.model.TrustedServer
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ServersScreen(
-    onNavigateBack: () -> Unit,
-    onNavigateToPrinters: () -> Unit
+    uiState: ServersUiState = ServersUiState(),
+    onApprovePendingServer: () -> Unit = {},
+    onDismissReviewDialog: () -> Unit = {},
+    onUpdateChannelInput: (String) -> Unit = {},
+    onForgetServer: (String) -> Unit = {},
+    onNavigateBack: () -> Unit = {},
+    onNavigateToPrinters: () -> Unit = {}
 ) {
-    val trustedServers = remember {
-        mutableStateListOf(
-            TrustedServer(
-                host = "192.168.1.100",
-                port = 48631,
-                computerName = "OFFICE-PC",
-                sha256Fingerprint = "A1:B2:C3:D4:E5:F6:07:18:29:3A:4B:5C:6D:7E:8F:90:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0",
-                networkChannel = "default-channel"
-            )
-        )
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -68,30 +61,33 @@ fun ServersScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "Pinned Servers (${trustedServers.size})",
+                text = "Pinned Servers (${uiState.trustedServers.size})",
                 style = MaterialTheme.typography.titleMedium
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            if (trustedServers.isEmpty()) {
+            if (uiState.trustedServers.isEmpty()) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("No trusted servers configured yet.")
+                    Text("No trusted servers configured yet. Review a nearby server to trust it.")
                 }
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    items(trustedServers) { server ->
+                    items(uiState.trustedServers) { server ->
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
                                         text = server.computerName,
@@ -110,13 +106,27 @@ fun ServersScreen(
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = "Fingerprint: ${server.sha256Fingerprint.take(24)}...",
+                                    text = "Fingerprint: ${server.sha256Fingerprint}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 Text(
-                                    text = "Network Channel: ${if (server.networkChannel != null) "Configured" else "Missing"}",
+                                    text = "Network Channel: ${if (server.networkChannel != null) "Configured (Encrypted)" else "None"}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    TextButton(
+                                        onClick = { onForgetServer(server.canonicalAddress) },
+                                        colors = ButtonDefaults.textButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.error
+                                        )
+                                    ) {
+                                        Text("Forget Server")
+                                    }
+                                }
                             }
                         }
                     }
@@ -127,10 +137,100 @@ fun ServersScreen(
 
             Button(
                 onClick = onNavigateToPrinters,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                enabled = uiState.trustedServers.isNotEmpty()
             ) {
                 Text("Select Printer to Print")
             }
         }
+    }
+
+    // TOFU Review Dialog
+    if (uiState.pendingReviewServer != null) {
+        val server = uiState.pendingReviewServer
+        AlertDialog(
+            onDismissRequest = onDismissReviewDialog,
+            title = { Text("Trust Server: ${server.computerName}") },
+            text = {
+                Column {
+                    Text(
+                        text = "Address: ${server.canonicalAddress}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (uiState.inspectingFingerprint) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Inspecting TLS certificate on port ${server.port}...")
+                        }
+                    } else if (uiState.inspectionError != null) {
+                        Text(
+                            text = "Failed to inspect certificate: ${uiState.inspectionError}",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    } else if (uiState.inspectedFingerprint != null) {
+                        Text(
+                            text = "SHA-256 Certificate Fingerprint:",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = uiState.inspectedFingerprint,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
+
+                        if (uiState.securityAlert != null) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = uiState.securityAlert,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = uiState.channelInput,
+                            onValueChange = onUpdateChannelInput,
+                            label = { Text("Network Channel (Optional)") },
+                            placeholder = { Text("Enter shared secret") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = onApprovePendingServer,
+                    enabled = uiState.inspectedFingerprint != null
+                ) {
+                    Text("Approve & Trust")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissReviewDialog) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
