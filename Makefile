@@ -1,4 +1,4 @@
-.PHONY: help keys release-nightly release-patch release-minor release-major test typecheck check lint
+.PHONY: help keys release-nightly release-patch release-minor release-major test test-android typecheck check lint
 
 help:
 	@echo "Available commands in ShaPrint:"
@@ -8,6 +8,7 @@ help:
 	@echo "  make release-minor   - Bump minor version (x.Y+1.0), commit, and create git tag"
 	@echo "  make release-major   - Bump major version (X+1.0.0), commit, and create git tag"
 	@echo "  make test            - Run all frontend, backend, and nightly script tests"
+	@echo "  make test-android    - Run Android client unit tests"
 	@echo "  make typecheck       - Run frontend TypeScript typecheck"
 	@echo "  make lint            - Run cargo fmt check and cargo clippy"
 
@@ -30,6 +31,9 @@ test:
 	bun test scripts/nightly/
 	bun run --filter shaprint-desktop test
 	cd apps/desktop/src-tauri && cargo test
+
+test-android:
+	cd apps/android && ./gradlew test
 
 typecheck:
 	bun run --filter shaprint-desktop typecheck
