@@ -560,6 +560,60 @@ async fn f4_and_folio_media_reach_the_printer_adapter_unchanged() {
 }
 
 #[tokio::test]
+async fn custom_and_unlisted_media_sizes_reach_the_printer_adapter_unchanged() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    for media in [
+        "custom_100x150mm",
+        "custom_min_100x150mm",
+        "oe_photo-4x6_4x6in",
+        "iso_b5_176x250mm",
+    ] {
+        let mut body = vec![2, 0, 0, 2, 0, 0, 0, 9, 1];
+        text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
+        text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
+        text_attribute(&mut body, 0x45, "printer-uri", OFFICE_PRINTER_URI);
+        text_attribute(&mut body, 0x49, "document-format", "image/pwg-raster");
+        text_attribute(&mut body, 0x41, "network-channel", &secret);
+        body.push(0x02);
+        text_attribute(&mut body, 0x44, "media", media);
+        body.push(3);
+        body.extend(b"custom media document");
+
+        let response = send(&body, &shared, &channel, &submitter).await;
+        assert_eq!(ipp_status(&response), 0x0000, "media: {media}");
+    }
+
+    let submissions = submitter.0.lock().expect("reads fake submissions");
+    assert_eq!(submissions.len(), 4);
+    assert_eq!(
+        submissions[0].1.settings().media.as_deref(),
+        Some("custom_100x150mm")
+    );
+    assert_eq!(
+        submissions[1].1.settings().media.as_deref(),
+        Some("custom_min_100x150mm")
+    );
+    assert_eq!(
+        submissions[2].1.settings().media.as_deref(),
+        Some("oe_photo-4x6_4x6in")
+    );
+    assert_eq!(
+        submissions[3].1.settings().media.as_deref(),
+        Some("iso_b5_176x250mm")
+    );
+}
+
+#[tokio::test]
 async fn monochrome_and_bilevel_reach_the_printer_adapter_as_non_color() {
     let shared = Shared(vec![
         PrinterName::parse("Office Printer").expect("valid name")

@@ -31,6 +31,24 @@ fn requested_media_spec(media: &str) -> Result<MediaSpec, AppError> {
             long_tenths_mm: 3556,
             explicit_dimensions: false,
         }),
+        "na_ledger_11x17in" | "na_tabloid_11x17in" => Ok(MediaSpec {
+            paper_id: 3,
+            short_tenths_mm: 2794,
+            long_tenths_mm: 4318,
+            explicit_dimensions: false,
+        }),
+        "na_invoice_5.5x8.5in" => Ok(MediaSpec {
+            paper_id: 6,
+            short_tenths_mm: 1397,
+            long_tenths_mm: 2159,
+            explicit_dimensions: false,
+        }),
+        "na_executive_7.25x10.5in" => Ok(MediaSpec {
+            paper_id: 7,
+            short_tenths_mm: 1842,
+            long_tenths_mm: 2667,
+            explicit_dimensions: false,
+        }),
         "iso_a3_297x420mm" => Ok(MediaSpec {
             paper_id: 8,
             short_tenths_mm: 2970,
@@ -49,32 +67,179 @@ fn requested_media_spec(media: &str) -> Result<MediaSpec, AppError> {
             long_tenths_mm: 2100,
             explicit_dimensions: false,
         }),
+        "iso_a6_105x148mm" => Ok(MediaSpec {
+            paper_id: 70,
+            short_tenths_mm: 1050,
+            long_tenths_mm: 1480,
+            explicit_dimensions: false,
+        }),
+        "iso_b4_250x353mm" => Ok(MediaSpec {
+            paper_id: 12,
+            short_tenths_mm: 2500,
+            long_tenths_mm: 3530,
+            explicit_dimensions: true,
+        }),
+        "iso_b5_176x250mm" => Ok(MediaSpec {
+            paper_id: 13,
+            short_tenths_mm: 1760,
+            long_tenths_mm: 2500,
+            explicit_dimensions: true,
+        }),
+        "jis_b5_182x257mm" => Ok(MediaSpec {
+            paper_id: 13,
+            short_tenths_mm: 1820,
+            long_tenths_mm: 2570,
+            explicit_dimensions: false,
+        }),
         "na_foolscap_8.5x13in" => Ok(MediaSpec {
             paper_id: 14,
             short_tenths_mm: 2159,
             long_tenths_mm: 3302,
             explicit_dimensions: false,
         }),
-        "om_folio_210x330mm" => Ok(MediaSpec {
+        "om_folio_210x330mm" | "f4" | "F4" | "folio" | "Folio" => Ok(MediaSpec {
             paper_id: 14,
             short_tenths_mm: 2100,
             long_tenths_mm: 3300,
             explicit_dimensions: true,
         }),
-        _ => Err(AppError::invalid_input(
-            "the selected media size is not supported by the Windows adapter",
-        )),
+        "oe_photo-4x6_4x6in" | "na_index-4x6_4x6in" => Ok(MediaSpec {
+            paper_id: 256,
+            short_tenths_mm: 1016,
+            long_tenths_mm: 1524,
+            explicit_dimensions: true,
+        }),
+        "na_5x7_5x7in" => Ok(MediaSpec {
+            paper_id: 256,
+            short_tenths_mm: 1270,
+            long_tenths_mm: 1778,
+            explicit_dimensions: true,
+        }),
+        "iso_dl_110x220mm" => Ok(MediaSpec {
+            paper_id: 27,
+            short_tenths_mm: 1100,
+            long_tenths_mm: 2200,
+            explicit_dimensions: false,
+        }),
+        "iso_c5_162x229mm" => Ok(MediaSpec {
+            paper_id: 28,
+            short_tenths_mm: 1620,
+            long_tenths_mm: 2290,
+            explicit_dimensions: false,
+        }),
+        "na_number-10_4.125x9.5in" => Ok(MediaSpec {
+            paper_id: 20,
+            short_tenths_mm: 1048,
+            long_tenths_mm: 2413,
+            explicit_dimensions: false,
+        }),
+        "na_monarch_3.875x7.5in" => Ok(MediaSpec {
+            paper_id: 37,
+            short_tenths_mm: 984,
+            long_tenths_mm: 1905,
+            explicit_dimensions: false,
+        }),
+        other => {
+            if let Some((short, long)) = parse_media_dimensions(other) {
+                let (paper_id, explicit) =
+                    match_standard_paper_id(short, long).unwrap_or((256, true));
+                Ok(MediaSpec {
+                    paper_id,
+                    short_tenths_mm: short,
+                    long_tenths_mm: long,
+                    explicit_dimensions: explicit,
+                })
+            } else {
+                Err(AppError::invalid_input(
+                    "the selected media size is not supported by the Windows adapter",
+                ))
+            }
+        }
     }
+}
+
+fn parse_media_dimensions(media: &str) -> Option<(i16, i16)> {
+    let (dim_str, scale) = if let Some(s) = media.strip_suffix("mm") {
+        let s = s.strip_suffix("_100th-").unwrap_or(s);
+        (s, 10.0)
+    } else if let Some(s) = media.strip_suffix("cm") {
+        (s, 100.0)
+    } else {
+        let s = media.strip_suffix("in")?;
+        (s, 254.0)
+    };
+
+    let candidate = dim_str.rsplit('_').next().unwrap_or(dim_str);
+    let (w_str, h_str) = if let Some((w, h)) = candidate.split_once('x') {
+        (w.trim_start_matches(|c: char| !c.is_ascii_digit()), h)
+    } else {
+        let h_idx = candidate.find('h')?;
+        let (w, h) = candidate.split_at(h_idx);
+        (w.trim_start_matches(|c: char| !c.is_ascii_digit()), &h[1..])
+    };
+
+    let w = w_str.parse::<f64>().ok()?;
+    let h = h_str.parse::<f64>().ok()?;
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+
+    let d1 = (w * scale).round() as i16;
+    let d2 = (h * scale).round() as i16;
+    if d1 <= 0 || d2 <= 0 {
+        return None;
+    }
+
+    Some((d1.min(d2), d1.max(d2)))
+}
+
+fn match_standard_paper_id(short: i16, long: i16) -> Option<(i16, bool)> {
+    const TOLERANCE: i16 = 5;
+    for (id, s, l, explicit) in [
+        (9, 2100, 2970, false),  // A4
+        (1, 2159, 2794, false),  // Letter
+        (5, 2159, 3556, false),  // Legal
+        (14, 2100, 3300, true),  // Folio F4
+        (14, 2159, 3302, false), // Foolscap
+        (8, 2970, 4200, false),  // A3
+        (11, 1480, 2100, false), // A5
+        (70, 1050, 1480, false), // A6
+        (13, 1760, 2500, true),  // ISO B5
+        (13, 1820, 2570, false), // JIS B5
+        (12, 2500, 3530, true),  // ISO B4
+        (7, 1842, 2667, false),  // Executive
+        (6, 1397, 2159, false),  // Statement
+        (3, 2794, 4318, false),  // Ledger / Tabloid
+        (27, 1100, 2200, false), // DL Envelope
+        (28, 1620, 2290, false), // C5 Envelope
+        (20, 1048, 2413, false), // #10 Envelope
+        (37, 984, 1905, false),  // Monarch Envelope
+    ] {
+        if (short - s).abs() <= TOLERANCE && (long - l).abs() <= TOLERANCE {
+            return Some((id, explicit));
+        }
+    }
+    None
 }
 
 fn paper_id_dimensions_tenths_mm(paper_id: i16) -> Option<(i16, i16)> {
     match paper_id {
         1 => Some((2159, 2794)),
+        3 => Some((2794, 4318)),
         5 => Some((2159, 3556)),
+        6 => Some((1397, 2159)),
+        7 => Some((1842, 2667)),
         8 => Some((2970, 4200)),
         9 => Some((2100, 2970)),
         11 => Some((1480, 2100)),
+        12 => Some((2500, 3530)),
+        13 => Some((1820, 2570)),
         14 => Some((2159, 3302)),
+        20 => Some((1048, 2413)),
+        27 => Some((1100, 2200)),
+        28 => Some((1620, 2290)),
+        37 => Some((984, 1905)),
+        70 => Some((1050, 1480)),
         _ => None,
     }
 }
@@ -96,8 +261,12 @@ fn loaded_media_dimensions_tenths_mm(dev_mode: &[u8], fields: u32) -> Option<(i1
 
 fn loaded_media_fits_requested(loaded: (i16, i16), requested: &MediaSpec) -> bool {
     const TOLERANCE_TENTHS_MM: i16 = 5;
-    loaded.0 + TOLERANCE_TENTHS_MM >= requested.short_tenths_mm
-        && loaded.1 + TOLERANCE_TENTHS_MM >= requested.long_tenths_mm
+    // ADR 0010: Preserve a loaded Folio/F4 sheet when an A4 document is printed onto it,
+    // so physical inkjet feed length and landscape coordinate origins match the physical sheet.
+    let is_a4_requested = (requested.short_tenths_mm - 2100).abs() <= TOLERANCE_TENTHS_MM
+        && (requested.long_tenths_mm - 2970).abs() <= TOLERANCE_TENTHS_MM;
+    let is_folio_loaded = (loaded.0 - 2100).abs() <= 60 && loaded.1 >= 3290;
+    is_a4_requested && is_folio_loaded
 }
 
 pub(super) fn apply_settings_to_dev_mode(
@@ -388,5 +557,88 @@ mod tests {
         apply_settings_to_dev_mode(&mut devmode, &crate::application::PrintSettings::default())
             .expect("keeps defaults");
         assert_eq!(devmode, before);
+    }
+
+    #[test]
+    fn custom_media_size_applies_dmpaper_user_and_dimensions() {
+        for (media_name, expected_short, expected_long) in [
+            ("custom_100x150mm", 1000i16, 1500i16),
+            ("custom_min_100x150mm", 1000i16, 1500i16),
+            ("custom_4x6in", 1016i16, 1524i16),
+        ] {
+            let mut devmode = vec![0u8; 220];
+            let settings = crate::application::PrintSettings {
+                media: Some(media_name.to_owned()),
+                ..Default::default()
+            };
+            apply_settings_to_dev_mode(&mut devmode, &settings).expect("applies custom media size");
+            let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+            assert_eq!(fields, DM_PAPERSIZE | DM_PAPERLENGTH | DM_PAPERWIDTH);
+            assert_eq!(
+                i16::from_ne_bytes(devmode[78..80].try_into().unwrap()),
+                256 // DMPAPER_USER
+            );
+            assert_eq!(
+                i16::from_ne_bytes(devmode[80..82].try_into().unwrap()),
+                expected_long
+            );
+            assert_eq!(
+                i16::from_ne_bytes(devmode[82..84].try_into().unwrap()),
+                expected_short
+            );
+        }
+    }
+
+    #[test]
+    fn an_a5_job_overwrites_loaded_a4_queue_settings() {
+        let mut devmode = vec![0u8; 220];
+        // Queue default: A4 (DMPAPER_A4 = 9)
+        devmode[72..76].copy_from_slice(&DM_PAPERSIZE.to_ne_bytes());
+        devmode[78..80].copy_from_slice(&9i16.to_ne_bytes());
+        let settings = crate::application::PrintSettings {
+            media: Some("iso_a5_148x210mm".to_owned()),
+            ..Default::default()
+        };
+        apply_settings_to_dev_mode(&mut devmode, &settings)
+            .expect("applies A5 instead of keeping A4");
+        let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+        assert_eq!(fields, DM_PAPERSIZE);
+        assert_eq!(i16::from_ne_bytes(devmode[78..80].try_into().unwrap()), 11);
+        // DMPAPER_A5
+    }
+
+    #[test]
+    fn custom_paper_overwrites_loaded_a4_queue_settings() {
+        let mut devmode = vec![0u8; 220];
+        // Queue default: A4 (DMPAPER_A4 = 9)
+        devmode[72..76].copy_from_slice(&DM_PAPERSIZE.to_ne_bytes());
+        devmode[78..80].copy_from_slice(&9i16.to_ne_bytes());
+        let settings = crate::application::PrintSettings {
+            media: Some("custom_100x150mm".to_owned()),
+            ..Default::default()
+        };
+        apply_settings_to_dev_mode(&mut devmode, &settings)
+            .expect("applies custom size instead of keeping A4");
+        let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+        assert_eq!(fields, DM_PAPERSIZE | DM_PAPERLENGTH | DM_PAPERWIDTH);
+        assert_eq!(i16::from_ne_bytes(devmode[78..80].try_into().unwrap()), 256);
+        assert_eq!(
+            i16::from_ne_bytes(devmode[80..82].try_into().unwrap()),
+            1500
+        );
+        assert_eq!(
+            i16::from_ne_bytes(devmode[82..84].try_into().unwrap()),
+            1000
+        );
+    }
+
+    #[test]
+    fn invalid_media_string_without_dimensions_is_rejected() {
+        let mut devmode = vec![0u8; 120];
+        let settings = crate::application::PrintSettings {
+            media: Some("unsupported_media_format".to_owned()),
+            ..Default::default()
+        };
+        assert!(apply_settings_to_dev_mode(&mut devmode, &settings).is_err());
     }
 }
