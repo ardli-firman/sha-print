@@ -164,8 +164,11 @@ fun PrintPreviewScreen(
                 Text("Requested Media")
                 AssistChip(
                     onClick = {
-                        val nextIdx = (supportedMedia.indexOf(uiState.selectedMedia) + 1) % supportedMedia.size
-                        onUpdateMedia(supportedMedia[nextIdx])
+                        if (supportedMedia.isNotEmpty()) {
+                            val currentIdx = supportedMedia.indexOf(uiState.selectedMedia).coerceAtLeast(0)
+                            val nextIdx = (currentIdx + 1) % supportedMedia.size
+                            onUpdateMedia(supportedMedia[nextIdx])
+                        }
                     },
                     label = { Text(uiState.selectedMedia.displayName) }
                 )
@@ -180,8 +183,11 @@ fun PrintPreviewScreen(
                 Text("Color Mode")
                 AssistChip(
                     onClick = {
-                        val nextIdx = (supportedColors.indexOf(uiState.colorMode) + 1) % supportedColors.size
-                        onUpdateColorMode(supportedColors[nextIdx])
+                        if (supportedColors.isNotEmpty()) {
+                            val currentIdx = supportedColors.indexOf(uiState.colorMode).coerceAtLeast(0)
+                            val nextIdx = (currentIdx + 1) % supportedColors.size
+                            onUpdateColorMode(supportedColors[nextIdx])
+                        }
                     },
                     label = { Text(uiState.colorMode.displayName) }
                 )
@@ -196,8 +202,11 @@ fun PrintPreviewScreen(
                 Text("Two-Sided (Duplex)")
                 AssistChip(
                     onClick = {
-                        val nextIdx = (supportedDuplex.indexOf(uiState.duplexMode) + 1) % supportedDuplex.size
-                        onUpdateDuplexMode(supportedDuplex[nextIdx])
+                        if (supportedDuplex.isNotEmpty()) {
+                            val currentIdx = supportedDuplex.indexOf(uiState.duplexMode).coerceAtLeast(0)
+                            val nextIdx = (currentIdx + 1) % supportedDuplex.size
+                            onUpdateDuplexMode(supportedDuplex[nextIdx])
+                        }
                     },
                     label = { Text(uiState.duplexMode.displayName) }
                 )

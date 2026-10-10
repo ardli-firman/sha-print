@@ -95,10 +95,14 @@ object DnsPacket {
         val txtKeyValues = mutableMapOf<String, String>()
         val advertisedQueues = mutableListOf<String>()
         var isGoodbye = false
+        var hasShaPrintRecord = false
 
         for (i in 0 until totalRecords) {
             if (!buffer.hasRemaining()) break
             val name = readDomainName(buffer, data) ?: break
+            if (name.contains("_shaprint-ipps._tcp.local", ignoreCase = true)) {
+                hasShaPrintRecord = true
+            }
             if (buffer.remaining() < 10) break
             val type = buffer.short.toInt() and 0xFFFF
             val recordClass = buffer.short.toInt() and 0x7FFF
@@ -115,6 +119,9 @@ object DnsPacket {
             when (type) {
                 TYPE_PTR -> {
                     ptrInstance = readDomainName(buffer, data)
+                    if (ptrInstance?.contains("_shaprint-ipps._tcp.local", ignoreCase = true) == true) {
+                        hasShaPrintRecord = true
+                    }
                 }
                 TYPE_SRV -> {
                     if (rdLength >= 6) {
@@ -161,6 +168,8 @@ object DnsPacket {
             buffer.position(rdataStart + rdLength)
         }
 
+        if (!hasShaPrintRecord) return null
+
         val effectivePort = srvPort ?: 48631
         val effectiveHost = resolvedIp ?: senderAddress.hostAddress ?: "127.0.0.1"
         val computerName = txtKeyValues["name"]
@@ -198,7 +207,7 @@ object DnsPacket {
                     savedPos = buffer.position()
                     jumped = true
                 }
-                if (offset >= fullData.size) return null
+                if (offset >= buffer.limit()) return null
                 buffer.position(offset)
             } else {
                 if (buffer.remaining() < len) return null

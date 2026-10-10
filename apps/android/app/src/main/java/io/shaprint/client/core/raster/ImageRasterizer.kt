@@ -43,55 +43,57 @@ object ImageRasterizer {
 
         // Create canvas of page dimensions
         val pageBitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(pageBitmap)
-        canvas.drawColor(Color.WHITE) // Blank paper background
+        try {
+            val canvas = Canvas(pageBitmap)
+            canvas.drawColor(Color.WHITE) // Blank paper background
 
-        // Calculate scaling
-        val srcW = bitmap.width.toFloat()
-        val srcH = bitmap.height.toFloat()
-        val scale = if (fitToPage) {
-            minOf(widthPx / srcW, heightPx / srcH)
-        } else {
-            maxOf(widthPx / srcW, heightPx / srcH)
-        }
-
-        val destW = (srcW * scale).roundToInt()
-        val destH = (srcH * scale).roundToInt()
-        val destX = (widthPx - destW) / 2
-        val destY = (heightPx - destH) / 2
-
-        val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
-        canvas.drawBitmap(bitmap, null, Rect(destX, destY, destX + destW, destY + destH), paint)
-
-        // Stream row by row
-        val rowPixelsInts = IntArray(widthPx)
-        val rowPixelsBytes = ByteArray(widthPx * colors)
-
-        for (y in 0 until heightPx) {
-            pageBitmap.getPixels(rowPixelsInts, 0, widthPx, 0, y, widthPx, 1)
-
-            if (colorMode == PrintColorMode.COLOR) {
-                for (x in 0 until widthPx) {
-                    val pixel = rowPixelsInts[x]
-                    rowPixelsBytes[x * 3] = ((pixel shr 16) and 0xFF).toByte()     // R
-                    rowPixelsBytes[x * 3 + 1] = ((pixel shr 8) and 0xFF).toByte()  // G
-                    rowPixelsBytes[x * 3 + 2] = (pixel and 0xFF).toByte()         // B
-                }
+            // Calculate scaling
+            val srcW = bitmap.width.toFloat()
+            val srcH = bitmap.height.toFloat()
+            val scale = if (fitToPage) {
+                minOf(widthPx / srcW, heightPx / srcH)
             } else {
-                for (x in 0 until widthPx) {
-                    val pixel = rowPixelsInts[x]
-                    val r = (pixel shr 16) and 0xFF
-                    val g = (pixel shr 8) and 0xFF
-                    val b = pixel and 0xFF
-                    // ITU-R BT.601 luminance
-                    val gray = (0.299 * r + 0.587 * g + 0.114 * b).roundToInt().coerceIn(0, 255)
-                    rowPixelsBytes[x] = gray.toByte()
-                }
+                maxOf(widthPx / srcW, heightPx / srcH)
             }
 
-            PwgEncoder.encodeRow(rowPixelsBytes, colors, out)
-        }
+            val destW = (srcW * scale).roundToInt()
+            val destH = (srcH * scale).roundToInt()
+            val destX = (widthPx - destW) / 2
+            val destY = (heightPx - destH) / 2
 
-        pageBitmap.recycle()
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
+            canvas.drawBitmap(bitmap, null, Rect(destX, destY, destX + destW, destY + destH), paint)
+
+            // Stream row by row
+            val rowPixelsInts = IntArray(widthPx)
+            val rowPixelsBytes = ByteArray(widthPx * colors)
+
+            for (y in 0 until heightPx) {
+                pageBitmap.getPixels(rowPixelsInts, 0, widthPx, 0, y, widthPx, 1)
+
+                if (colorMode == PrintColorMode.COLOR) {
+                    for (x in 0 until widthPx) {
+                        val pixel = rowPixelsInts[x]
+                        rowPixelsBytes[x * 3] = ((pixel shr 16) and 0xFF).toByte()     // R
+                        rowPixelsBytes[x * 3 + 1] = ((pixel shr 8) and 0xFF).toByte()  // G
+                        rowPixelsBytes[x * 3 + 2] = (pixel and 0xFF).toByte()         // B
+                    }
+                } else {
+                    for (x in 0 until widthPx) {
+                        val pixel = rowPixelsInts[x]
+                        val r = (pixel shr 16) and 0xFF
+                        val g = (pixel shr 8) and 0xFF
+                        val b = pixel and 0xFF
+                        // ITU-R BT.601 luminance
+                        val gray = (0.299 * r + 0.587 * g + 0.114 * b).roundToInt().coerceIn(0, 255)
+                        rowPixelsBytes[x] = gray.toByte()
+                    }
+                }
+
+                PwgEncoder.encodeRow(rowPixelsBytes, colors, out)
+            }
+        } finally {
+            pageBitmap.recycle()
+        }
     }
 }

@@ -41,6 +41,8 @@ class PrintersViewModel(
                     try {
                         val queried = ippsClient.queryPrinters(server)
                         allPrinters.addAll(queried)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         // Mark server printers as offline or surface note
                     }
@@ -52,6 +54,8 @@ class PrintersViewModel(
                         isLoading = false
                     )
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(

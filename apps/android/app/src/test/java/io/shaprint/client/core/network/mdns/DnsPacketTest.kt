@@ -123,6 +123,57 @@ class DnsPacketTest {
         assertNull(DnsPacket.parseResponse(ByteArray(0), 0, sender))
     }
 
+    @Test
+    fun ignoresNonShaPrintMdnsResponses() {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+
+        dos.writeShort(0x0000)
+        dos.writeShort(0x8400)
+        dos.writeShort(0)
+        dos.writeShort(1)
+        dos.writeShort(0)
+        dos.writeShort(0)
+
+        writeDomainName(dos, "_googlecast._tcp.local")
+        dos.writeShort(DnsPacket.TYPE_PTR)
+        dos.writeShort(DnsPacket.CLASS_IN)
+        dos.writeInt(120)
+        val ptrTarget = encodeDomainName("LivingRoom-TV._googlecast._tcp.local")
+        dos.writeShort(ptrTarget.size)
+        dos.write(ptrTarget)
+
+        val packetData = baos.toByteArray()
+        val sender = InetAddress.getByName("192.168.1.77")
+
+        assertNull(DnsPacket.parseResponse(packetData, packetData.size, sender))
+    }
+
+    @Test
+    fun rejectsOutOfBoundsCompressionPointerBeyondPacketLength() {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+
+        dos.writeShort(0x0000)
+        dos.writeShort(0x8400)
+        dos.writeShort(0)
+        dos.writeShort(1)
+        dos.writeShort(0)
+        dos.writeShort(0)
+
+        // Compression pointer pointing to offset 300 (0xC12C), which is < 4096 buffer size but > packet length
+        dos.writeByte(0xC1)
+        dos.writeByte(0x2C)
+
+        val smallPacket = baos.toByteArray()
+        val reusableBuffer = ByteArray(4096)
+        System.arraycopy(smallPacket, 0, reusableBuffer, 0, smallPacket.size)
+
+        val sender = InetAddress.getByName("192.168.1.88")
+        // Should return null cleanly without throwing IllegalArgumentException
+        assertNull(DnsPacket.parseResponse(reusableBuffer, smallPacket.size, sender))
+    }
+
     private fun writeDomainName(dos: DataOutputStream, domain: String) {
         val bytes = encodeDomainName(domain)
         dos.write(bytes)

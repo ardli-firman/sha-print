@@ -11,7 +11,8 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 class KeystoreCrypto(
-    private val keyAlias: String = "ShaPrintTrustStoreKey"
+    private val keyAlias: String = "ShaPrintTrustStoreKey",
+    private val allowInMemoryFallbackForTest: Boolean = false
 ) {
     private val keyStoreType = "AndroidKeyStore"
     private val cipherTransformation = "AES/GCM/NoPadding"
@@ -37,12 +38,15 @@ class KeystoreCrypto(
             } else {
                 keyStore.getKey(keyAlias, null) as SecretKey
             }
-        } catch (_: Exception) {
-            // Fallback for JVM Unit Tests where AndroidKeyStore provider is absent
-            fallbackJvmKey ?: run {
-                val keyGen = KeyGenerator.getInstance("AES")
-                keyGen.init(256)
-                keyGen.generateKey().also { fallbackJvmKey = it }
+        } catch (e: Exception) {
+            if (allowInMemoryFallbackForTest) {
+                fallbackJvmKey ?: run {
+                    val keyGen = KeyGenerator.getInstance("AES")
+                    keyGen.init(256)
+                    keyGen.generateKey().also { fallbackJvmKey = it }
+                }
+            } else {
+                throw SecurityException("Failed to initialize Android Keystore: ${e.message}", e)
             }
         }
     }

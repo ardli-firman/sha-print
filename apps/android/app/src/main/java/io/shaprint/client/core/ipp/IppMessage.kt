@@ -238,7 +238,8 @@ object IppMessage {
             // Attribute
             if (buffer.remaining() < 2) break
             val nameLen = buffer.short.toInt() and 0xFFFF
-            val attrName = if (nameLen > 0 && buffer.remaining() >= nameLen) {
+            if (buffer.remaining() < nameLen) break
+            val attrName = if (nameLen > 0) {
                 val nameBytes = ByteArray(nameLen)
                 buffer.get(nameBytes)
                 String(nameBytes, Charsets.UTF_8).also { lastAttributeName = it }

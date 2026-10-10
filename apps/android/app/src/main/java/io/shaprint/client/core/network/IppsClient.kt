@@ -110,24 +110,28 @@ class DefaultIppsClient : IppsClient {
         connection.setRequestProperty("Content-Type", "application/ipp")
         connection.setRequestProperty("User-Agent", "ShaPrint-Android/1.0")
 
-        connection.outputStream.use { os: OutputStream ->
-            writeBody(os)
-            os.flush()
-        }
+        try {
+            connection.outputStream.use { os: OutputStream ->
+                writeBody(os)
+                os.flush()
+            }
 
-        val responseCode = connection.responseCode
-        if (responseCode !in 200..299) {
-            throw Exception("IPPS request failed with HTTP status $responseCode")
-        }
+            val responseCode = connection.responseCode
+            if (responseCode !in 200..299) {
+                throw Exception("IPPS request failed with HTTP status $responseCode")
+            }
 
-        val inputStream: InputStream = connection.inputStream
-        val baos = ByteArrayOutputStream()
-        val buffer = ByteArray(4096)
-        var bytesRead: Int
-        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-            baos.write(buffer, 0, bytesRead)
+            return connection.inputStream.use { inputStream: InputStream ->
+                val baos = ByteArrayOutputStream()
+                val buffer = ByteArray(4096)
+                var bytesRead: Int
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    baos.write(buffer, 0, bytesRead)
+                }
+                baos.toByteArray()
+            }
+        } finally {
+            connection.disconnect()
         }
-
-        return baos.toByteArray()
     }
 }

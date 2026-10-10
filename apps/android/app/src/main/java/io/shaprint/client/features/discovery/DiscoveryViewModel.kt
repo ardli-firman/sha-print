@@ -6,6 +6,7 @@ import io.shaprint.client.core.domain.model.NearbyServer
 import io.shaprint.client.core.network.Ports
 import io.shaprint.client.core.network.UnicastProbe
 import io.shaprint.client.core.network.mdns.MdnsScanner
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,6 +55,8 @@ class DiscoveryViewModel(
                         current.copy(nearbyServers = updatedList)
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.message ?: "Discovery scan failed") }
             } finally {

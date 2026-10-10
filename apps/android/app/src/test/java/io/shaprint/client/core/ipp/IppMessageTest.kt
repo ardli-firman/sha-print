@@ -110,6 +110,26 @@ class IppMessageTest {
         assertFalse(hp.capabilities.supportedColorModes.contains(PrintColorMode.COLOR))
     }
 
+    @Test
+    fun stopsParsingOnTruncatedAttributeNameInsteadOfMisinterpretingAs1SetOf() {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+
+        dos.writeShort(0x0200)
+        dos.writeShort(0x0000)
+        dos.writeInt(1)
+        dos.writeByte(0x04) // Printer attributes group
+        writeAttr(dos, 0x42, "printer-name", "Valid-Printer")
+
+        // Write truncated attribute with nameLen = 50, but only 3 bytes remaining
+        dos.writeByte(0x44)
+        dos.writeShort(50)
+        dos.writeBytes("abc")
+
+        val parsed = IppMessage.parseResponse(baos.toByteArray(), "192.168.1.100:48631")
+        assertEquals(0, parsed.printers.size)
+    }
+
     private fun writeAttr(dos: DataOutputStream, tag: Byte, name: String, value: String) {
         dos.writeByte(tag.toInt())
         val nameBytes = name.toByteArray(Charsets.UTF_8)

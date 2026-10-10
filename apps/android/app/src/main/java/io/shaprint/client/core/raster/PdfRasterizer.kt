@@ -46,37 +46,39 @@ object PdfRasterizer {
 
                 // Render page to single-page temporary bitmap
                 val pageBitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
-                val canvas = Canvas(pageBitmap)
-                canvas.drawColor(Color.WHITE)
+                try {
+                    val canvas = Canvas(pageBitmap)
+                    canvas.drawColor(Color.WHITE)
 
-                page.render(pageBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+                    page.render(pageBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
 
-                // Stream rows with PackBits compression
-                for (y in 0 until heightPx) {
-                    pageBitmap.getPixels(rowPixelsInts, 0, widthPx, 0, y, widthPx, 1)
+                    // Stream rows with PackBits compression
+                    for (y in 0 until heightPx) {
+                        pageBitmap.getPixels(rowPixelsInts, 0, widthPx, 0, y, widthPx, 1)
 
-                    if (colorMode == PrintColorMode.COLOR) {
-                        for (x in 0 until widthPx) {
-                            val pixel = rowPixelsInts[x]
-                            rowPixelsBytes[x * 3] = ((pixel shr 16) and 0xFF).toByte()
-                            rowPixelsBytes[x * 3 + 1] = ((pixel shr 8) and 0xFF).toByte()
-                            rowPixelsBytes[x * 3 + 2] = (pixel and 0xFF).toByte()
+                        if (colorMode == PrintColorMode.COLOR) {
+                            for (x in 0 until widthPx) {
+                                val pixel = rowPixelsInts[x]
+                                rowPixelsBytes[x * 3] = ((pixel shr 16) and 0xFF).toByte()
+                                rowPixelsBytes[x * 3 + 1] = ((pixel shr 8) and 0xFF).toByte()
+                                rowPixelsBytes[x * 3 + 2] = (pixel and 0xFF).toByte()
+                            }
+                        } else {
+                            for (x in 0 until widthPx) {
+                                val pixel = rowPixelsInts[x]
+                                val r = (pixel shr 16) and 0xFF
+                                val g = (pixel shr 8) and 0xFF
+                                val b = pixel and 0xFF
+                                val gray = (0.299 * r + 0.587 * g + 0.114 * b).roundToInt().coerceIn(0, 255)
+                                rowPixelsBytes[x] = gray.toByte()
+                            }
                         }
-                    } else {
-                        for (x in 0 until widthPx) {
-                            val pixel = rowPixelsInts[x]
-                            val r = (pixel shr 16) and 0xFF
-                            val g = (pixel shr 8) and 0xFF
-                            val b = pixel and 0xFF
-                            val gray = (0.299 * r + 0.587 * g + 0.114 * b).roundToInt().coerceIn(0, 255)
-                            rowPixelsBytes[x] = gray.toByte()
-                        }
+
+                        PwgEncoder.encodeRow(rowPixelsBytes, colors, out)
                     }
-
-                    PwgEncoder.encodeRow(rowPixelsBytes, colors, out)
+                } finally {
+                    pageBitmap.recycle()
                 }
-
-                pageBitmap.recycle()
             } finally {
                 page.close()
             }

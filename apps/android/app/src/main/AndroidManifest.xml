@@ -28,7 +28,7 @@
         <service
             android:name=".features.print.PrintJobForegroundService"
             android:exported="false"
-            android:foregroundServiceType="shortService" />
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".features.printservice.ShaPrintSystemPrintService"
