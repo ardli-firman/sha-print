@@ -13,22 +13,17 @@ import io.shaprint.client.core.domain.model.NearbyServer
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiscoveryScreen(
-    onNavigateToServers: () -> Unit,
-    onNavigateToPrinters: () -> Unit,
+    uiState: DiscoveryUiState = DiscoveryUiState(),
+    onStartScan: () -> Unit = {},
+    onOpenManualDialog: () -> Unit = {},
+    onDismissManualDialog: () -> Unit = {},
+    onUpdateManualHost: (String) -> Unit = {},
+    onUpdateManualPort: (String) -> Unit = {},
+    onSubmitManualServer: () -> Unit = {},
+    onNavigateToServers: () -> Unit = {},
+    onNavigateToPrinters: () -> Unit = {},
     onServerClick: (NearbyServer) -> Unit = {}
 ) {
-    var isScanning by remember { mutableStateOf(false) }
-    val nearbyServers = remember {
-        mutableStateListOf(
-            NearbyServer(
-                host = "192.168.1.100",
-                port = 48631,
-                computerName = "OFFICE-PC",
-                advertisedQueues = listOf("Epson-L3210", "HP-LaserJet")
-            )
-        )
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -58,9 +53,9 @@ fun DiscoveryScreen(
                         text = "A nearby server is a hint to review, never a trusted server.",
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Multicast DNS discovery runs on UDP port 48633.",
+                        text = "Discovery uses UDP 48633 (_shaprint-ipps._tcp.local.) with MulticastLock.",
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
@@ -68,57 +63,92 @@ fun DiscoveryScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            if (uiState.isScanning) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Discovered on Wi-Fi (${nearbyServers.size})",
+                    text = "Discovered (${uiState.nearbyServers.size})",
                     style = MaterialTheme.typography.titleMedium
                 )
-                Button(
-                    onClick = { isScanning = !isScanning },
-                    enabled = !isScanning
-                ) {
-                    Text(if (isScanning) "Scanning..." else "Scan Network")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onOpenManualDialog,
+                        enabled = !uiState.isScanning
+                    ) {
+                        Text("Add Manual IP")
+                    }
+                    Button(
+                        onClick = onStartScan,
+                        enabled = !uiState.isScanning
+                    ) {
+                        Text(if (uiState.isScanning) "Scanning..." else "Scan Network")
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            if (nearbyServers.isEmpty()) {
+            if (uiState.nearbyServers.isEmpty()) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("No nearby servers found. Tap Scan to search local Wi-Fi.")
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("No nearby servers found.")
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Tap 'Scan Network' to search local Wi-Fi or 'Add Manual IP' for cross-VLAN.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
                 }
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    items(nearbyServers) { server ->
+                    items(uiState.nearbyServers) { server ->
                         Card(
                             onClick = { onServerClick(server) },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text(
-                                    text = server.computerName,
-                                    style = MaterialTheme.typography.titleMedium
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = server.computerName,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Text(
+                                        text = if (server.isOnline) "ONLINE" else "OFFLINE",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (server.isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                                    )
+                                }
                                 Text(
                                     text = server.canonicalAddress,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.outline
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Shared Queues: ${server.advertisedQueues.joinToString(", ")}",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
+                                if (server.advertisedQueues.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "Shared Queues: ${server.advertisedQueues.joinToString(", ")}",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
                             }
                         }
                     }
@@ -134,5 +164,55 @@ fun DiscoveryScreen(
                 Text("View Available Printers")
             }
         }
+    }
+
+    if (uiState.showManualServerDialog) {
+        AlertDialog(
+            onDismissRequest = onDismissManualDialog,
+            title = { Text("Add Server by Address") },
+            text = {
+                Column {
+                    Text(
+                        text = "Enter server IP address or hostname across VLANs:",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = uiState.manualHostInput,
+                        onValueChange = onUpdateManualHost,
+                        label = { Text("Server Host / IP") },
+                        placeholder = { Text("192.168.1.100") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = uiState.manualPortInput,
+                        onValueChange = onUpdateManualPort,
+                        label = { Text("IPPS Port (Default 48631)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (uiState.manualInputError != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = uiState.manualInputError,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = onSubmitManualServer) {
+                    Text("Add & Probe")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissManualDialog) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
