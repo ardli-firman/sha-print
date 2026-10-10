@@ -127,7 +127,7 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           cargo test
 
-      - name: Build Tauri Desktop (NSIS, MSI & Signed Update Bundles)
+      - name: Build Tauri Desktop (NSIS & Signed Update Bundles)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

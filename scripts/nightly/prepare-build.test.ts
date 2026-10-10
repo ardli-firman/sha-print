@@ -48,6 +48,7 @@ edition = "2021"
     const parsedTauri = JSON.parse(updated.tauriConfContent);
     expect(parsedTauri.version).toBe("3.4.0-nightly.1");
     expect(parsedTauri.app.windows[0].title).toBe("ShaPrint (Nightly)");
+    expect(parsedTauri.bundle.targets).toEqual(["nsis"]);
     expect(parsedTauri.plugins.updater.endpoints).toEqual([
       "https://github.com/ardli-firman/sha-print/releases/download/nightly/latest.json",
     ]);

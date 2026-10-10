@@ -35,6 +35,10 @@ export function updateProjectVersionAndEndpoint(
     if (tauri.app?.windows?.[0]) {
       tauri.app.windows[0].title = "ShaPrint (Nightly)";
     }
+    // MSI targets reject alphanumeric prerelease identifiers under WiX/Windows Installer specs.
+    // Restrict nightly bundle target to NSIS (and updater artifacts).
+    if (!tauri.bundle) tauri.bundle = {};
+    tauri.bundle.targets = ["nsis"];
   }
   if (options.endpoint) {
     if (!tauri.plugins) tauri.plugins = {};
