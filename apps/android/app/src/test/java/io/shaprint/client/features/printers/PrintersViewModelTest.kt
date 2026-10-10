@@ -1,9 +1,13 @@
 package io.shaprint.client.features.printers
 
+import io.shaprint.client.core.domain.model.PrintJobRequest
 import io.shaprint.client.core.domain.model.SharedPrinter
 import io.shaprint.client.core.domain.model.TrustedServer
+import io.shaprint.client.core.ipp.IppConstants
+import io.shaprint.client.core.ipp.IppMessage
 import io.shaprint.client.core.network.IppsClient
 import io.shaprint.client.core.security.InMemoryTrustStore
+import java.io.OutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
@@ -26,6 +30,14 @@ class PrintersViewModelTest {
     ) : IppsClient {
         override suspend fun queryPrinters(server: TrustedServer): List<SharedPrinter> {
             return printersMap[server.canonicalAddress] ?: emptyList()
+        }
+
+        override suspend fun submitPrintJob(
+            server: TrustedServer,
+            jobRequest: PrintJobRequest,
+            streamRasterPayload: (OutputStream) -> Unit
+        ): IppMessage.ParsedJobSubmissionResult {
+            return IppMessage.ParsedJobSubmissionResult(IppConstants.STATUS_OK, true)
         }
     }
 

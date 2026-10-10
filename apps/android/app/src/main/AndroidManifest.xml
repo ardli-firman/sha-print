@@ -24,6 +24,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".features.print.PrintJobForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
     </application>
 
 </manifest>

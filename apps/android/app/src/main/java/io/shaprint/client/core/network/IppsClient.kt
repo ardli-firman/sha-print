@@ -1,5 +1,6 @@
 package io.shaprint.client.core.network
 
+import io.shaprint.client.core.domain.model.PrintJobRequest
 import io.shaprint.client.core.domain.model.SharedPrinter
 import io.shaprint.client.core.domain.model.TrustedServer
 import io.shaprint.client.core.ipp.IppMessage
@@ -21,6 +22,12 @@ import javax.net.ssl.X509TrustManager
 
 interface IppsClient {
     suspend fun queryPrinters(server: TrustedServer): List<SharedPrinter>
+
+    suspend fun submitPrintJob(
+        server: TrustedServer,
+        jobRequest: PrintJobRequest,
+        streamRasterPayload: (OutputStream) -> Unit
+    ): IppMessage.ParsedJobSubmissionResult
 }
 
 class DefaultIppsClient : IppsClient {
@@ -33,13 +40,39 @@ class DefaultIppsClient : IppsClient {
         )
 
         val targetUrl = "https://${server.canonicalAddress}/ipp/print"
-        val responseBytes = postIpp(targetUrl, requestBytes, server.sha256Fingerprint)
+        val responseBytes = postIpp(targetUrl, server.sha256Fingerprint) { os ->
+            os.write(requestBytes)
+        }
 
         val parsed = IppMessage.parseResponse(responseBytes, server.canonicalAddress)
         parsed.printers
     }
 
-    private fun postIpp(urlStr: String, requestPayload: ByteArray, expectedFingerprint: String): ByteArray {
+    override suspend fun submitPrintJob(
+        server: TrustedServer,
+        jobRequest: PrintJobRequest,
+        streamRasterPayload: (OutputStream) -> Unit
+    ): IppMessage.ParsedJobSubmissionResult = withContext(Dispatchers.IO) {
+        val headerBytes = IppMessage.buildPrintJobHeader(
+            jobRequest = jobRequest,
+            networkChannel = server.networkChannel
+        )
+
+        val targetUrl = "https://${server.canonicalAddress}/ipp/print/${jobRequest.printerName}"
+        val responseBytes = postIpp(targetUrl, server.sha256Fingerprint, chunked = true) { os ->
+            os.write(headerBytes)
+            streamRasterPayload(os)
+        }
+
+        IppMessage.parseJobResponse(responseBytes)
+    }
+
+    private fun postIpp(
+        urlStr: String,
+        expectedFingerprint: String,
+        chunked: Boolean = false,
+        writeBody: (OutputStream) -> Unit
+    ): ByteArray {
         val url = URL(urlStr)
         val connection = url.openConnection() as HttpsURLConnection
 
@@ -69,13 +102,16 @@ class DefaultIppsClient : IppsClient {
 
         connection.requestMethod = "POST"
         connection.doOutput = true
-        connection.connectTimeout = 8000
-        connection.readTimeout = 8000
+        connection.connectTimeout = 10000
+        connection.readTimeout = 30000
+        if (chunked) {
+            connection.setChunkedStreamingMode(65536)
+        }
         connection.setRequestProperty("Content-Type", "application/ipp")
         connection.setRequestProperty("User-Agent", "ShaPrint-Android/1.0")
 
         connection.outputStream.use { os: OutputStream ->
-            os.write(requestPayload)
+            writeBody(os)
             os.flush()
         }
 

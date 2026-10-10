@@ -13,9 +13,14 @@ object IppConstants {
     const val OP_GET_PRINTER_ATTRIBUTES: Short = 0x000B
 
     // Status Codes
+    const val STATUS_OK: Short = 0x0000
     const val STATUS_SUCCESSFUL_OK: Short = 0x0000
+    const val STATUS_OK_IGNORED_OR_SUBSTITUTED: Short = 0x0001
+    const val STATUS_CLIENT_ERROR_NOT_AUTHORIZED: Short = 0x0403
     const val STATUS_CLIENT_ERROR_NOT_FOUND: Short = 0x0406
     const val STATUS_CLIENT_ERROR_ATTRIBUTES_NOT_SUPPORTED: Short = 0x040B
+    const val STATUS_CLIENT_ERROR_ATTRIBUTES_OR_VALUES_NOT_SUPPORTED: Short = 0x040B
+    const val STATUS_SERVER_ERROR_INTERNAL: Short = 0x0500
 
     // Tag Delimiters
     const val TAG_OPERATION_ATTRIBUTES: Byte = 0x01
@@ -41,10 +46,12 @@ object IppConstants {
     const val ATTR_ATTRIBUTES_NATURAL_LANGUAGE = "attributes-natural-language"
     const val ATTR_PRINTER_URI = "printer-uri"
     const val ATTR_REQUESTING_USER_NAME = "requesting-user-name"
+    const val ATTR_JOB_NAME = "job-name"
     const val ATTR_DOCUMENT_FORMAT = "document-format"
     const val ATTR_NETWORK_CHANNEL = "network-channel"
     const val ATTR_COPIES = "copies"
     const val ATTR_SIDES = "sides"
     const val ATTR_MEDIA = "media"
     const val ATTR_PRINT_COLOR_MODE = "print-color-mode"
+    const val ATTR_ORIENTATION_REQUESTED = "orientation-requested"
 }
