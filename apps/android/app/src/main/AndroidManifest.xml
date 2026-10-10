@@ -29,6 +29,18 @@
             android:name=".features.print.PrintJobForegroundService"
             android:exported="false"
             android:foregroundServiceType="shortService" />
+
+        <service
+            android:name=".features.printservice.ShaPrintSystemPrintService"
+            android:permission="android.permission.BIND_PRINT_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.printservice.PrintService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.printservice"
+                android:resource="@xml/printservice" />
+        </service>
     </application>
 
 </manifest>
