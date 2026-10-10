@@ -306,12 +306,12 @@ describe("updater", () => {
       waiting_for_jobs: false,
     });
     render(<App />);
+    navigateTo("Settings");
+    expect(await screen.findByText("Stable")).toBeTruthy();
 
     expect(screen.queryByText("Pre-release Test Build")).toBeNull();
     expect(screen.queryByText("Nightly")).toBeNull();
 
-    navigateTo("Settings");
-    expect(await screen.findByText("Stable")).toBeTruthy();
     expect(screen.queryByText("Nightly Channel Active")).toBeNull();
   });
 });
