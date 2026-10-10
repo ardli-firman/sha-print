@@ -23,13 +23,29 @@ pub(super) fn settings_for_page(requested: &PrintSettings, page: &RasterPage) ->
             ("na_legal_8.5x14in", 215.9, 355.6),
             ("iso_a3_297x420mm", 297.0, 420.0),
             ("iso_a5_148x210mm", 148.0, 210.0),
+            ("iso_a6_105x148mm", 105.0, 148.0),
+            ("iso_b4_250x353mm", 250.0, 353.0),
+            ("iso_b5_176x250mm", 176.0, 250.0),
+            ("jis_b5_182x257mm", 182.0, 257.0),
             ("om_folio_210x330mm", 210.0, 330.0),
             ("na_foolscap_8.5x13in", 215.9, 330.2),
+            ("na_executive_7.25x10.5in", 184.2, 266.7),
+            ("na_invoice_5.5x8.5in", 139.7, 215.9),
+            ("na_ledger_11x17in", 279.4, 431.8),
+            ("oe_photo-4x6_4x6in", 101.6, 152.4),
+            ("na_5x7_5x7in", 127.0, 177.8),
+            ("iso_dl_110x220mm", 110.0, 220.0),
+            ("iso_c5_162x229mm", 162.0, 229.0),
+            ("na_number-10_4.125x9.5in", 104.8, 241.3),
+            ("na_monarch_3.875x7.5in", 98.4, 190.5),
         ] {
             if (short_edge - width).abs() <= 0.5 && (long_edge - height).abs() <= 0.5 {
                 resolved.media = Some(media.to_owned());
                 break;
             }
+        }
+        if resolved.media.is_none() {
+            resolved.media = Some(format!("custom_{:.1}x{:.1}mm", short_edge, long_edge));
         }
     }
     resolved
@@ -92,9 +108,9 @@ mod tests {
             dpi: [300, 300],
             pixels: Vec::new(),
         };
-        assert!(settings_for_page(&PrintSettings::default(), &page)
-            .media
-            .is_none());
+        let resolved = settings_for_page(&PrintSettings::default(), &page);
+        assert_ne!(resolved.media.as_deref(), Some("iso_a4_210x297mm"));
+        assert_eq!(resolved.media.as_deref(), Some("custom_203.2x330.2mm"));
     }
 
     #[test]
@@ -137,5 +153,26 @@ mod tests {
             resolved_folio.orientation,
             Some(PrintOrientation::Landscape)
         );
+    }
+
+    #[test]
+    fn a6_and_photo_sizes_without_job_media_resolve_correctly() {
+        let a6_page = RasterPage {
+            width: 1240,
+            height: 1748,
+            dpi: [300, 300],
+            pixels: Vec::new(),
+        };
+        let resolved_a6 = settings_for_page(&PrintSettings::default(), &a6_page);
+        assert_eq!(resolved_a6.media.as_deref(), Some("iso_a6_105x148mm"));
+
+        let photo_page = RasterPage {
+            width: 1200,
+            height: 1800,
+            dpi: [300, 300],
+            pixels: Vec::new(),
+        };
+        let resolved_photo = settings_for_page(&PrintSettings::default(), &photo_page);
+        assert_eq!(resolved_photo.media.as_deref(), Some("oe_photo-4x6_4x6in"));
     }
 }
