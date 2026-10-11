@@ -200,7 +200,13 @@ fun ShaPrintNavHost(
                     },
                     onServerClick = { nearbyServer ->
                         serversViewModel.reviewServer(nearbyServer)
-                        navController.navigate(Screen.Servers.route)
+                        navController.navigate(Screen.Servers.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     }
                 )
             }

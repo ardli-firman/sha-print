@@ -154,8 +154,13 @@ fun PrintersScreen(
                     }
                 }
             } else {
+                val readyCount = uiState.printers.count { it.isOnline }
                 Text(
-                    text = "${uiState.printers.size} printer${if (uiState.printers.size == 1) "" else "s"} ready",
+                    text = if (readyCount == uiState.printers.size) {
+                        "${uiState.printers.size} printer${if (uiState.printers.size == 1) "" else "s"} ready"
+                    } else {
+                        "$readyCount ready • ${uiState.printers.size} total"
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 8.dp)
@@ -250,6 +255,19 @@ private fun PrinterCard(
                             )
                         }
                     }
+                } else {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "Offline",
+                            color = MaterialTheme.colorScheme.outline,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
 
@@ -294,11 +312,12 @@ private fun PrinterCard(
 
                 val mediaCount = printer.capabilities.supportedMedia.size
                 if (mediaCount > 0) {
+                    val firstMedia = printer.capabilities.supportedMedia.first().displayName
                     AssistChip(
                         onClick = onClick,
                         label = {
                             Text(
-                                text = "${printer.capabilities.supportedMedia.first().displayName} +$mediaCount",
+                                text = if (mediaCount > 1) "$firstMedia +${mediaCount - 1}" else firstMedia,
                                 style = MaterialTheme.typography.labelSmall
                             )
                         },

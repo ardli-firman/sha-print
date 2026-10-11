@@ -102,7 +102,7 @@ fun ServersScreen(
                             color = MaterialTheme.colorScheme.onSecondaryContainer
                         )
                         Text(
-                            text = "Server identities are pinned by SHA-256 TLS certificate fingerprint. Kredensial disimpan terenkripsi via Android Keystore.",
+                            text = "Server identities are pinned by SHA-256 TLS certificate fingerprint. Credentials and Network Channel secrets are stored encrypted via Android Keystore.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSecondaryContainer
                         )
