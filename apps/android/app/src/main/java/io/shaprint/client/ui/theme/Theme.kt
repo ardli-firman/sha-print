@@ -11,23 +11,45 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = BrandAccent,
-    secondary = PurpleGrey80,
-    tertiary = Pink80,
-    background = SurfaceDark
+    primary = ShaPrintPrimaryDark,
+    onPrimary = ShaPrintOnPrimaryDark,
+    primaryContainer = ShaPrintPrimaryContainerDark,
+    onPrimaryContainer = ShaPrintOnPrimaryContainerDark,
+    secondary = ShaPrintSecondaryDark,
+    onSecondary = ShaPrintOnSecondaryDark,
+    secondaryContainer = ShaPrintSecondaryContainerDark,
+    onSecondaryContainer = ShaPrintOnSecondaryContainerDark,
+    background = BackgroundDark,
+    surface = SurfaceDark,
+    surfaceVariant = SurfaceVariantDark,
+    outline = OutlineDark,
+    outlineVariant = OutlineVariantDark,
+    error = ErrorRose,
+    errorContainer = ErrorRoseContainer
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = BrandBlue,
-    secondary = PurpleGrey40,
-    tertiary = Pink40,
-    background = SurfaceLight
+    primary = ShaPrintPrimaryLight,
+    onPrimary = ShaPrintOnPrimaryLight,
+    primaryContainer = ShaPrintPrimaryContainerLight,
+    onPrimaryContainer = ShaPrintOnPrimaryContainerLight,
+    secondary = ShaPrintSecondaryLight,
+    onSecondary = ShaPrintOnSecondaryLight,
+    secondaryContainer = ShaPrintSecondaryContainerLight,
+    onSecondaryContainer = ShaPrintOnSecondaryContainerLight,
+    background = BackgroundLight,
+    surface = SurfaceLight,
+    surfaceVariant = SurfaceVariantLight,
+    outline = OutlineLight,
+    outlineVariant = OutlineVariantLight,
+    error = ErrorRose,
+    errorContainer = ErrorRoseContainer
 )
 
 @Composable
 fun ShaPrintTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false, // Use ShaPrint brand identity by default for consistent desktop-client visual coherence
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
