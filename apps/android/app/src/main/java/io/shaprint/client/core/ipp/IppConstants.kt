@@ -17,6 +17,7 @@ object IppConstants {
     const val STATUS_OK: Short = 0x0000
     const val STATUS_SUCCESSFUL_OK: Short = 0x0000
     const val STATUS_OK_IGNORED_OR_SUBSTITUTED: Short = 0x0001
+    const val STATUS_CLIENT_ERROR_FORBIDDEN: Short = 0x0401
     const val STATUS_CLIENT_ERROR_NOT_AUTHORIZED: Short = 0x0403
     const val STATUS_CLIENT_ERROR_NOT_FOUND: Short = 0x0406
     const val STATUS_CLIENT_ERROR_ATTRIBUTES_NOT_SUPPORTED: Short = 0x040B

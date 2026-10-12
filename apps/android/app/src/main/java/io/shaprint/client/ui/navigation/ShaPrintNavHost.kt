@@ -255,6 +255,17 @@ fun ShaPrintNavHost(
                 )
             }
             composable(Screen.PrintPreview.route) {
+                // Ensure foreground service notification is dismissed when job finishes or fails
+                androidx.compose.runtime.LaunchedEffect(printState.jobProgress.state) {
+                    if (printState.jobProgress.state == io.shaprint.client.core.domain.model.PrintJobState.COMPLETED ||
+                        printState.jobProgress.state == io.shaprint.client.core.domain.model.PrintJobState.FAILED
+                    ) {
+                        try {
+                            context.stopService(Intent(context, PrintJobForegroundService::class.java))
+                        } catch (_: Exception) {}
+                    }
+                }
+
                 PrintPreviewScreen(
                     uiState = printState,
                     onPickDocument = {

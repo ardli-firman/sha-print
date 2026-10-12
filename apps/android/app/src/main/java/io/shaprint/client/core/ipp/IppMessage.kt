@@ -128,10 +128,11 @@ object IppMessage {
                 statusCode = statusCode,
                 isSuccess = true
             )
+            IppConstants.STATUS_CLIENT_ERROR_FORBIDDEN,
             IppConstants.STATUS_CLIENT_ERROR_NOT_AUTHORIZED -> ParsedJobSubmissionResult(
                 statusCode = statusCode,
                 isSuccess = false,
-                errorMessage = "Unauthorized: Invalid or missing Network Channel secret (0x0403)."
+                errorMessage = "Unauthorized: Invalid or missing Network Channel secret (0x${String.format("%04X", statusCode)})."
             )
             IppConstants.STATUS_CLIENT_ERROR_NOT_FOUND -> ParsedJobSubmissionResult(
                 statusCode = statusCode,

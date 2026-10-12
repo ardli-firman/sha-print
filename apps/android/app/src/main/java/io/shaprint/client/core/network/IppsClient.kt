@@ -9,6 +9,9 @@ import io.shaprint.client.core.ipp.IppMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -44,7 +47,11 @@ class DefaultIppsClient : IppsClient {
         )
 
         val targetUrl = "https://${server.canonicalAddress}/ipp/print"
-        val responseBytes = postIpp(targetUrl, server.sha256Fingerprint) { os ->
+        val responseBytes = postIpp(
+            urlStr = targetUrl,
+            expectedFingerprint = server.sha256Fingerprint,
+            fixedLength = requestBytes.size.toLong()
+        ) { os ->
             os.write(requestBytes)
         }
 
@@ -69,7 +76,11 @@ class DefaultIppsClient : IppsClient {
 
             val targetUrl = "https://${server.canonicalAddress}/ipp/print/$encodedName"
             try {
-                val responseBytes = postIpp(targetUrl, server.sha256Fingerprint) { os ->
+                val responseBytes = postIpp(
+                    urlStr = targetUrl,
+                    expectedFingerprint = server.sha256Fingerprint,
+                    fixedLength = requestBytes.size.toLong()
+                ) { os ->
                     os.write(requestBytes)
                 }
                 val parsed = IppMessage.parseResponse(responseBytes, server.canonicalAddress)
@@ -99,18 +110,44 @@ class DefaultIppsClient : IppsClient {
             jobRequest.encodedPrinterName
         }
         val targetUrl = "https://${server.canonicalAddress}/ipp/print/$encodedPrinterName"
-        val responseBytes = postIpp(targetUrl, server.sha256Fingerprint, chunked = true) { os ->
-            os.write(headerBytes)
-            streamRasterPayload(os)
-        }
 
-        IppMessage.parseJobResponse(responseBytes)
+        // Buffer the generated PWG-raster stream to a temporary file on disk.
+        // This calculates exact Content-Length required by the ShaPrint desktop server,
+        // eliminating Transfer-Encoding: chunked (which server rejects with 501, causing Broken Pipe)
+        // while preserving minimal RAM footprint on mobile.
+        val tempRasterFile = File.createTempFile("shaprint_raster_", ".pwg")
+        try {
+            FileOutputStream(tempRasterFile).use { fos ->
+                streamRasterPayload(fos)
+            }
+
+            val totalContentLength = headerBytes.size.toLong() + tempRasterFile.length()
+
+            val responseBytes = postIpp(
+                urlStr = targetUrl,
+                expectedFingerprint = server.sha256Fingerprint,
+                fixedLength = totalContentLength
+            ) { os ->
+                os.write(headerBytes)
+                FileInputStream(tempRasterFile).use { fis ->
+                    val buffer = ByteArray(65536)
+                    var bytesRead: Int
+                    while (fis.read(buffer).also { bytesRead = it } != -1) {
+                        os.write(buffer, 0, bytesRead)
+                    }
+                }
+            }
+
+            IppMessage.parseJobResponse(responseBytes)
+        } finally {
+            tempRasterFile.delete()
+        }
     }
 
     private fun postIpp(
         urlStr: String,
         expectedFingerprint: String,
-        chunked: Boolean = false,
+        fixedLength: Long? = null,
         writeBody: (OutputStream) -> Unit
     ): ByteArray {
         val url = URL(urlStr)
@@ -144,9 +181,11 @@ class DefaultIppsClient : IppsClient {
         connection.doOutput = true
         connection.connectTimeout = 10000
         connection.readTimeout = 30000
-        if (chunked) {
-            connection.setChunkedStreamingMode(65536)
+
+        if (fixedLength != null) {
+            connection.setFixedLengthStreamingMode(fixedLength)
         }
+
         connection.setRequestProperty("Content-Type", "application/ipp")
         connection.setRequestProperty("User-Agent", "ShaPrint-Android-Client/1.0")
 
@@ -159,7 +198,12 @@ class DefaultIppsClient : IppsClient {
         val inputStream: InputStream = if (responseCode in 200..299) {
             connection.inputStream
         } else {
-            connection.errorStream ?: connection.inputStream
+            val errorBytes = connection.errorStream?.readBytes() ?: ByteArray(0)
+            val errorText = String(errorBytes, Charsets.UTF_8).trim()
+            if (errorText.isNotEmpty() && !errorText.startsWith("\u0001") && !errorText.startsWith("\u0002")) {
+                throw IOException("Server responded with HTTP $responseCode: $errorText")
+            }
+            java.io.ByteArrayInputStream(errorBytes)
         }
 
         val buffer = ByteArrayOutputStream()
