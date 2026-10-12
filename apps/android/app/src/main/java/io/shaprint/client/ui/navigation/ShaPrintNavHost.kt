@@ -152,9 +152,20 @@ fun ShaPrintNavHost(
             composable(Screen.Printers.route) {
                 PrintersScreen(
                     uiState = printersState,
+                    nearbyServers = discoveryState.nearbyServers,
                     onRefresh = { printersViewModel.loadPrinters() },
                     onNavigateToDiscovery = {
                         navController.navigate(Screen.Discovery.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                    onConnectNearbyServer = { server ->
+                        serversViewModel.reviewServer(server)
+                        navController.navigate(Screen.Servers.route) {
                             popUpTo(navController.graph.findStartDestination().id) {
                                 saveState = true
                             }
@@ -213,10 +224,23 @@ fun ShaPrintNavHost(
             composable(Screen.Servers.route) {
                 ServersScreen(
                     uiState = serversState,
-                    onApprovePendingServer = { serversViewModel.approvePendingServer() },
+                    onApprovePendingServer = {
+                        serversViewModel.approvePendingServer()
+                        printersViewModel.loadPrinters()
+                        navController.navigate(Screen.Printers.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                     onDismissReviewDialog = { serversViewModel.dismissReviewDialog() },
                     onUpdateChannelInput = { serversViewModel.updateChannelInput(it) },
-                    onForgetServer = { serversViewModel.forgetServer(it) },
+                    onForgetServer = {
+                        serversViewModel.forgetServer(it)
+                        printersViewModel.loadPrinters()
+                    },
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToPrinters = {
                         printersViewModel.loadPrinters()

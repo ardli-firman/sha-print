@@ -20,7 +20,7 @@ object IppMessage {
         printerUri: String,
         networkChannel: String? = null,
         requestId: Int = 1,
-        operationId: Short = IppConstants.OP_GET_PRINTER_ATTRIBUTES
+        operationId: Short = IppConstants.OP_CUPS_GET_PRINTERS
     ): ByteArray {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)

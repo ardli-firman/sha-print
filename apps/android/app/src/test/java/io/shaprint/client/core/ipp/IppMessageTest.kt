@@ -22,9 +22,9 @@ class IppMessageTest {
         // Version 2.0 (0x0200)
         assertEquals(0x02, bytes[0].toInt())
         assertEquals(0x00, bytes[1].toInt())
-        // Operation ID (0x000B)
-        assertEquals(0x00, bytes[2].toInt())
-        assertEquals(0x0B, bytes[3].toInt())
+        // Operation ID OP_CUPS_GET_PRINTERS (0x4002)
+        assertEquals(0x40, bytes[2].toInt())
+        assertEquals(0x02, bytes[3].toInt())
         // Request ID = 42
         assertEquals(42, bytes[7].toInt())
 
@@ -38,6 +38,22 @@ class IppMessageTest {
         assertTrue(asString.contains("secret-channel-xyz"))
         assertTrue(asString.contains("shaprint-android"))
         assertTrue(asString.contains("attributes-charset"))
+    }
+
+    @Test
+    fun buildsValidGetPrinterAttributesRequest() {
+        val bytes = IppMessage.buildGetPrintersRequest(
+            printerUri = "ipps://192.168.1.50:48631/ipp/print/OfficeLaser",
+            operationId = IppConstants.OP_GET_PRINTER_ATTRIBUTES,
+            requestId = 99
+        )
+
+        assertEquals(0x02, bytes[0].toInt())
+        assertEquals(0x00, bytes[1].toInt())
+        // Operation ID OP_GET_PRINTER_ATTRIBUTES (0x000B)
+        assertEquals(0x00, bytes[2].toInt())
+        assertEquals(0x0B, bytes[3].toInt())
+        assertEquals(99, bytes[7].toInt())
     }
 
     @Test
