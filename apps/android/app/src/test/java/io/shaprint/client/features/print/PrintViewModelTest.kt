@@ -149,4 +149,38 @@ class PrintViewModelTest {
         assertEquals("Doc2.pdf", viewModel.uiState.value.documentName)
         assertEquals(5, viewModel.uiState.value.totalPages)
     }
+
+    @Test
+    fun pageRangeSelection_filtersEffectivePagesAndValidatesErrors() {
+        val viewModel = PrintViewModel(trustStore, FakeIppsClient())
+        viewModel.selectDocument("Doc.pdf", "content://doc/1", 5)
+
+        // Default: ALL pages
+        assertEquals(PageRangeMode.ALL, viewModel.uiState.value.pageRangeMode)
+        assertEquals(listOf(0, 1, 2, 3, 4), viewModel.uiState.value.effectivePagesToPrint)
+
+        // Switch to CUSTOM with range 1-3
+        viewModel.setPageRangeMode(PageRangeMode.CUSTOM)
+        viewModel.updateCustomPageRange("1-3")
+        assertEquals(listOf(0, 1, 2), viewModel.uiState.value.selectedPageIndices)
+        assertEquals(listOf(0, 1, 2), viewModel.uiState.value.effectivePagesToPrint)
+        assertNull(viewModel.uiState.value.pageRangeError)
+
+        // Comma separated: 1, 2, 5
+        viewModel.updateCustomPageRange("1, 2, 5")
+        assertEquals(listOf(0, 1, 4), viewModel.uiState.value.selectedPageIndices)
+        assertEquals(listOf(0, 1, 4), viewModel.uiState.value.effectivePagesToPrint)
+        assertNull(viewModel.uiState.value.pageRangeError)
+
+        // Out-of-bounds error: page 10 on a 5-page document
+        viewModel.updateCustomPageRange("1-10")
+        assertTrue(viewModel.uiState.value.pageRangeError != null)
+        assertTrue(viewModel.uiState.value.pageRangeError?.contains("exceeds document total") == true)
+
+        // Switching to a new document resets page range back to ALL
+        viewModel.selectDocument("NewDoc.pdf", "content://doc/2", 3)
+        assertEquals(PageRangeMode.ALL, viewModel.uiState.value.pageRangeMode)
+        assertNull(viewModel.uiState.value.pageRangeError)
+        assertEquals(listOf(0, 1, 2), viewModel.uiState.value.effectivePagesToPrint)
+    }
 }

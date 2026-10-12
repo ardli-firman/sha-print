@@ -310,6 +310,8 @@ fun ShaPrintNavHost(
                     onUpdateOrientation = { printViewModel.updateOrientation(it) },
                     onUpdateCopies = { printViewModel.updateCopies(it) },
                     onUpdateFitToPage = { printViewModel.updateFitToPage(it) },
+                    onUpdatePageRangeMode = { printViewModel.setPageRangeMode(it) },
+                    onUpdateCustomPageRange = { printViewModel.updateCustomPageRange(it) },
                     onNavigateBack = { navController.popBackStack() },
                     onSubmitPrint = {
                         val serviceIntent = Intent(context, PrintJobForegroundService::class.java).apply {
@@ -358,6 +360,7 @@ fun ShaPrintNavHost(
                                                     media = printState.selectedMedia,
                                                     colorMode = printState.colorMode,
                                                     orientation = printState.orientation,
+                                                    pagesToPrint = printState.effectivePagesToPrint,
                                                     out = outputStream
                                                 )
                                             }
