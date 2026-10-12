@@ -137,8 +137,8 @@ fn guidance(path: JobPath, code: ErrorCode) -> Guidance {
                 recovery: "Ask the server user to check the printer and its queue on the server, then print again.",
             },
             ErrorCode::InvalidInput => Guidance {
-                problem: "was rejected because the request the printer sent could not be used.",
-                recovery: "Open the Services panel, check that the client proxy is running, and print again from the printer's own dialog.",
+                problem: "was rejected because its printer settings or request format are not supported.",
+                recovery: "Print again with a supported media size, colour mode, and page count.",
             },
             ErrorCode::Timeout => Guidance {
                 problem: "timed out before the server finished it.",

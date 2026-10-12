@@ -209,6 +209,20 @@ class IppMessageTest {
         assertFalse(badRequestResult.isSuccess)
         assertEquals(IppConstants.STATUS_CLIENT_ERROR_BAD_REQUEST, badRequestResult.statusCode)
         assertTrue(badRequestResult.errorMessage?.contains("0x0400") == true)
+
+        val internalErrorBytes = byteArrayOf(0x02, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03)
+        val internalErrorResult = IppMessage.parseJobResponse(internalErrorBytes)
+        assertFalse(internalErrorResult.isSuccess)
+        assertEquals(IppConstants.STATUS_SERVER_ERROR_INTERNAL, internalErrorResult.statusCode)
+        assertTrue(internalErrorResult.errorMessage?.contains("Windows printer queue") == true)
+        assertTrue(internalErrorResult.errorMessage?.contains("0x0500") == true)
+
+        val notAcceptingBytes = byteArrayOf(0x02, 0x00, 0x05, 0x04, 0x00, 0x00, 0x00, 0x01, 0x03)
+        val notAcceptingResult = IppMessage.parseJobResponse(notAcceptingBytes)
+        assertFalse(notAcceptingResult.isSuccess)
+        assertEquals(IppConstants.STATUS_SERVER_ERROR_NOT_ACCEPTING_JOBS, notAcceptingResult.statusCode)
+        assertTrue(notAcceptingResult.errorMessage?.contains("not accepting jobs") == true)
+        assertTrue(notAcceptingResult.errorMessage?.contains("0x0504") == true)
     }
 
     private fun writeAttr(dos: DataOutputStream, tag: Byte, name: String, value: String) {

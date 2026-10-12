@@ -137,17 +137,52 @@ object IppMessage {
             IppConstants.STATUS_CLIENT_ERROR_NOT_FOUND -> ParsedJobSubmissionResult(
                 statusCode = statusCode,
                 isSuccess = false,
-                errorMessage = "Printer queue not found on server (0x0406)."
+                errorMessage = "Printer queue not found or not shared on the server (0x0406). Ask the server user to share this printer and try again."
+            )
+            IppConstants.STATUS_CLIENT_ERROR_DOCUMENT_FORMAT_NOT_SUPPORTED -> ParsedJobSubmissionResult(
+                statusCode = statusCode,
+                isSuccess = false,
+                errorMessage = "The server rejected the job because its document format is not supported (0x040A)."
             )
             IppConstants.STATUS_CLIENT_ERROR_ATTRIBUTES_OR_VALUES_NOT_SUPPORTED -> ParsedJobSubmissionResult(
                 statusCode = statusCode,
                 isSuccess = false,
-                errorMessage = "Selected print settings (paper size or duplex) are not supported by this printer (0x040B)."
+                errorMessage = "Selected print settings (paper size, color mode, duplex, or copies) are not supported by this printer (0x040B)."
+            )
+            IppConstants.STATUS_CLIENT_ERROR_DOCUMENT_TOO_LARGE -> ParsedJobSubmissionResult(
+                statusCode = statusCode,
+                isSuccess = false,
+                errorMessage = "The print job document exceeds the server size limit (0x040D)."
+            )
+            IppConstants.STATUS_CLIENT_ERROR_BAD_REQUEST -> ParsedJobSubmissionResult(
+                statusCode = statusCode,
+                isSuccess = false,
+                errorMessage = "The print job request could not be processed by the server (0x0400)."
+            )
+            IppConstants.STATUS_SERVER_ERROR_NOT_ACCEPTING_JOBS -> ParsedJobSubmissionResult(
+                statusCode = statusCode,
+                isSuccess = false,
+                errorMessage = "The server printer queue is unavailable or not accepting jobs (0x0504). Ask the server user to check the printer and its Windows queue."
+            )
+            IppConstants.STATUS_SERVER_ERROR_INTERNAL -> ParsedJobSubmissionResult(
+                statusCode = statusCode,
+                isSuccess = false,
+                errorMessage = "The server could not submit the job to its Windows printer queue (0x0500). Ask the server user to check that the printer is switched on and reachable."
+            )
+            IppConstants.STATUS_SERVER_ERROR_OPERATION_NOT_SUPPORTED,
+            IppConstants.STATUS_SERVER_ERROR_VERSION_NOT_SUPPORTED -> ParsedJobSubmissionResult(
+                statusCode = statusCode,
+                isSuccess = false,
+                errorMessage = "The server does not support this print operation or IPP version (0x${String.format("%04X", statusCode)}). Update ShaPrint on both devices and try again."
             )
             else -> ParsedJobSubmissionResult(
                 statusCode = statusCode,
                 isSuccess = false,
-                errorMessage = "Server rejected print job with IPP status 0x${String.format("%04X", statusCode)}"
+                errorMessage = if (statusCode in 0x0500..0x05FF) {
+                    "The server could not use its printer queue (0x${String.format("%04X", statusCode)}). Ask the server user to check the printer and its queue on the server."
+                } else {
+                    "Server rejected print job with IPP status 0x${String.format("%04X", statusCode)}"
+                }
             )
         }
     }
