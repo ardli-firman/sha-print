@@ -1,0 +1,21 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="15.6"
+        android:translateY="15.6"
+        android:scaleX="0.3"
+        android:scaleY="0.3">
+        <!-- Teal shield left -->
+        <path
+            android:fillColor="#249EA0"
+            android:pathData="M 46,38 H 121 V 218 C 88.5,204 46,167 46,120 Z" />
+        <!-- White paper sheet right -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M 135,38 H 166 L 210,82 V 120 C 210,167 167.5,204 135,218 Z M 160,48 V 88 H 200 Z" />
+    </group>
+</vector>
