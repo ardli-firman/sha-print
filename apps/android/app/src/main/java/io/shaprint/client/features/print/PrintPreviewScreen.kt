@@ -62,6 +62,8 @@ fun PrintPreviewScreen(
     onUpdateOrientation: (PrintOrientation) -> Unit = {},
     onUpdateCopies: (Int) -> Unit = {},
     onUpdateFitToPage: (Boolean) -> Unit = {},
+    onUpdatePageRangeMode: (PageRangeMode) -> Unit = {},
+    onUpdateCustomPageRange: (String) -> Unit = {},
     onNavigateBack: () -> Unit = {},
     onSubmitPrint: () -> Unit = {}
 ) {
@@ -191,7 +193,7 @@ fun PrintPreviewScreen(
                 Box(modifier = Modifier.padding(16.dp)) {
                     Button(
                         onClick = onSubmitPrint,
-                        enabled = !isWorking,
+                        enabled = !isWorking && (uiState.pageRangeMode != PageRangeMode.CUSTOM || (uiState.pageRangeError == null && uiState.effectivePagesToPrint.isNotEmpty())),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -413,6 +415,96 @@ fun PrintPreviewScreen(
             )
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            // Pages to Print (Page Range) - only when document has pages
+            if (uiState.documentUriString != null && uiState.totalPages > 1) {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Pages to Print",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+
+                            val effectiveCount = uiState.effectivePagesToPrint.size
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Text(
+                                    text = "$effectiveCount of ${uiState.totalPages} page(s)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            FilterChip(
+                                selected = uiState.pageRangeMode == PageRangeMode.ALL,
+                                onClick = { onUpdatePageRangeMode(PageRangeMode.ALL) },
+                                label = { Text("All (${uiState.totalPages})") },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            FilterChip(
+                                selected = uiState.pageRangeMode == PageRangeMode.CUSTOM,
+                                onClick = { onUpdatePageRangeMode(PageRangeMode.CUSTOM) },
+                                label = { Text("Custom Range") },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        if (uiState.pageRangeMode == PageRangeMode.CUSTOM) {
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            OutlinedTextField(
+                                value = uiState.customPageRangeText,
+                                onValueChange = onUpdateCustomPageRange,
+                                label = { Text("Page numbers") },
+                                placeholder = { Text("e.g. 1-3, 5 or 1,2,5") },
+                                isError = uiState.pageRangeError != null,
+                                supportingText = {
+                                    if (uiState.pageRangeError != null) {
+                                        Text(
+                                            text = uiState.pageRangeError ?: "",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "Example: 1-3, 5 (Document has ${uiState.totalPages} pages)",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             // 1. Paper Format (Media)
             Card(

@@ -64,10 +64,18 @@ object PdfRasterizer {
         colorMode: PrintColorMode,
         out: OutputStream,
         orientation: PrintOrientation = PrintOrientation.PORTRAIT,
+        pagesToPrint: List<Int>? = null,
         onPageRendered: ((page: Int, total: Int) -> Unit)? = null
     ) {
         val pageCount = pdfRenderer.pageCount
         if (pageCount == 0) return
+
+        val targetPages = if (pagesToPrint != null && pagesToPrint.isNotEmpty()) {
+            pagesToPrint.filter { it in 0 until pageCount }
+        } else {
+            (0 until pageCount).toList()
+        }
+        if (targetPages.isEmpty()) return
 
         // Write the 4-byte stream synchronization header: 'RaS2'
         out.write(PwgRasterConstants.SYNC_WORD)
@@ -82,9 +90,10 @@ object PdfRasterizer {
 
         val rowPixelsInts = IntArray(widthPx)
         val rowPixelsBytes = ByteArray(widthPx * colors)
+        val totalToRender = targetPages.size
 
-        for (pageIndex in 0 until pageCount) {
-            onPageRendered?.invoke(pageIndex + 1, pageCount)
+        for ((stepIndex, pageIndex) in targetPages.withIndex()) {
+            onPageRendered?.invoke(stepIndex + 1, totalToRender)
 
             val page = pdfRenderer.openPage(pageIndex)
             try {

@@ -30,9 +30,20 @@ data class PrintUiState(
     val duplexMode: DuplexMode = DuplexMode.ONE_SIDED,
     val orientation: PrintOrientation = PrintOrientation.PORTRAIT,
     val fitToPage: Boolean = true,
+    val pageRangeMode: PageRangeMode = PageRangeMode.ALL,
+    val customPageRangeText: String = "",
+    val pageRangeError: String? = null,
+    val selectedPageIndices: List<Int> = emptyList(),
     val documentRevision: Long = 0L,
     val jobProgress: PrintJobProgress = PrintJobProgress()
-)
+) {
+    val effectivePagesToPrint: List<Int>
+        get() = if (pageRangeMode == PageRangeMode.CUSTOM && selectedPageIndices.isNotEmpty()) {
+            selectedPageIndices
+        } else {
+            (0 until totalPages).toList()
+        }
+}
 
 class PrintViewModel(
     private val trustStore: TrustStore,
@@ -58,14 +69,63 @@ class PrintViewModel(
     }
 
     fun selectDocument(name: String, uriString: String, pageCount: Int = 1) {
+        val total = pageCount.coerceAtLeast(1)
         _uiState.update {
             it.copy(
                 documentName = name,
                 documentUriString = uriString,
-                totalPages = pageCount.coerceAtLeast(1),
+                totalPages = total,
+                pageRangeMode = PageRangeMode.ALL,
+                customPageRangeText = "",
+                pageRangeError = null,
+                selectedPageIndices = (0 until total).toList(),
                 documentRevision = it.documentRevision + 1,
                 jobProgress = PrintJobProgress(state = PrintJobState.IDLE)
             )
+        }
+    }
+
+    fun setPageRangeMode(mode: PageRangeMode) {
+        _uiState.update { state ->
+            if (mode == PageRangeMode.ALL) {
+                state.copy(
+                    pageRangeMode = mode,
+                    pageRangeError = null,
+                    selectedPageIndices = (0 until state.totalPages).toList()
+                )
+            } else {
+                val result = PageRangeParser.parse(state.customPageRangeText, state.totalPages)
+                when (result) {
+                    is PageRangeResult.Success -> state.copy(
+                        pageRangeMode = mode,
+                        pageRangeError = null,
+                        selectedPageIndices = result.pageIndices
+                    )
+                    is PageRangeResult.Error -> state.copy(
+                        pageRangeMode = mode,
+                        pageRangeError = if (state.customPageRangeText.isBlank()) null else result.message,
+                        selectedPageIndices = (0 until state.totalPages).toList()
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateCustomPageRange(text: String) {
+        _uiState.update { state ->
+            val result = PageRangeParser.parse(text, state.totalPages)
+            when (result) {
+                is PageRangeResult.Success -> state.copy(
+                    customPageRangeText = text,
+                    pageRangeError = null,
+                    selectedPageIndices = result.pageIndices
+                )
+                is PageRangeResult.Error -> state.copy(
+                    customPageRangeText = text,
+                    pageRangeError = result.message,
+                    selectedPageIndices = emptyList()
+                )
+            }
         }
     }
 
@@ -108,13 +168,38 @@ class PrintViewModel(
             return
         }
 
+        if (state.pageRangeMode == PageRangeMode.CUSTOM && state.pageRangeError != null) {
+            _uiState.update {
+                it.copy(
+                    jobProgress = PrintJobProgress(
+                        state = PrintJobState.FAILED,
+                        errorMessage = "Invalid page range: ${state.pageRangeError}"
+                    )
+                )
+            }
+            return
+        }
+
+        val totalPagesToPrint = state.effectivePagesToPrint.size
+        if (totalPagesToPrint == 0) {
+            _uiState.update {
+                it.copy(
+                    jobProgress = PrintJobProgress(
+                        state = PrintJobState.FAILED,
+                        errorMessage = "No pages selected to print."
+                    )
+                )
+            }
+            return
+        }
+
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
                     jobProgress = PrintJobProgress(
                         state = PrintJobState.RASTERIZING,
                         currentPage = 1,
-                        totalPages = state.totalPages
+                        totalPages = totalPagesToPrint
                     )
                 )
             }
@@ -149,8 +234,8 @@ class PrintViewModel(
                     it.copy(
                         jobProgress = PrintJobProgress(
                             state = PrintJobState.STREAMING,
-                            currentPage = state.totalPages,
-                            totalPages = state.totalPages
+                            currentPage = totalPagesToPrint,
+                            totalPages = totalPagesToPrint
                         )
                     )
                 }
@@ -166,8 +251,8 @@ class PrintViewModel(
                         it.copy(
                             jobProgress = PrintJobProgress(
                                 state = PrintJobState.COMPLETED,
-                                currentPage = state.totalPages,
-                                totalPages = state.totalPages
+                                currentPage = totalPagesToPrint,
+                                totalPages = totalPagesToPrint
                             )
                         )
                     }
