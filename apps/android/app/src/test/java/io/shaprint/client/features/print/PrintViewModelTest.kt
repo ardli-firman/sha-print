@@ -134,4 +134,19 @@ class PrintViewModelTest {
         assertEquals(PrintJobState.FAILED, state.jobProgress.state)
         assertTrue(state.jobProgress.errorMessage?.contains("Network Channel") == true)
     }
+
+    @Test
+    fun selectDocumentIncrementsDocumentRevision() {
+        val viewModel = PrintViewModel(trustStore, FakeIppsClient())
+        assertEquals(0L, viewModel.uiState.value.documentRevision)
+
+        viewModel.selectDocument("Doc1.pdf", "content://doc/1", 2)
+        assertEquals(1L, viewModel.uiState.value.documentRevision)
+        assertEquals("Doc1.pdf", viewModel.uiState.value.documentName)
+
+        viewModel.selectDocument("Doc2.pdf", "content://doc/2", 5)
+        assertEquals(2L, viewModel.uiState.value.documentRevision)
+        assertEquals("Doc2.pdf", viewModel.uiState.value.documentName)
+        assertEquals(5, viewModel.uiState.value.totalPages)
+    }
 }

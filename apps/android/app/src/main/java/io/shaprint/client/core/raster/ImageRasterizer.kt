@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import io.shaprint.client.core.domain.model.PrintColorMode
+import io.shaprint.client.core.domain.model.PrintOrientation
 import io.shaprint.client.core.domain.model.RequestedMedia
 import java.io.OutputStream
 import kotlin.math.roundToInt
@@ -28,10 +29,15 @@ object ImageRasterizer {
         colorMode: PrintColorMode,
         fitToPage: Boolean,
         out: OutputStream,
+        orientation: PrintOrientation = PrintOrientation.PORTRAIT,
         writeSyncWord: Boolean = true
     ) {
-        val widthPx = mmToPixels(media.widthMm)
-        val heightPx = mmToPixels(media.heightMm)
+        val isLandscape = orientation == PrintOrientation.LANDSCAPE
+        val paperWidthMm = if (isLandscape) media.heightMm else media.widthMm
+        val paperHeightMm = if (isLandscape) media.widthMm else media.heightMm
+
+        val widthPx = mmToPixels(paperWidthMm)
+        val heightPx = mmToPixels(paperHeightMm)
         val colors = if (colorMode == PrintColorMode.COLOR) 3 else 1
 
         if (writeSyncWord) {

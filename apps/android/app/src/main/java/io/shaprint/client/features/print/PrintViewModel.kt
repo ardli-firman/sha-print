@@ -30,6 +30,7 @@ data class PrintUiState(
     val duplexMode: DuplexMode = DuplexMode.ONE_SIDED,
     val orientation: PrintOrientation = PrintOrientation.PORTRAIT,
     val fitToPage: Boolean = true,
+    val documentRevision: Long = 0L,
     val jobProgress: PrintJobProgress = PrintJobProgress()
 )
 
@@ -62,6 +63,7 @@ class PrintViewModel(
                 documentName = name,
                 documentUriString = uriString,
                 totalPages = pageCount.coerceAtLeast(1),
+                documentRevision = it.documentRevision + 1,
                 jobProgress = PrintJobProgress(state = PrintJobState.IDLE)
             )
         }
