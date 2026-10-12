@@ -8,6 +8,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
@@ -24,8 +25,10 @@ private val DarkColorScheme = darkColorScheme(
     surfaceVariant = SurfaceVariantDark,
     outline = OutlineDark,
     outlineVariant = OutlineVariantDark,
-    error = ErrorRose,
-    errorContainer = ErrorRoseContainer
+    error = ErrorRoseDark,
+    errorContainer = ErrorRoseContainerDark,
+    onError = Color(0xFF4C0519),
+    onErrorContainer = OnErrorRoseContainerDark
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -43,7 +46,9 @@ private val LightColorScheme = lightColorScheme(
     outline = OutlineLight,
     outlineVariant = OutlineVariantLight,
     error = ErrorRose,
-    errorContainer = ErrorRoseContainer
+    errorContainer = ErrorRoseContainer,
+    onError = Color(0xFFFFFFFF),
+    onErrorContainer = OnErrorRoseContainer
 )
 
 @Composable
