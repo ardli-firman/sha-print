@@ -31,8 +31,8 @@ application as the product path and lives beside the .NET projects while the tra
   host or host:port, inspect the presented fingerprint without querying printers, explicitly approve
   it, and list printers only while the live fingerprint matches the saved approval. Changed
   fingerprints remain blocked until explicit reapproval.
-- The client proxy listens on `127.0.0.1:8632`. A native client queue routes through it with
-  `ipp://127.0.0.1:8632/ipp/print/{encoded-server-host:port}/{encoded-printer-name}`. The proxy
+- The client proxy listens on `127.0.0.1:48632` (ADR 0014). A native client queue routes through it with
+  `ipp://127.0.0.1:48632/ipp/print/{encoded-server-host:port}/{encoded-printer-name}`. The proxy
   replaces the local printer URI with the approved server's IPPS URI and supplies the Network
   Channel. Windows stores that client credential with DPAPI; the salted verifier remains the
   authorization form used by server sharing.
@@ -138,7 +138,7 @@ default is a custom F4 form: the A4 job must replace that default for this print
 clears inherited custom-size fields and asks the installed driver to validate the requested settings;
 omitted job-level media and orientation are resolved from the first raster page's physical size.
 
-For the native client queue, close any running ShaPrint instance (the test binds ports 8631 and 8632)
+For the native client queue, close any running ShaPrint instance (the test binds ports 48631 and 48632)
 and run it from an **elevated** prompt:
 
 ```powershell
@@ -165,11 +165,13 @@ src-tauri/src/
   ipc/               Tauri command adapters, serializable DTOs, status event bridge
 ```
 
-Boundaries follow ADR 0002. ADR 0003 records the IPPS endpoint and its identity; ADR 0013 records
-inbound access on Server Sharing start. ADR 0004 records server discovery; ADR 0005 records how a native client queue
-is named, created, and reported when it fails, ADR 0006 the login/tray lifecycle, ADR 0007 the
-migration from the .NET app, and ADR 0008 how print failures reach the window. Command handlers only
-validate, translate, and
+Boundaries follow ADR 0002. ADR 0003 and ADR 0014 record the IPPS endpoint and dedicated high ports;
+ADR 0013 records inbound access on Server Sharing start. ADR 0004 and ADR 0014 record server discovery and
+cross-VLAN reachability; ADR 0005 and ADR 0017 record how a native client queue is named, created, and repaired;
+ADR 0006 and ADR 0012 the desktop lifecycle, auto-updater, and persistent sharing; ADR 0007 the
+migration from the .NET app; ADR 0008 how print failures reach the window; ADR 0009 the intent-driven UI flow;
+ADR 0010 and ADR 0017 server driver rendering and fixed media catalog; ADR 0015 nightly releases; and ADR 0016
+mobile client architecture. Command handlers only validate, translate, and
 delegate; domain rules stay independent of Tauri and the operating system; secrets and print job
 content never reach logs, status payloads, or the UI.
 
@@ -180,40 +182,40 @@ While sharing runs, the server answers queries for `_shaprint-ipps._tcp.local.` 
 Stopping sharing withdraws the advertisement: the server sends the withdrawal back to the clients
 that asked recently, and answers no further query. A client that sees no withdrawal still forgets an
 advertisement within seconds, so a server that crashes does not linger in the list. The responder
-takes multicast DNS port 5353 when it is free and 5354 otherwise; a client asks on both, because the
-operating system's own multicast DNS responder usually holds 5353.
+binds dedicated multicast DNS port UDP `48633` across all active non-loopback IPv4 interfaces with
+`TTL = 32` so networks with multicast routing or mDNS reflection can discover nearby servers across subnets (ADR 0014).
 
-A browsing client needs nothing from the firewall: it asks from its own port and only hears the
-answer. A server has to accept the query, so starting Server Sharing checks inbound UDP on both discovery
-ports as well as inbound TCP on the endpoint's port and requests administrator permission only if
-access is missing. Discovery does not
-cross subnets, so the address field stays the path for a server on another network.
+A browsing client needs nothing from the firewall: it queries UDP `48633` and receives answers. A server
+must accept incoming queries, so starting Server Sharing checks effective Windows Firewall inbound rules
+for UDP `48633` as well as inbound TCP on port `48631` (ADR 0013, ADR 0014), requesting administrator
+permission only if rules are missing. For cross-VLAN environments where multicast is blocked, manual
+host/IP entry connects directly, and trusted servers are retained with live unicast health checks.
 
 ## Sharing over IPPS
 
-While server sharing runs, the endpoint listens on port 8631, answers IPP printer queries, and
+While server sharing runs, the endpoint listens on dedicated port TCP `48631` (ADR 0014), answers IPP printer queries, and
 accepts `Print-Job` only when the request carries the configured Network Channel and targets a queue
-currently shared. It advertises and accepts only `image/pwg-raster` in 8-bit sRGB or grayscale.
-The server decodes these pages and renders them through the selected queue's installed driver;
+currently shared. It advertises and accepts only `image/pwg-raster` in 8-bit sRGB or grayscale with a fixed
+media catalog (ADR 0017). The server decodes these pages and renders them through the selected queue's installed driver;
 PDF, OXPS, PCLm, and octet streams receive IPP `client-error-document-format-not-supported`
 without submission (ADR 0010). A client can print PDF or Word documents from its applications,
 because the native IPP driver converts those documents into the advertised raster format.
-After updating an older server, restart ShaPrint and manually remove and reinstall the ShaPrint
-client queue if Windows retained its previous document-format capabilities. Leave the original
+After updating an older server or driver capabilities, users can use the "Repair paper sizes" action in the
+UI to refresh Windows client queues without manual reinstallation (ADR 0017). Leave the original
 manufacturer queue installed on the server.
-The port is not 631: that belongs to Windows' own IPP service. Clients verify and explicitly approve
-the server certificate before querying printers; changed fingerprints block queries until explicit
+The port is dedicated TCP `48631`, not 631 (which belongs to Windows' own IPP service) (ADR 0014). Clients verify and
+explicitly approve the server certificate before querying printers; changed fingerprints block queries until explicit
 reapproval. Before Server Sharing starts, ShaPrint checks Windows Firewall access and requests administrator
-approval to add the required rules only if they are missing. Declining approval keeps sharing stopped
-with a clear retry path; the other elevated action is installing a client queue, described next.
+approval to add the required rules only if they are missing (ADR 0013). Declining approval keeps sharing stopped
+with a clear retry path; the other elevated action is installing or repairing a client queue, described next.
 
 ## Client queues
 
 A client user approves a server, lists its shared printers, and installs one. ShaPrint derives the
-queue name from the printer and the server address (`Office Printer (ShaPrint 10.0.0.5-8631)`, with
+queue name from the printer and the server address (`Office Printer (ShaPrint 10.0.0.5-48631)`, with
 the `:` folded to `-`), points the queue at
-`ipp://127.0.0.1:8632/ipp/print/{encoded-server}/{encoded-printer}`, and creates it in the elevated
-helper with `Add-Printer -Name <queue> -IppURL <url>`. The queue name and URL travel through
+`ipp://127.0.0.1:48632/ipp/print/{encoded-server}/{encoded-printer}`, and creates it in the elevated
+helper with `Add-Printer -Name <queue> -IppURL <url>` (ADR 0005, ADR 0014). The queue name and URL travel through
 environment variables, never through the script text, so a printer name cannot change the command.
 
 Installing is idempotent, and it never removes a queue. Because the name is derived from the printer
@@ -223,7 +225,8 @@ pointing somewhere else, ShaPrint does not take it over: it reports the conflict
 — remove that printer in Windows, then install again.
 
 The queue is a normal Windows spooler queue, so it survives ShaPrint restarts; the client proxy
-autostarts to carry its jobs. Removing it stays a manual action in Windows' printer settings.
+autostarts to carry its jobs. Removing it stays a manual action in Windows' printer settings, or paper
+sizes and cached capabilities can be refreshed in place via the "Repair paper sizes" action (ADR 0017).
 
 The helper reports only a classified reason through its exit code and keeps Windows' text on
 standard error, and the app turns that reason into the advice the user reads — for example a stopped
