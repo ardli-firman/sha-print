@@ -11,6 +11,7 @@ object IppConstants {
     const val OP_VALIDATE_JOB: Short = 0x0004
     const val OP_CANCEL_JOB: Short = 0x0008
     const val OP_GET_PRINTER_ATTRIBUTES: Short = 0x000B
+    const val OP_CUPS_GET_PRINTERS: Short = 0x4002.toShort()
 
     // Status Codes
     const val STATUS_OK: Short = 0x0000

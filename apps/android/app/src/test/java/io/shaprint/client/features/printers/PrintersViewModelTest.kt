@@ -32,6 +32,10 @@ class PrintersViewModelTest {
             return printersMap[server.canonicalAddress] ?: emptyList()
         }
 
+        override suspend fun queryPrinterAttributes(server: TrustedServer, printerName: String): SharedPrinter? {
+            return printersMap[server.canonicalAddress]?.firstOrNull { it.name.equals(printerName, ignoreCase = true) }
+        }
+
         override suspend fun submitPrintJob(
             server: TrustedServer,
             jobRequest: PrintJobRequest,

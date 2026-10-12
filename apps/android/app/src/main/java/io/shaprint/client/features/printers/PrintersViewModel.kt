@@ -36,6 +36,7 @@ class PrintersViewModel(
             try {
                 val servers = trustStore.getTrustedServers()
                 val allPrinters = mutableListOf<SharedPrinter>()
+                var queryFailureNotice: String? = null
 
                 for (server in servers) {
                     try {
@@ -44,14 +45,17 @@ class PrintersViewModel(
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        // Mark server printers as offline or surface note
+                        queryFailureNotice = "Could not reach ${server.computerName} (${server.canonicalAddress}): ${e.message}"
                     }
                 }
 
                 _uiState.update {
                     it.copy(
                         printers = allPrinters,
-                        isLoading = false
+                        isLoading = false,
+                        errorMessage = if (servers.isNotEmpty() && allPrinters.isEmpty()) {
+                            queryFailureNotice ?: "No printers are currently shared on trusted servers."
+                        } else null
                     )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {

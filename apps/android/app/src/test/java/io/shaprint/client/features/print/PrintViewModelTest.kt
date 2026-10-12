@@ -40,6 +40,8 @@ class PrintViewModelTest {
 
         override suspend fun queryPrinters(server: TrustedServer): List<SharedPrinter> = emptyList()
 
+        override suspend fun queryPrinterAttributes(server: TrustedServer, printerName: String): SharedPrinter? = null
+
         override suspend fun submitPrintJob(
             server: TrustedServer,
             jobRequest: PrintJobRequest,

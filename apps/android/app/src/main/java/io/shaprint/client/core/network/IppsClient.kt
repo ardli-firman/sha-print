@@ -24,6 +24,8 @@ import javax.net.ssl.X509TrustManager
 interface IppsClient {
     suspend fun queryPrinters(server: TrustedServer): List<SharedPrinter>
 
+    suspend fun queryPrinterAttributes(server: TrustedServer, printerName: String): SharedPrinter?
+
     suspend fun submitPrintJob(
         server: TrustedServer,
         jobRequest: PrintJobRequest,
@@ -34,10 +36,11 @@ interface IppsClient {
 class DefaultIppsClient : IppsClient {
 
     override suspend fun queryPrinters(server: TrustedServer): List<SharedPrinter> = withContext(Dispatchers.IO) {
-        val printerUri = "ipp://${server.canonicalAddress}/ipp/print"
+        val printerUri = "ipps://${server.canonicalAddress}/ipp/print"
         val requestBytes = IppMessage.buildGetPrintersRequest(
             printerUri = printerUri,
-            networkChannel = server.networkChannel
+            networkChannel = server.networkChannel,
+            operationId = IppConstants.OP_CUPS_GET_PRINTERS
         )
 
         val targetUrl = "https://${server.canonicalAddress}/ipp/print"
@@ -53,6 +56,32 @@ class DefaultIppsClient : IppsClient {
         }
         parsed.printers
     }
+
+    override suspend fun queryPrinterAttributes(server: TrustedServer, printerName: String): SharedPrinter? =
+        withContext(Dispatchers.IO) {
+            val encodedName = PrintJobRequest.percentEncodeUriSegment(printerName)
+            val printerUri = "ipps://${server.canonicalAddress}/ipp/print/$encodedName"
+            val requestBytes = IppMessage.buildGetPrintersRequest(
+                printerUri = printerUri,
+                networkChannel = server.networkChannel,
+                operationId = IppConstants.OP_GET_PRINTER_ATTRIBUTES
+            )
+
+            val targetUrl = "https://${server.canonicalAddress}/ipp/print/$encodedName"
+            try {
+                val responseBytes = postIpp(targetUrl, server.sha256Fingerprint) { os ->
+                    os.write(requestBytes)
+                }
+                val parsed = IppMessage.parseResponse(responseBytes, server.canonicalAddress)
+                parsed.printers.firstOrNull() ?: SharedPrinter(
+                    name = printerName,
+                    serverCanonicalAddress = server.canonicalAddress,
+                    isOnline = true
+                )
+            } catch (_: Exception) {
+                null
+            }
+        }
 
     override suspend fun submitPrintJob(
         server: TrustedServer,
@@ -119,30 +148,24 @@ class DefaultIppsClient : IppsClient {
             connection.setChunkedStreamingMode(65536)
         }
         connection.setRequestProperty("Content-Type", "application/ipp")
-        connection.setRequestProperty("User-Agent", "ShaPrint-Android/1.0")
+        connection.setRequestProperty("User-Agent", "ShaPrint-Android-Client/1.0")
 
-        try {
-            connection.outputStream.use { os: OutputStream ->
-                writeBody(os)
-                os.flush()
-            }
-
-            val responseCode = connection.responseCode
-            if (responseCode !in 200..299) {
-                throw Exception("IPPS request failed with HTTP status $responseCode")
-            }
-
-            return connection.inputStream.use { inputStream: InputStream ->
-                val baos = ByteArrayOutputStream()
-                val buffer = ByteArray(4096)
-                var bytesRead: Int
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    baos.write(buffer, 0, bytesRead)
-                }
-                baos.toByteArray()
-            }
-        } finally {
-            connection.disconnect()
+        connection.outputStream.use { os ->
+            writeBody(os)
+            os.flush()
         }
+
+        val responseCode = connection.responseCode
+        val inputStream: InputStream = if (responseCode in 200..299) {
+            connection.inputStream
+        } else {
+            connection.errorStream ?: connection.inputStream
+        }
+
+        val buffer = ByteArrayOutputStream()
+        inputStream.use { input ->
+            input.copyTo(buffer)
+        }
+        return buffer.toByteArray()
     }
 }
