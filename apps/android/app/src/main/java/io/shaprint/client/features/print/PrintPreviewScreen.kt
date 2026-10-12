@@ -135,7 +135,11 @@ fun PrintPreviewScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Print to $printerName",
+                                text = if (uiState.documentUriString == null) {
+                                    "Print Test Page to $printerName"
+                                } else {
+                                    "Print to $printerName"
+                                },
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold
                             )
