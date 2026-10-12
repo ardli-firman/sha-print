@@ -102,8 +102,17 @@ fun ShaPrintNavHost(
             }
 
             // Immediately cache selected document in local app storage to avoid URI permission expiration
-            val cachedDoc = File(context.cacheDir, "shaprint_pending_print_doc")
+            val mimeType = context.contentResolver.getType(uri) ?: ""
+            val extension = when {
+                displayName.contains(".") -> ".${displayName.substringAfterLast('.')}"
+                mimeType.contains("pdf", ignoreCase = true) -> ".pdf"
+                mimeType.contains("jpeg", ignoreCase = true) || mimeType.contains("jpg", ignoreCase = true) -> ".jpg"
+                mimeType.contains("png", ignoreCase = true) -> ".png"
+                else -> ".pdf"
+            }
+            val cachedDoc = File(context.cacheDir, "shaprint_pending_print_doc$extension")
             try {
+                if (cachedDoc.exists()) cachedDoc.delete()
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     FileOutputStream(cachedDoc).use { out -> input.copyTo(out) }
                 }
@@ -111,8 +120,7 @@ fun ShaPrintNavHost(
 
             // Detect page count if PDF
             var pageCount = 1
-            val mimeType = context.contentResolver.getType(uri) ?: ""
-            val isPdf = mimeType.contains("pdf", ignoreCase = true) || displayName.endsWith(".pdf", ignoreCase = true)
+            val isPdf = io.shaprint.client.features.print.DocumentPreviewHelper.isPdfFile(cachedDoc, displayName)
             if (isPdf && cachedDoc.exists() && cachedDoc.length() > 0) {
                 try {
                     ParcelFileDescriptor.open(cachedDoc, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
@@ -125,6 +133,7 @@ fun ShaPrintNavHost(
                 }
             }
 
+            io.shaprint.client.features.print.DocumentPreviewHelper.clearCache()
             printViewModel.selectDocument(displayName, Uri.fromFile(cachedDoc).toString(), pageCount)
         }
     }

@@ -80,22 +80,28 @@ fun PrintPreviewScreen(
 
     val context = LocalContext.current
     val previewBitmap by produceState<Bitmap?>(
-        initialValue = null,
+        initialValue = DocumentPreviewHelper.getCachedBitmap(uiState.documentUriString, previewPageIndex),
         uiState.documentUriString,
-        previewPageIndex,
-        uiState.selectedMedia,
-        uiState.colorMode,
-        printerName
+        previewPageIndex
     ) {
-        value = DocumentPreviewHelper.loadPreviewBitmap(
+        val cached = DocumentPreviewHelper.getCachedBitmap(uiState.documentUriString, previewPageIndex)
+        if (cached != null) {
+            value = cached
+        }
+        val loaded = DocumentPreviewHelper.loadPreviewBitmap(
             context = context,
             documentUriString = uiState.documentUriString,
+            documentName = uiState.documentName,
             pageIndex = previewPageIndex,
             media = uiState.selectedMedia,
             colorMode = uiState.colorMode,
             printerName = printerName,
-            serverCanonicalAddress = uiState.selectedPrinter?.serverCanonicalAddress ?: "LAN Server"
+            serverCanonicalAddress = uiState.selectedPrinter?.serverCanonicalAddress ?: "LAN Server",
+            targetWidth = 600
         )
+        if (loaded != null) {
+            value = loaded
+        }
     }
 
     val currentBitmap = previewBitmap
