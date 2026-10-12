@@ -1,4 +1,5 @@
 //! Maps common job settings into the Windows driver's public DEVMODE fields.
+use super::media::{media_spec, MediaSpec};
 use crate::domain::AppError;
 
 const DM_ORIENTATION: u32 = 0x0000_0001;
@@ -10,216 +11,10 @@ const DM_COLOR: u32 = 0x0000_0800;
 const DM_DUPLEX: u32 = 0x0000_1000;
 const DM_FORMNAME: u32 = 0x0001_0000;
 
-struct MediaSpec {
-    paper_id: i16,
-    short_tenths_mm: i16,
-    long_tenths_mm: i16,
-    explicit_dimensions: bool,
-}
-
 fn requested_media_spec(media: &str) -> Result<MediaSpec, AppError> {
-    match media {
-        "na_letter_8.5x11in" => Ok(MediaSpec {
-            paper_id: 1,
-            short_tenths_mm: 2159,
-            long_tenths_mm: 2794,
-            explicit_dimensions: false,
-        }),
-        "na_legal_8.5x14in" => Ok(MediaSpec {
-            paper_id: 5,
-            short_tenths_mm: 2159,
-            long_tenths_mm: 3556,
-            explicit_dimensions: false,
-        }),
-        "na_ledger_11x17in" | "na_tabloid_11x17in" => Ok(MediaSpec {
-            paper_id: 3,
-            short_tenths_mm: 2794,
-            long_tenths_mm: 4318,
-            explicit_dimensions: false,
-        }),
-        "na_invoice_5.5x8.5in" => Ok(MediaSpec {
-            paper_id: 6,
-            short_tenths_mm: 1397,
-            long_tenths_mm: 2159,
-            explicit_dimensions: false,
-        }),
-        "na_executive_7.25x10.5in" => Ok(MediaSpec {
-            paper_id: 7,
-            short_tenths_mm: 1842,
-            long_tenths_mm: 2667,
-            explicit_dimensions: false,
-        }),
-        "iso_a3_297x420mm" => Ok(MediaSpec {
-            paper_id: 8,
-            short_tenths_mm: 2970,
-            long_tenths_mm: 4200,
-            explicit_dimensions: false,
-        }),
-        "iso_a4_210x297mm" => Ok(MediaSpec {
-            paper_id: 9,
-            short_tenths_mm: 2100,
-            long_tenths_mm: 2970,
-            explicit_dimensions: false,
-        }),
-        "iso_a5_148x210mm" => Ok(MediaSpec {
-            paper_id: 11,
-            short_tenths_mm: 1480,
-            long_tenths_mm: 2100,
-            explicit_dimensions: false,
-        }),
-        "iso_a6_105x148mm" => Ok(MediaSpec {
-            paper_id: 70,
-            short_tenths_mm: 1050,
-            long_tenths_mm: 1480,
-            explicit_dimensions: false,
-        }),
-        "iso_b4_250x353mm" => Ok(MediaSpec {
-            paper_id: 12,
-            short_tenths_mm: 2500,
-            long_tenths_mm: 3530,
-            explicit_dimensions: true,
-        }),
-        "iso_b5_176x250mm" => Ok(MediaSpec {
-            paper_id: 13,
-            short_tenths_mm: 1760,
-            long_tenths_mm: 2500,
-            explicit_dimensions: true,
-        }),
-        "jis_b5_182x257mm" => Ok(MediaSpec {
-            paper_id: 13,
-            short_tenths_mm: 1820,
-            long_tenths_mm: 2570,
-            explicit_dimensions: false,
-        }),
-        "na_foolscap_8.5x13in" => Ok(MediaSpec {
-            paper_id: 14,
-            short_tenths_mm: 2159,
-            long_tenths_mm: 3302,
-            explicit_dimensions: false,
-        }),
-        "om_folio_210x330mm" | "f4" | "F4" | "folio" | "Folio" => Ok(MediaSpec {
-            paper_id: 14,
-            short_tenths_mm: 2100,
-            long_tenths_mm: 3300,
-            explicit_dimensions: true,
-        }),
-        "oe_photo-4x6_4x6in" | "na_index-4x6_4x6in" => Ok(MediaSpec {
-            paper_id: 256,
-            short_tenths_mm: 1016,
-            long_tenths_mm: 1524,
-            explicit_dimensions: true,
-        }),
-        "na_5x7_5x7in" => Ok(MediaSpec {
-            paper_id: 256,
-            short_tenths_mm: 1270,
-            long_tenths_mm: 1778,
-            explicit_dimensions: true,
-        }),
-        "iso_dl_110x220mm" => Ok(MediaSpec {
-            paper_id: 27,
-            short_tenths_mm: 1100,
-            long_tenths_mm: 2200,
-            explicit_dimensions: false,
-        }),
-        "iso_c5_162x229mm" => Ok(MediaSpec {
-            paper_id: 28,
-            short_tenths_mm: 1620,
-            long_tenths_mm: 2290,
-            explicit_dimensions: false,
-        }),
-        "na_number-10_4.125x9.5in" => Ok(MediaSpec {
-            paper_id: 20,
-            short_tenths_mm: 1048,
-            long_tenths_mm: 2413,
-            explicit_dimensions: false,
-        }),
-        "na_monarch_3.875x7.5in" => Ok(MediaSpec {
-            paper_id: 37,
-            short_tenths_mm: 984,
-            long_tenths_mm: 1905,
-            explicit_dimensions: false,
-        }),
-        other => {
-            if let Some((short, long)) = parse_media_dimensions(other) {
-                let (paper_id, explicit) =
-                    match_standard_paper_id(short, long).unwrap_or((256, true));
-                Ok(MediaSpec {
-                    paper_id,
-                    short_tenths_mm: short,
-                    long_tenths_mm: long,
-                    explicit_dimensions: explicit,
-                })
-            } else {
-                Err(AppError::invalid_input(
-                    "the selected media size is not supported by the Windows adapter",
-                ))
-            }
-        }
-    }
-}
-
-fn parse_media_dimensions(media: &str) -> Option<(i16, i16)> {
-    let (dim_str, scale) = if let Some(s) = media.strip_suffix("mm") {
-        let s = s.strip_suffix("_100th-").unwrap_or(s);
-        (s, 10.0)
-    } else if let Some(s) = media.strip_suffix("cm") {
-        (s, 100.0)
-    } else {
-        let s = media.strip_suffix("in")?;
-        (s, 254.0)
-    };
-
-    let candidate = dim_str.rsplit('_').next().unwrap_or(dim_str);
-    let (w_str, h_str) = if let Some((w, h)) = candidate.split_once('x') {
-        (w.trim_start_matches(|c: char| !c.is_ascii_digit()), h)
-    } else {
-        let h_idx = candidate.find('h')?;
-        let (w, h) = candidate.split_at(h_idx);
-        (w.trim_start_matches(|c: char| !c.is_ascii_digit()), &h[1..])
-    };
-
-    let w = w_str.parse::<f64>().ok()?;
-    let h = h_str.parse::<f64>().ok()?;
-    if w <= 0.0 || h <= 0.0 {
-        return None;
-    }
-
-    let d1 = (w * scale).round() as i16;
-    let d2 = (h * scale).round() as i16;
-    if d1 <= 0 || d2 <= 0 {
-        return None;
-    }
-
-    Some((d1.min(d2), d1.max(d2)))
-}
-
-fn match_standard_paper_id(short: i16, long: i16) -> Option<(i16, bool)> {
-    const TOLERANCE: i16 = 5;
-    for (id, s, l, explicit) in [
-        (9, 2100, 2970, false),  // A4
-        (1, 2159, 2794, false),  // Letter
-        (5, 2159, 3556, false),  // Legal
-        (14, 2100, 3300, true),  // Folio F4
-        (14, 2159, 3302, false), // Foolscap
-        (8, 2970, 4200, false),  // A3
-        (11, 1480, 2100, false), // A5
-        (70, 1050, 1480, false), // A6
-        (13, 1760, 2500, true),  // ISO B5
-        (13, 1820, 2570, false), // JIS B5
-        (12, 2500, 3530, true),  // ISO B4
-        (7, 1842, 2667, false),  // Executive
-        (6, 1397, 2159, false),  // Statement
-        (3, 2794, 4318, false),  // Ledger / Tabloid
-        (27, 1100, 2200, false), // DL Envelope
-        (28, 1620, 2290, false), // C5 Envelope
-        (20, 1048, 2413, false), // #10 Envelope
-        (37, 984, 1905, false),  // Monarch Envelope
-    ] {
-        if (short - s).abs() <= TOLERANCE && (long - l).abs() <= TOLERANCE {
-            return Some((id, explicit));
-        }
-    }
-    None
+    media_spec(media).ok_or_else(|| {
+        AppError::invalid_input("the selected media size is not supported by the Windows adapter")
+    })
 }
 
 fn paper_id_dimensions_tenths_mm(paper_id: i16) -> Option<(i16, i16)> {
@@ -640,5 +435,28 @@ mod tests {
             ..Default::default()
         };
         assert!(apply_settings_to_dev_mode(&mut devmode, &settings).is_err());
+    }
+
+    #[test]
+    fn every_advertised_media_maps_to_windows_dev_mode() {
+        for media in super::super::media::MEDIA_CATALOG {
+            let mut devmode = vec![0u8; 220];
+            let settings = crate::application::PrintSettings {
+                media: Some(media.keyword.to_owned()),
+                ..Default::default()
+            };
+
+            apply_settings_to_dev_mode(&mut devmode, &settings)
+                .unwrap_or_else(|error| panic!("{} did not map: {error}", media.keyword));
+
+            let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+            assert_ne!(fields & DM_PAPERSIZE, 0, "{}", media.keyword);
+            assert_eq!(
+                i16::from_ne_bytes(devmode[78..80].try_into().unwrap()),
+                media.paper_id,
+                "{}",
+                media.keyword
+            );
+        }
     }
 }

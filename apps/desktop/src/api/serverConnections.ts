@@ -43,6 +43,11 @@ export function installPrinterQueue(serverAddress: string, printerName: string):
   return invoke("install_printer_queue", { serverAddress, printerName });
 }
 
+/** Recreates an installed Windows queue so it reloads current IPP capabilities. */
+export function repairPrinterQueue(serverAddress: string, printerName: string): Promise<ClientQueue> {
+  return invoke("repair_printer_queue", { serverAddress, printerName });
+}
+
 /** Lists recognised ShaPrint client queues from the current Windows spooler state. */
 export function listRecognisedClientQueues(): Promise<RecognisedClientQueue[]> {
   return invoke("list_recognised_client_queues");

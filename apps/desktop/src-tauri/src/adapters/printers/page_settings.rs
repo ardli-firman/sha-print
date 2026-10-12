@@ -1,8 +1,15 @@
 //! Resolve page geometry when a native IPP client omits job-level media or orientation.
-use super::raster::RasterPage;
+use super::{
+    media::{custom_dimensions_are_supported, media_for_dimensions, media_spec},
+    raster::RasterPage,
+};
 use crate::application::{PrintOrientation, PrintSettings};
+use crate::domain::AppError;
 
-pub(super) fn settings_for_page(requested: &PrintSettings, page: &RasterPage) -> PrintSettings {
+pub(super) fn settings_for_page(
+    requested: &PrintSettings,
+    page: &RasterPage,
+) -> Result<PrintSettings, AppError> {
     let mut resolved = requested.clone();
     let width_mm = f64::from(page.width) * 25.4 / f64::from(page.dpi[0]);
     let height_mm = f64::from(page.height) * 25.4 / f64::from(page.dpi[1]);
@@ -13,42 +20,26 @@ pub(super) fn settings_for_page(requested: &PrintSettings, page: &RasterPage) ->
             PrintOrientation::Portrait
         });
     }
-    if resolved.media.is_none() {
+    if resolved
+        .media
+        .as_deref()
+        .is_none_or(|media| media_spec(media).is_none())
+    {
         let short_edge = width_mm.min(height_mm);
         let long_edge = width_mm.max(height_mm);
-        // Raster dimensions are whole pixels, so allow the rounding of millimeters to pixels.
-        for (media, width, height) in [
-            ("iso_a4_210x297mm", 210.0, 297.0),
-            ("na_letter_8.5x11in", 215.9, 279.4),
-            ("na_legal_8.5x14in", 215.9, 355.6),
-            ("iso_a3_297x420mm", 297.0, 420.0),
-            ("iso_a5_148x210mm", 148.0, 210.0),
-            ("iso_a6_105x148mm", 105.0, 148.0),
-            ("iso_b4_250x353mm", 250.0, 353.0),
-            ("iso_b5_176x250mm", 176.0, 250.0),
-            ("jis_b5_182x257mm", 182.0, 257.0),
-            ("om_folio_210x330mm", 210.0, 330.0),
-            ("na_foolscap_8.5x13in", 215.9, 330.2),
-            ("na_executive_7.25x10.5in", 184.2, 266.7),
-            ("na_invoice_5.5x8.5in", 139.7, 215.9),
-            ("na_ledger_11x17in", 279.4, 431.8),
-            ("oe_photo-4x6_4x6in", 101.6, 152.4),
-            ("na_5x7_5x7in", 127.0, 177.8),
-            ("iso_dl_110x220mm", 110.0, 220.0),
-            ("iso_c5_162x229mm", 162.0, 229.0),
-            ("na_number-10_4.125x9.5in", 104.8, 241.3),
-            ("na_monarch_3.875x7.5in", 98.4, 190.5),
-        ] {
-            if (short_edge - width).abs() <= 0.5 && (long_edge - height).abs() <= 0.5 {
-                resolved.media = Some(media.to_owned());
-                break;
-            }
-        }
-        if resolved.media.is_none() {
-            resolved.media = Some(format!("custom_{:.1}x{:.1}mm", short_edge, long_edge));
-        }
+        let short_tenths_mm = (short_edge * 10.0).round() as i16;
+        let long_tenths_mm = (long_edge * 10.0).round() as i16;
+        resolved.media = if let Some(spec) = media_for_dimensions(short_tenths_mm, long_tenths_mm) {
+            Some(spec.keyword.to_owned())
+        } else if custom_dimensions_are_supported(short_tenths_mm, long_tenths_mm) {
+            Some(format!("custom_{short_edge:.1}x{long_edge:.1}mm"))
+        } else {
+            return Err(AppError::invalid_input(
+                "the raster page size is outside ShaPrint's supported media range",
+            ));
+        };
     }
-    resolved
+    Ok(resolved)
 }
 
 #[cfg(test)]
@@ -64,7 +55,7 @@ mod tests {
             dpi: [300, 300],
             pixels: Vec::new(),
         };
-        let resolved = settings_for_page(&PrintSettings::default(), &page);
+        let resolved = settings_for_page(&PrintSettings::default(), &page).expect("resolves media");
         assert_eq!(resolved.media.as_deref(), Some("iso_a4_210x297mm"));
         assert_eq!(resolved.orientation, Some(PrintOrientation::Portrait));
     }
@@ -77,7 +68,7 @@ mod tests {
             dpi: [300, 300],
             pixels: Vec::new(),
         };
-        let resolved = settings_for_page(&PrintSettings::default(), &page);
+        let resolved = settings_for_page(&PrintSettings::default(), &page).expect("resolves media");
         assert_eq!(resolved.media.as_deref(), Some("iso_a4_210x297mm"));
         assert_eq!(resolved.orientation, Some(PrintOrientation::Landscape));
     }
@@ -97,7 +88,10 @@ mod tests {
             color: Some(false),
             duplex: Some(crate::application::DuplexMode::Simplex),
         };
-        assert_eq!(settings_for_page(&requested, &page), requested);
+        assert_eq!(
+            settings_for_page(&requested, &page).expect("keeps explicit settings"),
+            requested
+        );
     }
 
     #[test]
@@ -108,9 +102,25 @@ mod tests {
             dpi: [300, 300],
             pixels: Vec::new(),
         };
-        let resolved = settings_for_page(&PrintSettings::default(), &page);
+        let resolved = settings_for_page(&PrintSettings::default(), &page).expect("resolves media");
         assert_ne!(resolved.media.as_deref(), Some("iso_a4_210x297mm"));
         assert_eq!(resolved.media.as_deref(), Some("custom_203.2x330.2mm"));
+    }
+
+    #[test]
+    fn raster_outside_the_legacy_custom_range_is_rejected() {
+        let page = RasterPage {
+            width: 4724,
+            height: 5906,
+            dpi: [300, 300],
+            pixels: Vec::new(),
+        };
+
+        let error = settings_for_page(&PrintSettings::default(), &page).expect_err("rejects size");
+
+        assert!(error
+            .message()
+            .contains("outside ShaPrint's supported media range"));
     }
 
     #[test]
@@ -121,7 +131,7 @@ mod tests {
             dpi: [600, 300],
             pixels: Vec::new(),
         };
-        let resolved = settings_for_page(&PrintSettings::default(), &page);
+        let resolved = settings_for_page(&PrintSettings::default(), &page).expect("resolves media");
         assert_eq!(resolved.media.as_deref(), Some("iso_a4_210x297mm"));
         assert_eq!(resolved.orientation, Some(PrintOrientation::Portrait));
     }
@@ -134,7 +144,8 @@ mod tests {
             dpi: [300, 300],
             pixels: Vec::new(),
         };
-        let resolved_f4 = settings_for_page(&PrintSettings::default(), &f4_page);
+        let resolved_f4 =
+            settings_for_page(&PrintSettings::default(), &f4_page).expect("resolves F4");
         assert_eq!(resolved_f4.media.as_deref(), Some("om_folio_210x330mm"));
         assert_eq!(resolved_f4.orientation, Some(PrintOrientation::Portrait));
 
@@ -144,7 +155,8 @@ mod tests {
             dpi: [300, 300],
             pixels: Vec::new(),
         };
-        let resolved_folio = settings_for_page(&PrintSettings::default(), &folio_page);
+        let resolved_folio =
+            settings_for_page(&PrintSettings::default(), &folio_page).expect("resolves Folio");
         assert_eq!(
             resolved_folio.media.as_deref(),
             Some("na_foolscap_8.5x13in")
@@ -156,6 +168,24 @@ mod tests {
     }
 
     #[test]
+    fn opaque_client_media_uses_f4_raster_geometry() {
+        let page = RasterPage {
+            width: 2480,
+            height: 3898,
+            dpi: [300, 300],
+            pixels: Vec::new(),
+        };
+        let requested = PrintSettings {
+            media: Some("Unknown".to_owned()),
+            ..PrintSettings::default()
+        };
+
+        let resolved = settings_for_page(&requested, &page).expect("resolves opaque media");
+
+        assert_eq!(resolved.media.as_deref(), Some("om_folio_210x330mm"));
+    }
+
+    #[test]
     fn a6_and_photo_sizes_without_job_media_resolve_correctly() {
         let a6_page = RasterPage {
             width: 1240,
@@ -163,7 +193,8 @@ mod tests {
             dpi: [300, 300],
             pixels: Vec::new(),
         };
-        let resolved_a6 = settings_for_page(&PrintSettings::default(), &a6_page);
+        let resolved_a6 =
+            settings_for_page(&PrintSettings::default(), &a6_page).expect("resolves A6");
         assert_eq!(resolved_a6.media.as_deref(), Some("iso_a6_105x148mm"));
 
         let photo_page = RasterPage {
@@ -172,7 +203,8 @@ mod tests {
             dpi: [300, 300],
             pixels: Vec::new(),
         };
-        let resolved_photo = settings_for_page(&PrintSettings::default(), &photo_page);
+        let resolved_photo = settings_for_page(&PrintSettings::default(), &photo_page)
+            .expect("resolves photo media");
         assert_eq!(resolved_photo.media.as_deref(), Some("oe_photo-4x6_4x6in"));
     }
 }
