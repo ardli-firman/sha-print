@@ -163,12 +163,19 @@ object DocumentPreviewHelper {
                         if (renderer.pageCount == 0) return@withContext null
                         val safeIndex = pageIndex.coerceIn(0, renderer.pageCount - 1)
                         renderer.openPage(safeIndex).use { page ->
-                            // 1:1 WYSIWYG: Render directly onto paper canvas with RENDER_MODE_FOR_PRINT
+                            // 1:1 WYSIWYG: Render directly onto paper canvas with uniform aspect ratio & centering
                             val paperBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
                             val canvas = Canvas(paperBitmap)
                             canvas.drawColor(Color.WHITE)
 
-                            page.render(paperBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+                            val matrix = io.shaprint.client.core.raster.PdfRasterizer.calculatePrintMatrix(
+                                pageWidth = page.width.toFloat(),
+                                pageHeight = page.height.toFloat(),
+                                paperWidthPx = targetWidth,
+                                paperHeightPx = targetHeight
+                            )
+
+                            page.render(paperBitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
 
                             previewCache[cacheKey] = paperBitmap
                             return@withContext paperBitmap

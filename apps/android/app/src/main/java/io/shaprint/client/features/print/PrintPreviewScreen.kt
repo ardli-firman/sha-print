@@ -950,26 +950,38 @@ private fun FullScreenDocumentDialog(
                     val paperHeightMm = if (isLandscape) media.widthMm else media.heightMm
                     val paperRatio = paperWidthMm / paperHeightMm
 
-                    Surface(
-                        color = Color.White,
-                        shape = RoundedCornerShape(4.dp),
-                        shadowElevation = 8.dp,
-                        border = BorderStroke(1.dp, Color(0xFFE5E7EB)),
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .aspectRatio(paperRatio)
+                    BoxWithConstraints(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
                     ) {
-                        val colorFilter = if (colorMode == PrintColorMode.MONOCHROME) {
-                            ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
-                        } else null
+                        val containerRatio = maxWidth / maxHeight
+                        val (sheetWidth, sheetHeight) = if (paperRatio > containerRatio) {
+                            maxWidth to (maxWidth / paperRatio)
+                        } else {
+                            (maxHeight * paperRatio) to maxHeight
+                        }
 
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "Full Document Preview",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.FillBounds,
-                            colorFilter = colorFilter
-                        )
+                        Surface(
+                            color = Color.White,
+                            shape = RoundedCornerShape(4.dp),
+                            shadowElevation = 8.dp,
+                            border = BorderStroke(1.dp, Color(0xFFE5E7EB)),
+                            modifier = Modifier
+                                .width(sheetWidth)
+                                .height(sheetHeight)
+                        ) {
+                            val colorFilter = if (colorMode == PrintColorMode.MONOCHROME) {
+                                ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
+                            } else null
+
+                            Image(
+                                bitmap = bitmap.asImageBitmap(),
+                                contentDescription = "Full Document Preview",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.FillBounds,
+                                colorFilter = colorFilter
+                            )
+                        }
                     }
                 }
 

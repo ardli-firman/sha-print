@@ -41,7 +41,8 @@ object TestPageGenerator {
         val canvas = Canvas(bitmap)
         canvas.drawColor(Color.WHITE)
 
-        val scale = widthPx / 2480f
+        val baseWidth = if (isLandscape) 3508f else 2480f
+        val scale = widthPx / baseWidth
         val margin = 80f * scale
 
         // Outer border
