@@ -55,6 +55,11 @@ pub trait QueueInstaller: Send + Sync + 'static {
     /// Installs (or repairs) the queue. The app runs this inside the elevated helper, so a failure
     /// is a classified [`SetupFailure`] rather than free-form text.
     fn install(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure>;
+
+    /// Recreates an existing queue so Windows reloads its IPP capabilities.
+    fn repair(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+        self.install(request)
+    }
 }
 
 impl ClientProxyState for RuntimeCoordinator {
@@ -125,32 +130,7 @@ impl QueueInstallation {
         server_address: &str,
         printer: &str,
     ) -> Result<ClientQueue, AppError> {
-        if !self.installer.is_available() {
-            return Err(AppError::unsupported(
-                "installing a native Windows printer queue is only supported on Windows",
-            ));
-        }
-        let printer = PrinterName::parse(printer)?;
-        if !self.proxy.is_running() {
-            return Err(AppError::invalid_state(
-                "the local print proxy is not running. Start it, then install the queue so the printer can reach the server.",
-            ));
-        }
-        if !self.channel.is_configured() {
-            return Err(AppError::invalid_state(
-                "a Network Channel is not configured. Set the shared Network Channel before installing the queue.",
-            ));
-        }
-        let trusted = self.servers.shared_printers(server_address).await?;
-        if !trusted.printers.contains(&printer) {
-            return Err(AppError::invalid_input(format!(
-                "the trusted server {} is not sharing a printer named \"{}\". Show its shared printers again and choose one of them.",
-                trusted.address, printer
-            )));
-        }
-
-        let request = ClientQueueRequest::new(&trusted.address, printer)?;
-        let uri = self.installer.queue_uri(&request)?;
+        let (request, uri) = self.request_for(server_address, printer).await?;
         self.install_elevated(&request).await?;
         log::info!(
             "installed native client queue={} server={}",
@@ -160,11 +140,70 @@ impl QueueInstallation {
         Ok(ClientQueue::new(request, uri))
     }
 
+    /// Recreates an installed queue so Windows reloads the current IPP capabilities.
+    pub async fn repair(
+        &self,
+        server_address: &str,
+        printer: &str,
+    ) -> Result<ClientQueue, AppError> {
+        let (request, uri) = self.request_for(server_address, printer).await?;
+        self.repair_elevated(&request).await?;
+        log::info!(
+            "repaired native client queue={} server={}",
+            request.queue_name(),
+            request.server_address()
+        );
+        Ok(ClientQueue::new(request, uri))
+    }
+
+    async fn request_for(
+        &self,
+        server_address: &str,
+        printer: &str,
+    ) -> Result<(ClientQueueRequest, String), AppError> {
+        if !self.installer.is_available() {
+            return Err(AppError::unsupported(
+                "installing a native Windows printer queue is only supported on Windows",
+            ));
+        }
+        let printer = PrinterName::parse(printer)?;
+        if !self.proxy.is_running() {
+            return Err(AppError::invalid_state(
+                "the local print proxy is not running. Start it, then manage the queue again.",
+            ));
+        }
+        if !self.channel.is_configured() {
+            return Err(AppError::invalid_state(
+                "a Network Channel is not configured. Set the shared Network Channel before managing the queue.",
+            ));
+        }
+        let trusted = self.servers.shared_printers(server_address).await?;
+        if !trusted.printers.contains(&printer) {
+            return Err(AppError::invalid_input(format!(
+                "the trusted server {} is not sharing a printer named \"{}\". Show its shared printers again and choose one of them.",
+                trusted.address, printer
+            )));
+        }
+        let request = ClientQueueRequest::new(&trusted.address, printer)?;
+        let uri = self.installer.queue_uri(&request)?;
+        Ok((request, uri))
+    }
+
     /// Runs the installation in the elevated helper without blocking the async runtime.
     async fn install_elevated(&self, request: &ClientQueueRequest) -> Result<(), AppError> {
         let setup = Arc::clone(&self.setup);
         let request = request.clone();
         tokio::task::spawn_blocking(move || setup.install_queue(&request))
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("the setup action did not finish: {error}"))
+            })?
+    }
+
+    async fn repair_elevated(&self, request: &ClientQueueRequest) -> Result<(), AppError> {
+        let setup = Arc::clone(&self.setup);
+        let request = request.clone();
+        tokio::task::spawn_blocking(move || setup.repair_queue(&request))
             .await
             .map_err(|error| {
                 AppError::internal(format!("the setup action did not finish: {error}"))
@@ -183,6 +222,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingBroker {
         installed: Mutex<Vec<ClientQueueRequest>>,
+        repaired: Mutex<Vec<ClientQueueRequest>>,
         outcome: Option<SetupFailureKind>,
     }
 
@@ -190,12 +230,20 @@ mod tests {
         fn refusing(kind: SetupFailureKind) -> Arc<Self> {
             Arc::new(Self {
                 installed: Mutex::new(Vec::new()),
+                repaired: Mutex::new(Vec::new()),
                 outcome: Some(kind),
             })
         }
 
         fn installed(&self) -> Vec<ClientQueueRequest> {
             self.installed
+                .lock()
+                .map(|requests| requests.clone())
+                .unwrap_or_default()
+        }
+
+        fn repaired(&self) -> Vec<ClientQueueRequest> {
+            self.repaired
                 .lock()
                 .map(|requests| requests.clone())
                 .unwrap_or_default()
@@ -220,6 +268,17 @@ mod tests {
                 return Err(failure);
             }
             self.installed
+                .lock()
+                .map_err(|_| SetupFailure::new(SetupFailureKind::Other, "lock poisoned"))?
+                .push(request.clone());
+            Ok(())
+        }
+
+        fn repair_queue(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+            if let Some(failure) = self.refusal() {
+                return Err(failure);
+            }
+            self.repaired
                 .lock()
                 .map_err(|_| SetupFailure::new(SetupFailureKind::Other, "lock poisoned"))?
                 .push(request.clone());
@@ -417,6 +476,25 @@ mod tests {
         );
         // And it never ran in this process.
         assert_eq!(installer.installs(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_shared_printer_repairs_the_existing_queue_through_elevation() {
+        let broker = Arc::new(RecordingBroker::default());
+        let servers = FakeServers::sharing("10.0.0.5:8631", &["Office Printer"]);
+        let installation = installation(Arc::clone(&broker), servers, FakeInstaller::new(), true);
+
+        let queue = installation
+            .repair("10.0.0.5:8631", "Office Printer")
+            .await
+            .expect("repairs the queue");
+
+        assert_eq!(
+            queue.name().as_str(),
+            "Office Printer (ShaPrint 10.0.0.5-8631)"
+        );
+        assert!(broker.installed().is_empty());
+        assert_eq!(broker.repaired(), vec![queue.request().clone()]);
     }
 
     #[tokio::test]

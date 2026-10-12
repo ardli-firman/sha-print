@@ -52,6 +52,7 @@ vi.mock("./api/serverConnections", () => ({
   probeTrustedServer: vi.fn(),
   forgetTrustedServer: vi.fn(),
   installPrinterQueue: vi.fn(),
+  repairPrinterQueue: vi.fn(),
   listRecognisedClientQueues: vi.fn(),
   openPrintersSettings: vi.fn(),
 }));
@@ -481,6 +482,49 @@ describe("guided printer setup", () => {
     expect(copyBtn).toBeTruthy();
   });
 
+  it("confirms and repairs an installed queue before refreshing its paper sizes", async () => {
+    const queue = {
+      queue_name: "Office Laser (ShaPrint 10.0.0.5-8631)",
+      server_address: "10.0.0.5:8631",
+      printer_name: "Office Laser",
+    };
+    vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([queue]);
+    vi.mocked(serverConnections.inspectServerConnection).mockResolvedValue({
+      address: queue.server_address,
+      current_fingerprint: "AA",
+      previous_fingerprint: "AA",
+      trusted: true,
+    });
+    vi.mocked(serverConnections.repairPrinterQueue).mockResolvedValue({
+      ...queue,
+      uri: "ipp://127.0.0.1:48632/ipp/print/server/printer",
+    });
+
+    render(<App />);
+
+    const repair = await screen.findByRole("button", {
+      name: `Repair paper sizes for ${queue.queue_name}`,
+    });
+    fireEvent.click(repair);
+
+    const dialog = screen.getByRole("dialog", { name: "Repair paper sizes?" });
+    expect(within(dialog).getByText(/may reset this printer's local printing preferences/i)).toBeTruthy();
+    expect(serverConnections.repairPrinterQueue).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Repair queue" }));
+
+    await waitFor(() => {
+      expect(serverConnections.repairPrinterQueue).toHaveBeenCalledWith(
+        queue.server_address,
+        queue.printer_name,
+      );
+    });
+    expect(
+      await screen.findByText(`Repaired ${queue.queue_name}. Windows reloaded its paper sizes.`),
+    ).toBeTruthy();
+    expect(serverConnections.listRecognisedClientQueues).toHaveBeenCalledTimes(2);
+  });
+
   it("shows evidence-based Reverify identity action when an installed queue's server identity has changed", async () => {
     vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([
       {
@@ -515,6 +559,13 @@ describe("guided printer setup", () => {
       name: "Reverify identity for 10.0.0.5:8631",
     });
     expect(reverifyBtn).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Repair paper sizes for Office Laser (ShaPrint 10.0.0.5-8631)",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
     fireEvent.click(reverifyBtn);
 
     // Guided setup dialog opens directly to fingerprint verification step

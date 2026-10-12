@@ -31,17 +31,21 @@ pub enum SetupAction {
     /// Install (or repair) the native Windows queue for a printer shared by a trusted server.
     /// Machine-wide spooler state, so Windows asks for administrator permission.
     InstallPrinter,
+    /// Recreate an existing ShaPrint client queue so Windows reloads its IPP capabilities.
+    /// Machine-wide spooler state, so Windows asks for administrator permission.
+    RepairPrinter,
 }
 
 impl SetupAction {
     /// Every action, in a fixed order.
-    pub const ALL: [SetupAction; 6] = [
+    pub const ALL: [SetupAction; 7] = [
         SetupAction::AllowInboundSharing,
         SetupAction::SelectPrinters,
         SetupAction::StartSharing,
         SetupAction::StopSharing,
         SetupAction::ShowCertificateFingerprint,
         SetupAction::InstallPrinter,
+        SetupAction::RepairPrinter,
     ];
 
     /// The stable name used by logs and by the elevated helper's command line.
@@ -53,6 +57,7 @@ impl SetupAction {
             SetupAction::StopSharing => "stop-sharing",
             SetupAction::ShowCertificateFingerprint => "show-certificate-fingerprint",
             SetupAction::InstallPrinter => "install-printer",
+            SetupAction::RepairPrinter => "repair-printer",
         }
     }
 
@@ -71,7 +76,9 @@ impl SetupAction {
     pub const fn requires_elevation(self) -> bool {
         matches!(
             self,
-            SetupAction::AllowInboundSharing | SetupAction::InstallPrinter
+            SetupAction::AllowInboundSharing
+                | SetupAction::InstallPrinter
+                | SetupAction::RepairPrinter
         )
     }
 }
@@ -98,6 +105,10 @@ pub enum SetupFailureKind {
     TimedOut,
     /// Anything else.
     Other,
+    /// The queue has pending jobs and cannot be safely recreated.
+    QueueBusy,
+    /// The queue disappeared before the repair started.
+    QueueNotFound,
 }
 
 /// Exit code the helper uses for the first failure kind. Codes start above the values the C runtime
@@ -106,7 +117,7 @@ const FIRST_FAILURE_EXIT_CODE: i32 = 10;
 
 impl SetupFailureKind {
     /// Every kind, in a fixed order.
-    pub const ALL: [SetupFailureKind; 8] = [
+    pub const ALL: [SetupFailureKind; 10] = [
         SetupFailureKind::Unsupported,
         SetupFailureKind::PermissionDenied,
         SetupFailureKind::InvalidRequest,
@@ -115,6 +126,8 @@ impl SetupFailureKind {
         SetupFailureKind::ExistingQueueConflict,
         SetupFailureKind::TimedOut,
         SetupFailureKind::Other,
+        SetupFailureKind::QueueBusy,
+        SetupFailureKind::QueueNotFound,
     ];
 
     /// The stable id used by logs and by the helper's own diagnostics.
@@ -128,6 +141,8 @@ impl SetupFailureKind {
             SetupFailureKind::ExistingQueueConflict => "existing-queue-conflict",
             SetupFailureKind::TimedOut => "timed-out",
             SetupFailureKind::Other => "other",
+            SetupFailureKind::QueueBusy => "queue-busy",
+            SetupFailureKind::QueueNotFound => "queue-not-found",
         }
     }
 
@@ -148,6 +163,8 @@ impl SetupFailureKind {
                 SetupFailureKind::ExistingQueueConflict => 5,
                 SetupFailureKind::TimedOut => 6,
                 SetupFailureKind::Other => 7,
+                SetupFailureKind::QueueBusy => 8,
+                SetupFailureKind::QueueNotFound => 9,
             }
     }
 
@@ -170,7 +187,9 @@ impl SetupFailureKind {
             SetupFailureKind::InvalidRequest => ErrorCode::InvalidInput,
             SetupFailureKind::SpoolerUnavailable
             | SetupFailureKind::QueueRejected
-            | SetupFailureKind::ExistingQueueConflict => ErrorCode::InvalidState,
+            | SetupFailureKind::ExistingQueueConflict
+            | SetupFailureKind::QueueBusy
+            | SetupFailureKind::QueueNotFound => ErrorCode::InvalidState,
             SetupFailureKind::TimedOut => ErrorCode::Timeout,
             SetupFailureKind::Other => ErrorCode::Internal,
         }
@@ -202,6 +221,12 @@ impl SetupFailureKind {
             }
             SetupFailureKind::Other => {
                 "the setup helper failed. Restart ShaPrint and try again; if it keeps failing, reinstall the printer driver."
+            }
+            SetupFailureKind::QueueBusy => {
+                "the printer still has pending jobs. Wait for them to finish or cancel them in Windows, then try again."
+            }
+            SetupFailureKind::QueueNotFound => {
+                "the printer queue no longer exists. Refresh My printers and install it again."
             }
         }
     }
@@ -254,6 +279,9 @@ impl SetupFailure {
                 SetupAction::InstallPrinter => {
                     format!("Could not install the Windows printer queue: {advice}")
                 }
+                SetupAction::RepairPrinter => {
+                    format!("Could not repair the Windows printer queue: {advice}")
+                }
                 other => format!("Could not complete {}: {advice}", other.as_str()),
             },
         )
@@ -265,6 +293,19 @@ impl SetupFailure {
             self.kind.error_code(),
             format!(
                 "Could not install the Windows queue \"{}\" for printer \"{}\": {}",
+                request.queue_name(),
+                request.printer(),
+                self.kind.advice()
+            ),
+        )
+    }
+
+    /// The error the user sees when this queue could not be repaired.
+    pub fn for_queue_repair(&self, request: &ClientQueueRequest) -> AppError {
+        AppError::new(
+            self.kind.error_code(),
+            format!(
+                "Could not repair the Windows queue \"{}\" for printer \"{}\": {}",
                 request.queue_name(),
                 request.printer(),
                 self.kind.advice()
@@ -292,7 +333,10 @@ mod tests {
             .map(SetupAction::as_str)
             .collect();
 
-        assert_eq!(elevating, vec!["allow-inbound-sharing", "install-printer"]);
+        assert_eq!(
+            elevating,
+            vec!["allow-inbound-sharing", "install-printer", "repair-printer"]
+        );
     }
 
     #[test]
@@ -310,6 +354,7 @@ mod tests {
                 "stop-sharing",
                 "show-certificate-fingerprint",
                 "install-printer",
+                "repair-printer",
             ]
         );
         for action in SetupAction::ALL {

@@ -323,6 +323,33 @@ pub async fn install_printer_queue(
     }
 }
 
+/// Recreates an existing native Windows queue so it reloads the Server's IPP capabilities.
+#[tauri::command]
+pub async fn repair_printer_queue(
+    server_address: String,
+    printer_name: String,
+    queues: State<'_, SharedQueueInstallation>,
+) -> Result<ClientQueueDto, AppErrorDto> {
+    let installation = Arc::clone(queues.inner());
+    match installation.repair(&server_address, &printer_name).await {
+        Ok(queue) => {
+            log::info!(
+                "command=repair_printer_queue queue={} code=ok",
+                queue.name()
+            );
+            Ok(ClientQueueDto::from(&queue))
+        }
+        Err(error) => {
+            log::warn!(
+                "command=repair_printer_queue code={} message={}",
+                error.code_str(),
+                error
+            );
+            Err(AppErrorDto::from(&error))
+        }
+    }
+}
+
 /// Opens Windows Printers & scanners settings or control panel through a constrained desktop action.
 #[tauri::command]
 pub async fn open_printers_settings() -> Result<(), AppErrorDto> {

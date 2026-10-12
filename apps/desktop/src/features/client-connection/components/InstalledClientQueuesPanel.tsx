@@ -1,7 +1,19 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, ExternalLink, Plus, RefreshCw, ShieldAlert } from "lucide-react";
+import { Check, Copy, ExternalLink, Plus, RefreshCw, ShieldAlert, Wrench } from "lucide-react";
 import { Button } from "../../../components/ui/button";
-import { inspectServerConnection, openPrintersSettings } from "../../../api/serverConnections";
+import {
+  inspectServerConnection,
+  openPrintersSettings,
+  repairPrinterQueue,
+} from "../../../api/serverConnections";
+import type { RecognisedClientQueue } from "../../../api/types";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../../components/ui/dialog";
 import type { UseRecognisedClientQueues } from "../hooks/useRecognisedClientQueues";
 
 interface InstalledClientQueuesPanelProps {
@@ -19,6 +31,10 @@ export function InstalledClientQueuesPanel({
   const [copiedQueue, setCopiedQueue] = useState<string | null>(null);
   const [manageError, setManageError] = useState<string | null>(null);
   const [serverChangedMap, setServerChangedMap] = useState<Record<string, boolean>>({});
+  const [repairTarget, setRepairTarget] = useState<RecognisedClientQueue | null>(null);
+  const [repairing, setRepairing] = useState(false);
+  const [repairError, setRepairError] = useState<string | null>(null);
+  const [repairSuccess, setRepairSuccess] = useState<string | null>(null);
 
   // Check known server identities for installed queues with evidence attribution
   useEffect(() => {
@@ -67,6 +83,28 @@ export function InstalledClientQueuesPanel({
       setManageError(
         "Could not open Windows Settings automatically. Open Windows Settings > Bluetooth & devices > Printers & scanners to manage your installed queues.",
       );
+    }
+  }
+
+  async function handleRepair() {
+    if (!repairTarget) return;
+    setRepairing(true);
+    setRepairError(null);
+    setRepairSuccess(null);
+    try {
+      await repairPrinterQueue(repairTarget.server_address, repairTarget.printer_name);
+      const repairedName = repairTarget.queue_name;
+      setRepairTarget(null);
+      setRepairSuccess(`Repaired ${repairedName}. Windows reloaded its paper sizes.`);
+      await refresh();
+    } catch (cause) {
+      setRepairError(
+        typeof cause === "object" && cause !== null && "message" in cause
+          ? String((cause as { message: unknown }).message)
+          : "Could not repair the Windows printer queue.",
+      );
+    } finally {
+      setRepairing(false);
     }
   }
 
@@ -132,6 +170,12 @@ export function InstalledClientQueuesPanel({
           <p className="mt-1 text-[11px] text-muted-foreground">
             Copy the queue name below to search for it directly in Windows.
           </p>
+        </div>
+      ) : null}
+
+      {repairSuccess ? (
+        <div className="rounded-lg border border-green-600/30 bg-green-600/10 p-3 text-xs text-green-800 dark:text-green-200">
+          {repairSuccess}
         </div>
       ) : null}
 
@@ -229,6 +273,22 @@ export function InstalledClientQueuesPanel({
                       variant="outline"
                       size="sm"
                       className="h-8 text-xs"
+                      disabled={identityChanged}
+                      onClick={() => {
+                        setRepairError(null);
+                        setRepairTarget(queue);
+                      }}
+                      aria-label={`Repair paper sizes for ${queue.queue_name}`}
+                    >
+                      <Wrench className="size-3 mr-1" />
+                      Repair paper sizes
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
                       onClick={() => void handleManageInWindows()}
                     >
                       <ExternalLink className="size-3 mr-1" />
@@ -241,6 +301,48 @@ export function InstalledClientQueuesPanel({
           </ul>
         </div>
       ) : null}
+
+      <Dialog
+        open={repairTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !repairing) {
+            setRepairTarget(null);
+            setRepairError(null);
+          }
+        }}
+        ariaLabelledBy="repair-queue-title"
+        ariaDescribedBy="repair-queue-description"
+      >
+        <DialogHeader>
+          <DialogTitle id="repair-queue-title">Repair paper sizes?</DialogTitle>
+          <DialogDescription id="repair-queue-description">
+            ShaPrint will remove and reinstall {repairTarget?.queue_name}. Windows will request
+            administrator permission and may reset this printer&apos;s local printing preferences.
+            Pending print jobs must finish or be cancelled first.
+          </DialogDescription>
+        </DialogHeader>
+        {repairError ? (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            {repairError}
+          </div>
+        ) : null}
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={repairing}
+            onClick={() => {
+              setRepairTarget(null);
+              setRepairError(null);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button type="button" disabled={repairing} onClick={() => void handleRepair()}>
+            {repairing ? "Repairing…" : "Repair queue"}
+          </Button>
+        </DialogFooter>
+      </Dialog>
     </section>
   );
 }

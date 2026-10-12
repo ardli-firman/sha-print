@@ -541,32 +541,6 @@ fn response_start(request_id: u32, version: (u8, u8), status: Status, capacity: 
     out
 }
 
-pub const SUPPORTED_MEDIA: &[&str] = &[
-    "iso_a4_210x297mm",
-    "na_letter_8.5x11in",
-    "na_legal_8.5x14in",
-    "om_folio_210x330mm",
-    "na_foolscap_8.5x13in",
-    "iso_a3_297x420mm",
-    "iso_a5_148x210mm",
-    "iso_a6_105x148mm",
-    "iso_b4_250x353mm",
-    "iso_b5_176x250mm",
-    "jis_b5_182x257mm",
-    "na_executive_7.25x10.5in",
-    "na_invoice_5.5x8.5in",
-    "na_ledger_11x17in",
-    "oe_photo-4x6_4x6in",
-    "na_index-4x6_4x6in",
-    "na_5x7_5x7in",
-    "iso_dl_110x220mm",
-    "iso_c5_162x229mm",
-    "na_number-10_4.125x9.5in",
-    "na_monarch_3.875x7.5in",
-    "custom_min_50x50mm",
-    "custom_max_330x450mm",
-];
-
 /// Builds the response to `Get-Printers` or `Get-Printer-Attributes`.
 ///
 /// RFC 8010: a response header carries the version, the status code (in place of the request's
@@ -607,8 +581,12 @@ pub fn response(
             &["image/pwg-raster"],
         );
         write_text(&mut out, tag::KEYWORD, "media-default", "iso_a4_210x297mm");
-        write_texts(&mut out, tag::KEYWORD, "media-supported", SUPPORTED_MEDIA);
-        write_texts(&mut out, tag::KEYWORD, "media-ready", SUPPORTED_MEDIA);
+        let supported_media: Vec<&str> = crate::adapters::printers::media::MEDIA_CATALOG
+            .iter()
+            .map(|media| media.keyword)
+            .collect();
+        write_texts(&mut out, tag::KEYWORD, "media-supported", &supported_media);
+        write_texts(&mut out, tag::KEYWORD, "media-ready", &supported_media);
         write_integers(
             &mut out,
             tag::INTEGER,
@@ -618,8 +596,6 @@ pub fn response(
         write_integers(&mut out, tag::INTEGER, "media-top-margin-supported", &[0]);
         write_integers(&mut out, tag::INTEGER, "media-left-margin-supported", &[0]);
         write_integers(&mut out, tag::INTEGER, "media-right-margin-supported", &[0]);
-        write_range_of_integers(&mut out, "media-x-dimension-supported", 5000, 33020);
-        write_range_of_integers(&mut out, "media-y-dimension-supported", 5000, 45000);
         write_text(&mut out, tag::KEYWORD, "sides-default", "one-sided");
         write_texts(
             &mut out,
@@ -1054,7 +1030,11 @@ mod tests {
             Some("iso_a4_210x297mm".to_owned())
         );
         let supported = texts(&attributes, "media-supported");
-        assert_eq!(supported, SUPPORTED_MEDIA);
+        let catalog: Vec<String> = crate::adapters::printers::media::MEDIA_CATALOG
+            .iter()
+            .map(|media| media.keyword.to_owned())
+            .collect();
+        assert_eq!(supported, catalog);
         let ready = texts(&attributes, "media-ready");
         assert!(!ready.is_empty());
         assert!(ready.contains(&"iso_a4_210x297mm".to_string()));
@@ -1074,14 +1054,13 @@ mod tests {
             vec![0]
         );
 
-        // Assert custom media dimension ranges
         assert_eq!(
             integer_range(&attributes, "media-x-dimension-supported"),
-            Some((5000, 33020))
+            None
         );
         assert_eq!(
             integer_range(&attributes, "media-y-dimension-supported"),
-            Some((5000, 45000))
+            None
         );
     }
 

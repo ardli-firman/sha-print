@@ -4,6 +4,7 @@
 
 #[cfg(any(windows, test))]
 mod dev_mode;
+pub(crate) mod media;
 #[cfg(any(windows, test))]
 mod page_settings;
 pub mod raster;

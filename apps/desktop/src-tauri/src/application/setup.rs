@@ -26,6 +26,11 @@ pub trait ElevationBroker: Send + Sync + 'static {
     /// Queue installation always changes machine-wide spooler state, so it is its own operation
     /// rather than a parameterless action: the helper needs the queue name and its destination.
     fn install_queue(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure>;
+
+    /// Recreates an existing native Windows queue so the spooler reloads IPP capabilities.
+    fn repair_queue(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+        self.install_queue(request)
+    }
 }
 
 /// What the shell did for a configuration action.
@@ -93,8 +98,7 @@ impl Setup {
 
     /// Installs (or repairs) the native Windows queue for `request`.
     ///
-    /// A spooler queue is machine-wide state, so [`SetupAction::InstallPrinter`] is classified as
-    /// requiring elevation and this call always prompts.
+    /// A spooler queue is machine-wide state, so this call always prompts.
     pub fn install_queue(&self, request: &ClientQueueRequest) -> Result<(), AppError> {
         log::info!(
             "requesting elevation action={}",
@@ -107,6 +111,22 @@ impl Setup {
                 failure.kind().id()
             );
             failure.for_queue_install(request)
+        })
+    }
+
+    /// Repairs an existing native Windows queue with administrator permission.
+    pub fn repair_queue(&self, request: &ClientQueueRequest) -> Result<(), AppError> {
+        log::info!(
+            "requesting elevation action={}",
+            SetupAction::RepairPrinter.as_str()
+        );
+        self.broker.repair_queue(request).map_err(|failure| {
+            log::warn!(
+                "queue repair failed queue={} reason={}",
+                request.queue_name(),
+                failure.kind().id()
+            );
+            failure.for_queue_repair(request)
         })
     }
 }

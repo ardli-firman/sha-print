@@ -28,7 +28,7 @@ pub(super) fn submit_windows_job(printer: &str, job: &PrintJob) -> Result<u32, A
     for (index, page) in pwg_pages(job.document())?.enumerate() {
         let page = page?;
         if index == 0 {
-            resolved_settings = settings_for_page(job.settings(), &page);
+            resolved_settings = settings_for_page(job.settings(), &page)?;
         }
     }
     let printer_wide: Vec<u16> = printer.encode_utf16().chain(Some(0)).collect();

@@ -28,6 +28,8 @@ pub enum HelperRequest {
     Action(SetupAction),
     /// Install (or repair) the native Windows queue for one shared printer.
     InstallClientQueue(ClientQueueRequest),
+    /// Recreate one existing native Windows queue to refresh its IPP capabilities.
+    RepairClientQueue(ClientQueueRequest),
 }
 
 /// What a command line means for the executable.
@@ -61,7 +63,8 @@ fn parse_setup(arguments: &mut dyn Iterator<Item = &str>) -> CommandLine {
     };
     match SetupAction::parse(action) {
         // Installing a queue is the one action that carries data, so it is parsed separately.
-        Some(SetupAction::InstallPrinter) => parse_install(arguments),
+        Some(SetupAction::InstallPrinter) => parse_queue_request(arguments, false),
+        Some(SetupAction::RepairPrinter) => parse_queue_request(arguments, true),
         Some(action) => CommandLine::Setup(HelperRequest::Action(action)),
         None => CommandLine::Invalid(action.to_owned()),
     }
@@ -71,7 +74,7 @@ fn parse_setup(arguments: &mut dyn Iterator<Item = &str>) -> CommandLine {
 ///
 /// An unrecognised option is an error rather than something to ignore: a typo must not silently
 /// install a queue for the wrong server or printer.
-fn parse_install(arguments: &mut dyn Iterator<Item = &str>) -> CommandLine {
+fn parse_queue_request(arguments: &mut dyn Iterator<Item = &str>, repair: bool) -> CommandLine {
     let mut server: Option<&str> = None;
     let mut printer: Option<&str> = None;
     while let Some(option) = arguments.next() {
@@ -90,11 +93,17 @@ fn parse_install(arguments: &mut dyn Iterator<Item = &str>) -> CommandLine {
     }
 
     let (Some(server), Some(printer)) = (server, printer) else {
-        return CommandLine::Invalid(SetupAction::InstallPrinter.as_str().to_owned());
+        let action = if repair {
+            SetupAction::RepairPrinter
+        } else {
+            SetupAction::InstallPrinter
+        };
+        return CommandLine::Invalid(action.as_str().to_owned());
     };
     // The helper re-validates everything it was handed: it must not install a queue for an address
     // or printer the app would have refused.
     match PrinterName::parse(printer).and_then(|printer| ClientQueueRequest::new(server, printer)) {
+        Ok(request) if repair => CommandLine::Setup(HelperRequest::RepairClientQueue(request)),
         Ok(request) => CommandLine::Setup(HelperRequest::InstallClientQueue(request)),
         Err(error) => CommandLine::Invalid(error.message().to_owned()),
     }
@@ -107,6 +116,12 @@ pub fn helper_parameters(request: &HelperRequest) -> String {
         HelperRequest::InstallClientQueue(request) => format!(
             "{SETUP_FLAG} {} {SERVER_OPTION} {} {PRINTER_OPTION} {}",
             SetupAction::InstallPrinter.as_str(),
+            quote_argument(request.server_address()),
+            quote_argument(request.printer().as_str())
+        ),
+        HelperRequest::RepairClientQueue(request) => format!(
+            "{SETUP_FLAG} {} {SERVER_OPTION} {} {PRINTER_OPTION} {}",
+            SetupAction::RepairPrinter.as_str(),
             quote_argument(request.server_address()),
             quote_argument(request.printer().as_str())
         ),
@@ -184,7 +199,10 @@ impl ElevationBroker for SystemElevation {
                 format!("{} does not need administrator permission", action.as_str()),
             ));
         }
-        if action == SetupAction::InstallPrinter {
+        if matches!(
+            action,
+            SetupAction::InstallPrinter | SetupAction::RepairPrinter
+        ) {
             // Queue installation needs the printer it targets; it has its own operation.
             return Err(SetupFailure::new(
                 SetupFailureKind::InvalidRequest,
@@ -200,6 +218,10 @@ impl ElevationBroker for SystemElevation {
     fn install_queue(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
         start_helper(&HelperRequest::InstallClientQueue(request.clone()))
     }
+
+    fn repair_queue(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+        start_helper(&HelperRequest::RepairClientQueue(request.clone()))
+    }
 }
 
 /// Performs one request from inside an elevated process of this same executable.
@@ -209,6 +231,9 @@ pub fn run_elevated(request: HelperRequest) -> Result<(), SetupFailure> {
         // Non-Windows builds report `unsupported` from their own adapter.
         HelperRequest::InstallClientQueue(request) => {
             crate::adapters::queue_installation::platform_installer().install(&request)
+        }
+        HelperRequest::RepairClientQueue(request) => {
+            crate::adapters::queue_installation::platform_installer().repair(&request)
         }
     }
 }
@@ -438,6 +463,9 @@ mod windows {
             HelperRequest::InstallClientQueue(request) => {
                 format!("install-printer queue={}", request.queue_name())
             }
+            HelperRequest::RepairClientQueue(request) => {
+                format!("repair-printer queue={}", request.queue_name())
+            }
         }
     }
 
@@ -473,9 +501,9 @@ mod windows {
         match action {
             SetupAction::AllowInboundSharing => allow_inbound_sharing(),
             // The caller routes these two to their own operations.
-            SetupAction::InstallPrinter => Err(SetupFailure::new(
+            SetupAction::InstallPrinter | SetupAction::RepairPrinter => Err(SetupFailure::new(
                 SetupFailureKind::InvalidRequest,
-                "install-printer needs the shared printer it targets",
+                "printer queue operations need the shared printer they target",
             )),
             _ => Err(SetupFailure::new(
                 SetupFailureKind::InvalidRequest,
@@ -850,6 +878,26 @@ mod tests {
     }
 
     #[test]
+    fn a_repair_request_round_trips_through_its_parameters() {
+        let request = queue_request("Office Printer");
+        let encoded = helper_parameters(&HelperRequest::RepairClientQueue(request.clone()));
+        let decoded = parse_command_line(&arguments(&[
+            "shaprint.exe",
+            SETUP_FLAG,
+            "repair-printer",
+            SERVER_OPTION,
+            request.server_address(),
+            PRINTER_OPTION,
+            request.printer().as_str(),
+        ]));
+        assert_eq!(
+            decoded,
+            CommandLine::Setup(HelperRequest::RepairClientQueue(request))
+        );
+        assert!(encoded.contains("repair-printer"));
+    }
+
+    #[test]
     fn a_duplicate_or_unknown_option_is_refused() {
         for extra in [
             vec![
@@ -971,7 +1019,16 @@ mod tests {
             .expect_err("unsupported");
         assert_eq!(failure.kind(), SetupFailureKind::Unsupported);
 
+        let failure = SystemElevation::new()
+            .repair_queue(&queue_request("Office Printer"))
+            .expect_err("unsupported");
+        assert_eq!(failure.kind(), SetupFailureKind::Unsupported);
+
         let failure = run_elevated(HelperRequest::InstallClientQueue(queue_request("Office")))
+            .expect_err("unsupported");
+        assert_eq!(failure.kind(), SetupFailureKind::Unsupported);
+
+        let failure = run_elevated(HelperRequest::RepairClientQueue(queue_request("Office")))
             .expect_err("unsupported");
         assert_eq!(failure.kind(), SetupFailureKind::Unsupported);
     }

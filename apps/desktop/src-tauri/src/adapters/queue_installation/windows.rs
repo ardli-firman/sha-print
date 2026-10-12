@@ -28,6 +28,9 @@ pub const ARGUMENTS: [&str; 3] = ["-NoProfile", "-NonInteractive", "-Command"];
 /// Environment variables the script reads. Values never appear in the script text.
 pub const QUEUE_NAME_VARIABLE: &str = "SHAPRINT_QUEUE_NAME";
 pub const QUEUE_IPP_URL_VARIABLE: &str = "SHAPRINT_QUEUE_IPP_URL";
+pub const QUEUE_MODE_VARIABLE: &str = "SHAPRINT_QUEUE_MODE";
+const INSTALL_MODE: &str = "install";
+const REPAIR_MODE: &str = "repair";
 
 /// Prefix of the single stable line the script writes when it cannot create the queue.
 pub const FAILURE_MARKER: &str = "SHAPRINT-FAIL";
@@ -53,7 +56,9 @@ if ($null -eq $spooler -or $spooler.Status -ne 'Running') {
 }
 $name = $env:SHAPRINT_QUEUE_NAME
 $url = $env:SHAPRINT_QUEUE_IPP_URL
-if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($url)) {
+$mode = $env:SHAPRINT_QUEUE_MODE
+if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($url) -or
+    @('install', 'repair') -notcontains $mode) {
     Write-Output 'SHAPRINT-FAIL invalid-request'
     exit 1
 }
@@ -61,6 +66,21 @@ try {
     $existing = Get-Printer -Name $name -ErrorAction SilentlyContinue
     if ($existing) {
         $port = "$($existing.PortName)"
+        if ($mode -eq 'repair') {
+            if (-not ($port -eq $url -or $port -eq $url.Replace('ipp://', 'http://') -or $port -like 'WSD-*')) {
+                Write-Output 'SHAPRINT-FAIL existing-queue-conflict'
+                [Console]::Error.WriteLine("the queue '$name' already exists and points at '$port'")
+                exit 1
+            }
+            if (@(Get-PrintJob -PrinterName $name -ErrorAction Stop).Count -gt 0) {
+                Write-Output 'SHAPRINT-FAIL queue-busy'
+                [Console]::Error.WriteLine("the queue '$name' still has pending jobs")
+                exit 1
+            }
+            Remove-Printer -Name $name -ErrorAction Stop
+            Add-Printer -Name $name -IppURL $url -ErrorAction Stop
+            exit 0
+        }
         if ($port -eq $url -or $port -eq $url.Replace('ipp://', 'http://') -or $port -like 'WSD-*') {
             exit 0
         }
@@ -71,6 +91,11 @@ try {
         }
         Write-Output 'SHAPRINT-FAIL existing-queue-conflict'
         [Console]::Error.WriteLine("the queue '$name' already exists and points at '$port'")
+        exit 1
+    }
+    if ($mode -eq 'repair') {
+        Write-Output 'SHAPRINT-FAIL queue-not-found'
+        [Console]::Error.WriteLine("the queue '$name' no longer exists")
         exit 1
     }
     Add-Printer -Name $name -IppURL $url -ErrorAction Stop
@@ -89,14 +114,8 @@ impl WindowsQueueInstaller {
     pub fn new() -> Self {
         Self
     }
-}
 
-impl QueueInstaller for WindowsQueueInstaller {
-    fn queue_uri(&self, request: &ClientQueueRequest) -> Result<String, AppError> {
-        super::queue_uri(&super::proxy_authority(), request)
-    }
-
-    fn install(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+    fn run(&self, request: &ClientQueueRequest, mode: &str) -> Result<(), SetupFailure> {
         let uri = super::queue_uri(&super::proxy_authority(), request).map_err(|error| {
             SetupFailure::new(SetupFailureKind::InvalidRequest, error.message())
         })?;
@@ -106,8 +125,8 @@ impl QueueInstaller for WindowsQueueInstaller {
             .args(ARGUMENTS)
             .arg(SCRIPT)
             .env(QUEUE_NAME_VARIABLE, request.queue_name().as_str())
-            .env(QUEUE_IPP_URL_VARIABLE, &uri);
-        // A GUI helper must not flash a console window for the command it runs.
+            .env(QUEUE_IPP_URL_VARIABLE, &uri)
+            .env(QUEUE_MODE_VARIABLE, mode);
         hide_console(&mut command);
 
         let output = command.output().map_err(|error| {
@@ -130,6 +149,20 @@ impl QueueInstaller for WindowsQueueInstaller {
             output.status,
             &String::from_utf8_lossy(&output.stderr),
         ))
+    }
+}
+
+impl QueueInstaller for WindowsQueueInstaller {
+    fn queue_uri(&self, request: &ClientQueueRequest) -> Result<String, AppError> {
+        super::queue_uri(&super::proxy_authority(), request)
+    }
+
+    fn install(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+        self.run(request, INSTALL_MODE)
+    }
+
+    fn repair(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+        self.run(request, REPAIR_MODE)
     }
 }
 
@@ -196,7 +229,7 @@ mod tests {
 
     #[test]
     fn the_script_reports_every_failure_kind_it_can_classify() {
-        let reported: Vec<SetupFailureKind> = SCRIPT
+        let mut reported: Vec<&str> = SCRIPT
             .lines()
             .filter_map(|line| {
                 line.trim()
@@ -204,17 +237,22 @@ mod tests {
                     .and_then(|rest| rest.strip_suffix('\''))
                     .and_then(|token| token.strip_prefix(FAILURE_MARKER))
                     .and_then(|kind| SetupFailureKind::from_id(kind.trim()))
+                    .map(SetupFailureKind::id)
             })
             .collect();
+        reported.sort_unstable();
+        reported.dedup();
 
         assert_eq!(
             reported,
             vec![
-                SetupFailureKind::Unsupported,
-                SetupFailureKind::SpoolerUnavailable,
-                SetupFailureKind::InvalidRequest,
-                SetupFailureKind::ExistingQueueConflict,
-                SetupFailureKind::QueueRejected,
+                "existing-queue-conflict",
+                "invalid-request",
+                "queue-busy",
+                "queue-not-found",
+                "queue-rejected",
+                "spooler-unavailable",
+                "unsupported",
             ]
         );
     }
@@ -224,6 +262,7 @@ mod tests {
         assert!(SCRIPT.contains("Add-Printer -Name $name -IppURL $url"));
         assert!(SCRIPT.contains(QUEUE_NAME_VARIABLE));
         assert!(SCRIPT.contains(QUEUE_IPP_URL_VARIABLE));
+        assert!(SCRIPT.contains(QUEUE_MODE_VARIABLE));
         // No user-supplied value is interpolated into the script text.
         assert!(!SCRIPT.contains("Office Printer"));
         assert_ne!(QUEUE_NAME_VARIABLE, QUEUE_IPP_URL_VARIABLE);
@@ -239,20 +278,36 @@ mod tests {
         let loopback_match = SCRIPT
             .find("if ($port -match '^(?i)(ipp|http)://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:\\d+)?/ipp/print/')")
             .expect("identifies ShaPrint loopback proxy destinations");
-        let remove = SCRIPT
+        let legacy_branch = SCRIPT
+            .find("if ($port -match '^(?i)(ipp|http)://")
+            .expect("identifies an older ShaPrint destination");
+        let remove = SCRIPT[legacy_branch..]
             .find("Remove-Printer -Name $name")
+            .map(|offset| legacy_branch + offset)
             .expect("removes older ShaPrint loopback queue");
-        let re_add = SCRIPT
+        let re_add = SCRIPT[remove..]
             .find("Add-Printer -Name $name -IppURL $url")
+            .map(|offset| remove + offset)
             .expect("re-creates updated queue");
-        let conflict = SCRIPT
+        let conflict = SCRIPT[re_add..]
             .find("existing-queue-conflict")
+            .map(|offset| re_add + offset)
             .expect("reports conflict for unrelated queues");
 
         assert!(identical_check < loopback_match);
         assert!(loopback_match < remove);
         assert!(remove < re_add);
         assert!(re_add < conflict);
+    }
+
+    #[test]
+    fn repair_recreates_only_an_idle_matching_queue() {
+        assert!(SCRIPT.contains("if ($mode -eq 'repair')"));
+        assert!(SCRIPT.contains("Get-PrintJob -PrinterName $name"));
+        assert!(SCRIPT.contains("SHAPRINT-FAIL queue-busy"));
+        assert!(SCRIPT.contains("SHAPRINT-FAIL queue-not-found"));
+        assert!(SCRIPT.contains("Remove-Printer -Name $name -ErrorAction Stop"));
+        assert!(SCRIPT.contains("Add-Printer -Name $name -IppURL $url -ErrorAction Stop"));
     }
 
     #[test]
