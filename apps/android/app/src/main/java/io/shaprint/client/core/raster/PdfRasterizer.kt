@@ -3,6 +3,7 @@ package io.shaprint.client.core.raster
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.pdf.PdfRenderer
 import io.shaprint.client.core.domain.model.PrintColorMode
 import io.shaprint.client.core.domain.model.PrintOrientation
@@ -11,6 +12,47 @@ import java.io.OutputStream
 import kotlin.math.roundToInt
 
 object PdfRasterizer {
+
+    data class PageTransform(
+        val scale: Float,
+        val dx: Float,
+        val dy: Float
+    )
+
+    /**
+     * Calculates uniform scaling and translation offsets to center a PDF page
+     * onto paper dimensions without stretching or distortion.
+     */
+    fun calculatePrintTransform(
+        pageWidth: Float,
+        pageHeight: Float,
+        paperWidthPx: Int,
+        paperHeightPx: Int
+    ): PageTransform {
+        val scale = minOf(paperWidthPx / pageWidth, paperHeightPx / pageHeight)
+        val scaledW = pageWidth * scale
+        val scaledH = pageHeight * scale
+        val dx = (paperWidthPx - scaledW) / 2f
+        val dy = (paperHeightPx - scaledH) / 2f
+        return PageTransform(scale, dx, dy)
+    }
+
+    /**
+     * Calculates the uniform scaling Matrix and translation offsets needed to center
+     * a PDF page on target paper dimensions without stretching or distortion.
+     */
+    fun calculatePrintMatrix(
+        pageWidth: Float,
+        pageHeight: Float,
+        paperWidthPx: Int,
+        paperHeightPx: Int
+    ): Matrix {
+        val transform = calculatePrintTransform(pageWidth, pageHeight, paperWidthPx, paperHeightPx)
+        return Matrix().apply {
+            postScale(transform.scale, transform.scale)
+            postTranslate(transform.dx, transform.dy)
+        }
+    }
 
     /**
      * Streams a multi-page PDF document page-by-page directly to a PWG 5102.4 raster output stream.
@@ -50,13 +92,20 @@ object PdfRasterizer {
                 val header = PwgEncoder.buildHeader(widthPx, heightPx, colorMode)
                 out.write(header)
 
-                // Render page to single-page temporary bitmap
+                // Render page to single-page temporary bitmap with uniform aspect ratio
                 val pageBitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
                 try {
                     val canvas = Canvas(pageBitmap)
                     canvas.drawColor(Color.WHITE)
 
-                    page.render(pageBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+                    val matrix = calculatePrintMatrix(
+                        pageWidth = page.width.toFloat(),
+                        pageHeight = page.height.toFloat(),
+                        paperWidthPx = widthPx,
+                        paperHeightPx = heightPx
+                    )
+
+                    page.render(pageBitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
 
                     // Stream rows with PackBits compression
                     for (y in 0 until heightPx) {
