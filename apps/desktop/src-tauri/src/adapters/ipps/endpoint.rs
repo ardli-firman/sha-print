@@ -397,20 +397,23 @@ pub(super) async fn answer_job(
     } else {
         None
     };
-    if !submitter.is_available() {
-        // Reported only after authorization, so an anonymous caller cannot fill the server user's
-        // screen with failures it has no way to act on.
-        failures.report(PrintFailure::server(ErrorCode::QueueUnavailable, None));
-        return (
-            response(request_id, version, Status::NotAcceptingJobs, &[]),
-            active_job_guard,
-        );
-    }
     let shared_printers = shared.shared_printers();
     let selected = request
         .value("printer-uri")
         .and_then(|uri| find_by_uri(&shared_printers, host, uri))
         .cloned();
+    if !submitter.is_available() {
+        // Reported only after authorization, so an anonymous caller cannot fill the server user's
+        // screen with failures it has no way to act on.
+        failures.report(PrintFailure::server(
+            ErrorCode::QueueUnavailable,
+            selected.as_ref(),
+        ));
+        return (
+            response(request_id, version, Status::NotAcceptingJobs, &[]),
+            active_job_guard,
+        );
+    }
     let Some(printer) = selected else {
         return (
             response(request_id, version, Status::NotFound, &[]),
@@ -437,7 +440,15 @@ pub(super) async fn answer_job(
 
     let settings = match job_settings(&request) {
         Ok(settings) => settings,
-        Err(status) => return (response(request_id, version, status, &[]), active_job_guard),
+        Err(status) => {
+            if operation == OPERATION_PRINT_JOB {
+                failures.report(PrintFailure::server(
+                    ErrorCode::InvalidInput,
+                    Some(&printer),
+                ));
+            }
+            return (response(request_id, version, status, &[]), active_job_guard);
+        }
     };
 
     if operation == OPERATION_VALIDATE_JOB {
@@ -552,7 +563,10 @@ async fn answer_multi_step(
                 );
             }
             if !submitter.is_available() {
-                failures.report(PrintFailure::server(ErrorCode::QueueUnavailable, None));
+                failures.report(PrintFailure::server(
+                    ErrorCode::QueueUnavailable,
+                    Some(&printer),
+                ));
                 return (
                     response(request_id, version, Status::NotAcceptingJobs, &[]),
                     None,
@@ -560,7 +574,13 @@ async fn answer_multi_step(
             }
             let settings = match job_settings(&request) {
                 Ok(settings) => settings,
-                Err(status) => return (response(request_id, version, status, &[]), None),
+                Err(status) => {
+                    failures.report(PrintFailure::server(
+                        ErrorCode::InvalidInput,
+                        Some(&printer),
+                    ));
+                    return (response(request_id, version, status, &[]), None);
+                }
             };
             if !request_lease.mark_print_job() {
                 return (

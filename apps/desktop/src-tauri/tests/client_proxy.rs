@@ -57,6 +57,7 @@ struct FakeSubmitter {
     jobs: Mutex<Vec<(String, PrintJob)>>,
     render: AtomicBool,
     pages: Mutex<Vec<RasterPage>>,
+    failure: Mutex<Option<AppError>>,
     submitted: tokio::sync::Notify,
     submission_gate: Mutex<
         Option<(
@@ -77,6 +78,15 @@ impl PrintJobSubmitter for FakeSubmitter {
         if let Some((entered, release)) = gate {
             let _ = entered.send(());
             let _ = release.await;
+        }
+        if let Some(error) = self
+            .failure
+            .lock()
+            .expect("reads injected failure")
+            .as_ref()
+            .map(|error| AppError::new(error.code(), error.message()))
+        {
+            return Err(error);
         }
         if self.render.load(Ordering::Relaxed) {
             // Same decoder the real Windows adapter runs before invoking the installed driver.
@@ -100,6 +110,7 @@ struct RunningPair {
     server: Arc<RuntimeCoordinator>,
     proxy: Arc<ClientProxyService>,
     failures: Arc<PrintFailures>,
+    server_failures: Arc<PrintFailures>,
     server_address: String,
     trust_directory: PathBuf,
     server_tracker: Arc<shaprint_desktop::application::PrintJobTracker>,
@@ -131,12 +142,13 @@ impl RunningPair {
             .expect("selects server queue");
         let submitter = Arc::new(FakeSubmitter::default());
         let server_tracker = Arc::new(shaprint_desktop::application::PrintJobTracker::new());
+        let server_failures = Arc::new(PrintFailures::new());
         let endpoint = Arc::new(IppsServer::new(
             server_port,
             Arc::new(ServerIdentity::generate().expect("creates server identity")),
             server_channel,
             submitter.clone(),
-            Arc::new(PrintFailures::new()),
+            Arc::clone(&server_failures),
             server_tracker.clone(),
         ));
         let server = Arc::new(RuntimeCoordinator::new(vec![Arc::new(
@@ -191,6 +203,7 @@ impl RunningPair {
             server,
             proxy,
             failures,
+            server_failures,
             server_address: format!("127.0.0.1:{}", server_address.port()),
             trust_directory,
             server_tracker,
@@ -812,6 +825,13 @@ async fn create_job_requires_authorization_and_a_shared_printer() {
     assert_eq!(http_status, 200);
     assert_eq!(ipp_status(&response), 0x0403);
     assert_eq!(pair.server_tracker.active_count(), 0);
+    let failure = pair
+        .failures
+        .latest()
+        .expect("reports unauthorized Create-Job on client");
+    assert_eq!(failure.path(), JobPath::ClientForwarding);
+    assert_eq!(failure.code(), ErrorCode::NotAuthorized);
+    assert!(failure.message().contains(SERVER_QUEUE));
     pair.stop().await;
 
     let pair = RunningPair::start(true).await;
@@ -824,6 +844,122 @@ async fn create_job_requires_authorization_and_a_shared_printer() {
     assert_eq!(http_status, 200);
     assert_eq!(ipp_status(&response), 0x0406);
     assert_eq!(pair.server_tracker.active_count(), 0);
+    let failure = pair
+        .failures
+        .latest()
+        .expect("reports unshared printer Create-Job on client");
+    assert_eq!(failure.path(), JobPath::ClientForwarding);
+    assert_eq!(failure.code(), ErrorCode::PrinterNotShared);
+    assert!(failure.message().contains("NotShared"));
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn multi_step_send_document_failure_is_reported_on_both_server_and_client() {
+    let pair = RunningPair::start(true).await;
+    *pair.submitter.failure.lock().expect("sets failure") = Some(AppError::internal(
+        "Windows spooler failed to start document",
+    ));
+    let proxy_address = pair.proxy_address();
+    let printer_uri = local_printer_uri(&proxy_address, &pair.server_address);
+
+    let mut create = operation_request(0x0005, 81, &printer_uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+    let job_id = created.integer("job-id").expect("server assigned a job id");
+
+    let mut send = operation_request(0x0006, 82, &printer_uri);
+    integer_attribute(&mut send, "job-id", job_id);
+    text_attribute(&mut send, 0x49, "document-format", "image/pwg-raster");
+    boolean_attribute(&mut send, "last-document", true);
+    send.push(3);
+    send.extend(document_bytes());
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, send).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0500);
+
+    let server_failure = pair
+        .server_failures
+        .latest()
+        .expect("reports failure on server");
+    assert_eq!(server_failure.path(), JobPath::ServerSubmission);
+    assert_eq!(server_failure.code(), ErrorCode::QueueUnavailable);
+    assert!(server_failure.message().contains(SERVER_QUEUE));
+
+    let client_failure = pair
+        .failures
+        .latest()
+        .expect("reports failure on client too");
+    assert_eq!(client_failure.path(), JobPath::ClientForwarding);
+    assert_eq!(client_failure.code(), ErrorCode::QueueUnavailable);
+    assert!(client_failure.message().contains(SERVER_QUEUE));
+    assert!(!client_failure.recovery().is_empty());
+
+    // Subsequent spooler cleanup/polling (Cancel-Job, Get-Jobs) must not overwrite the reported failure.
+    let mut cancel = operation_request(0x0008, 83, &printer_uri);
+    integer_attribute(&mut cancel, "job-id", job_id);
+    cancel.push(3);
+    let _ = submit_request_to_local_queue(&proxy_address, cancel).await;
+
+    let mut get_jobs = operation_request(0x000a, 84, &printer_uri);
+    get_jobs.push(3);
+    let _ = submit_request_to_local_queue(&proxy_address, get_jobs).await;
+
+    let preserved = pair
+        .failures
+        .latest()
+        .expect("preserves the Send-Document failure after cleanup queries");
+    assert_eq!(preserved.code(), ErrorCode::QueueUnavailable);
+    assert!(preserved.message().contains(SERVER_QUEUE));
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn multi_step_invalid_settings_failure_is_reported_with_detail_on_both_server_and_client() {
+    let pair = RunningPair::start(true).await;
+    *pair.submitter.failure.lock().expect("sets failure") =
+        Some(AppError::invalid_input("unsupported paper size"));
+    let proxy_address = pair.proxy_address();
+    let printer_uri = local_printer_uri(&proxy_address, &pair.server_address);
+
+    let mut create = operation_request(0x0005, 91, &printer_uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+    let job_id = created.integer("job-id").expect("server assigned a job id");
+
+    let mut send = operation_request(0x0006, 92, &printer_uri);
+    integer_attribute(&mut send, "job-id", job_id);
+    text_attribute(&mut send, 0x49, "document-format", "image/pwg-raster");
+    boolean_attribute(&mut send, "last-document", true);
+    send.push(3);
+    send.extend(document_bytes());
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, send).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x040b);
+
+    let server_failure = pair
+        .server_failures
+        .latest()
+        .expect("reports invalid settings on server");
+    assert_eq!(server_failure.path(), JobPath::ServerSubmission);
+    assert_eq!(server_failure.code(), ErrorCode::InvalidInput);
+    assert!(server_failure.message().contains(SERVER_QUEUE));
+
+    let client_failure = pair
+        .failures
+        .latest()
+        .expect("reports invalid settings on client too");
+    assert_eq!(client_failure.path(), JobPath::ClientForwarding);
+    assert_eq!(client_failure.code(), ErrorCode::InvalidInput);
+    assert!(client_failure.message().contains(SERVER_QUEUE));
+    assert!(client_failure.message().contains("printer settings"));
+    assert!(client_failure.recovery().contains("supported media size"));
     pair.stop().await;
 }
 

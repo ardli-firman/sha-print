@@ -314,6 +314,12 @@ async fn serve_client(
             | protocol::OPERATION_CANCEL_JOB
     ) {
         if !request_lease.mark_print_job() {
+            if is_print_submission(operation) {
+                failures.report(PrintFailure::client(
+                    ErrorCode::QueueUnavailable,
+                    Some(&printer_name),
+                ));
+            }
             let response =
                 protocol::response(request_id, version, protocol::Status::NotAcceptingJobs, &[]);
             write_http(&mut write, "200 OK", &response).await?;
@@ -343,10 +349,12 @@ async fn serve_client(
             None => {
                 // The installed queue did everything right; the client is simply not configured
                 // for this ShaPrint network yet.
-                failures.report(PrintFailure::client(
-                    ErrorCode::NotAuthorized,
-                    Some(&printer_name),
-                ));
+                if is_print_submission(operation) {
+                    failures.report(PrintFailure::client(
+                        ErrorCode::NotAuthorized,
+                        Some(&printer_name),
+                    ));
+                }
                 write_ipp_error(&mut write, protocol::Status::NotAuthorized).await?;
                 return Ok(());
             }
@@ -366,7 +374,7 @@ async fn serve_client(
                 }
                 None => None,
             };
-            if operation == protocol::OPERATION_PRINT_JOB {
+            if is_print_submission(operation) {
                 // A query the driver makes while probing is not a print failure; a rejected job is.
                 let code = match status {
                     Some(status) => forwarded_failure(status),
@@ -392,7 +400,7 @@ async fn serve_client(
             write_http(&mut write, "200 OK", &response).await
         }
         Err(error) => {
-            if operation == protocol::OPERATION_PRINT_JOB {
+            if is_print_submission(operation) {
                 failures.report(PrintFailure::client(error.code(), Some(&printer_name)));
             }
             let response =
@@ -400,6 +408,18 @@ async fn serve_client(
             write_http(&mut write, "200 OK", &response).await
         }
     }
+}
+
+/// Operations that submit or validate a print job (single-step `Print-Job` and multi-step
+/// `Validate-Job` / `Create-Job` / `Send-Document` used by the Windows IPP class driver).
+const fn is_print_submission(operation: u16) -> bool {
+    matches!(
+        operation,
+        protocol::OPERATION_PRINT_JOB
+            | protocol::OPERATION_VALIDATE_JOB
+            | protocol::OPERATION_CREATE_JOB
+            | protocol::OPERATION_SEND_DOCUMENT
+    )
 }
 
 /// The failure a user should see for an IPP status the server returned for a print job, if any.
