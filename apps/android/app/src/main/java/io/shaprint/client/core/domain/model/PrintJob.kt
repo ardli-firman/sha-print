@@ -31,7 +31,7 @@ data class PrintJobRequest(
         get() = percentEncodeUriSegment(printerName)
 
     val printerIppUri: String
-        get() = "ipp://$serverCanonicalAddress/ipp/print/$encodedPrinterName"
+        get() = "ipps://$serverCanonicalAddress/ipp/print/$encodedPrinterName"
 
     companion object {
         /**

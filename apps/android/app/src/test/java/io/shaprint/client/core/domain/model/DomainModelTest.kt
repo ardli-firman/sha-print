@@ -40,7 +40,7 @@ class DomainModelTest {
         )
         assertEquals("HP%20LaserJet%20Pro%20MFP", requestWithSpaces.encodedPrinterName)
         assertEquals(
-            "ipp://192.168.1.100:48631/ipp/print/HP%20LaserJet%20Pro%20MFP",
+            "ipps://192.168.1.100:48631/ipp/print/HP%20LaserJet%20Pro%20MFP",
             requestWithSpaces.printerIppUri
         )
 

@@ -146,6 +146,65 @@ class IppMessageTest {
         assertEquals(0, parsed.printers.size)
     }
 
+    @Test
+    fun buildsValidPrintJobHeaderWithIppsSchemeAndPwgMimeType() {
+        val request = io.shaprint.client.core.domain.model.PrintJobRequest(
+            printerName = "Epson L3210 Series",
+            serverCanonicalAddress = "192.168.1.50:48631",
+            jobName = "Invoice_2026.pdf",
+            copies = 2,
+            media = RequestedMedia.ISO_A4,
+            colorMode = PrintColorMode.COLOR,
+            duplexMode = DuplexMode.TWO_SIDED_LONG_EDGE
+        )
+
+        val bytes = IppMessage.buildPrintJobHeader(
+            jobRequest = request,
+            networkChannel = "secret-network-key",
+            requestId = 77
+        )
+
+        // Version 2.0 (0x0200)
+        assertEquals(0x02, bytes[0].toInt())
+        assertEquals(0x00, bytes[1].toInt())
+        // Operation ID OP_PRINT_JOB (0x0002)
+        assertEquals(0x00, bytes[2].toInt())
+        assertEquals(0x02, bytes[3].toInt())
+        // Request ID = 77
+        assertEquals(77, bytes[7].toInt())
+
+        // Operation attributes tag: 0x01
+        assertEquals(0x01, bytes[8].toInt())
+
+        // Last byte before payload: TAG_END_OF_ATTRIBUTES (0x03)
+        assertEquals(0x03, bytes[bytes.size - 1].toInt())
+
+        val asString = String(bytes, Charsets.UTF_8)
+        // printer-uri MUST use ipps:// scheme matching server find_by_uri requirement
+        assertTrue(asString.contains("ipps://192.168.1.50:48631/ipp/print/Epson%20L3210%20Series"))
+        assertTrue(asString.contains("image/pwg-raster"))
+        assertTrue(asString.contains("secret-network-key"))
+        assertTrue(asString.contains("Invoice_2026.pdf"))
+    }
+
+    @Test
+    fun parsesJobResponseStatus() {
+        val okBytes = byteArrayOf(0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03)
+        val okResult = IppMessage.parseJobResponse(okBytes)
+        assertTrue(okResult.isSuccess)
+        assertEquals(IppConstants.STATUS_OK, okResult.statusCode)
+
+        val unauthBytes = byteArrayOf(0x02, 0x00, 0x04, 0x03, 0x00, 0x00, 0x00, 0x01, 0x03)
+        val unauthResult = IppMessage.parseJobResponse(unauthBytes)
+        assertFalse(unauthResult.isSuccess)
+        assertEquals(IppConstants.STATUS_CLIENT_ERROR_NOT_AUTHORIZED, unauthResult.statusCode)
+
+        val forbiddenBytes = byteArrayOf(0x02, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x01, 0x03)
+        val forbiddenResult = IppMessage.parseJobResponse(forbiddenBytes)
+        assertFalse(forbiddenResult.isSuccess)
+        assertEquals(IppConstants.STATUS_CLIENT_ERROR_FORBIDDEN, forbiddenResult.statusCode)
+    }
+
     private fun writeAttr(dos: DataOutputStream, tag: Byte, name: String, value: String) {
         dos.writeByte(tag.toInt())
         val nameBytes = name.toByteArray(Charsets.UTF_8)
