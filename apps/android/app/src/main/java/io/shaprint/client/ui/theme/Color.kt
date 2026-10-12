@@ -37,10 +37,28 @@ val SurfaceVariantDark = Color(0xFF1E293B)
 val OutlineDark = Color(0xFF64748B)
 val OutlineVariantDark = Color(0xFF334155)
 
-// Status Accents
-val OnlineGreen = Color(0xFF10B981)
+// Status Accents — Light
+val OnlineGreen = Color(0xFF059669)
 val OnlineGreenContainer = Color(0xFFD1FAE5)
-val WarningAmber = Color(0xFFF59E0B)
+val OnOnlineGreenContainer = Color(0xFF065F46)
+
+val WarningAmber = Color(0xFFD97706)
 val WarningAmberContainer = Color(0xFFFEF3C7)
-val ErrorRose = Color(0xFFF43F5E)
+val OnWarningAmberContainer = Color(0xFF92400E)
+
+val ErrorRose = Color(0xFFE11D48)
 val ErrorRoseContainer = Color(0xFFFFE4E6)
+val OnErrorRoseContainer = Color(0xFF9F1239)
+
+// Status Accents — Dark (Accessible, crisp contrast on slate dark surfaces)
+val OnlineGreenDark = Color(0xFF34D399)
+val OnlineGreenContainerDark = Color(0xFF064E3B)
+val OnOnlineGreenContainerDark = Color(0xFFA7F3D0)
+
+val WarningAmberDark = Color(0xFFFBBF24)
+val WarningAmberContainerDark = Color(0xFF78350F)
+val OnWarningAmberContainerDark = Color(0xFFFDE68A)
+
+val ErrorRoseDark = Color(0xFFFB7185)
+val ErrorRoseContainerDark = Color(0xFF4C0519)
+val OnErrorRoseContainerDark = Color(0xFFFFD1D8)
