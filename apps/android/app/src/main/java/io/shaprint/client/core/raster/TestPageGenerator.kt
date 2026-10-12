@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import io.shaprint.client.core.domain.model.PrintColorMode
+import io.shaprint.client.core.domain.model.PrintOrientation
 import io.shaprint.client.core.domain.model.RequestedMedia
 import java.io.OutputStream
 import java.text.SimpleDateFormat
@@ -22,13 +23,18 @@ object TestPageGenerator {
         serverCanonicalAddress: String,
         media: RequestedMedia,
         colorMode: PrintColorMode,
+        orientation: PrintOrientation = PrintOrientation.PORTRAIT,
         targetWidth: Int? = null
     ): Bitmap {
-        val widthPx = targetWidth ?: ImageRasterizer.mmToPixels(media.widthMm)
+        val isLandscape = orientation == PrintOrientation.LANDSCAPE
+        val paperWidthMm = if (isLandscape) media.heightMm else media.widthMm
+        val paperHeightMm = if (isLandscape) media.widthMm else media.heightMm
+
+        val widthPx = targetWidth ?: ImageRasterizer.mmToPixels(paperWidthMm)
         val heightPx = if (targetWidth != null) {
-            (targetWidth * (media.heightMm / media.widthMm)).toInt()
+            (targetWidth * (paperHeightMm / paperWidthMm)).toInt()
         } else {
-            ImageRasterizer.mmToPixels(media.heightMm)
+            ImageRasterizer.mmToPixels(paperHeightMm)
         }
 
         val bitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
@@ -202,15 +208,17 @@ object TestPageGenerator {
         serverCanonicalAddress: String,
         media: RequestedMedia,
         colorMode: PrintColorMode,
+        orientation: PrintOrientation = PrintOrientation.PORTRAIT,
         out: OutputStream
     ) {
-        val bitmap = generateTestPageBitmap(printerName, serverCanonicalAddress, media, colorMode)
+        val bitmap = generateTestPageBitmap(printerName, serverCanonicalAddress, media, colorMode, orientation)
         try {
             ImageRasterizer.streamImageToPwg(
                 bitmap = bitmap,
                 media = media,
                 colorMode = colorMode,
                 fitToPage = true,
+                orientation = orientation,
                 out = out
             )
         } finally {

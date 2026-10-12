@@ -110,9 +110,14 @@ fun ShaPrintNavHost(
                 mimeType.contains("png", ignoreCase = true) -> ".png"
                 else -> ".pdf"
             }
-            val cachedDoc = File(context.cacheDir, "shaprint_pending_print_doc$extension")
+            // Clean up any old cached print documents
             try {
-                if (cachedDoc.exists()) cachedDoc.delete()
+                context.cacheDir.listFiles { file -> file.name.startsWith("shaprint_doc_") }?.forEach { it.delete() }
+            } catch (_: Exception) {}
+
+            val timestamp = System.currentTimeMillis()
+            val cachedDoc = File(context.cacheDir, "shaprint_doc_${timestamp}$extension")
+            try {
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     FileOutputStream(cachedDoc).use { out -> input.copyTo(out) }
                 }
@@ -352,6 +357,7 @@ fun ShaPrintNavHost(
                                                     pdfRenderer = renderer,
                                                     media = printState.selectedMedia,
                                                     colorMode = printState.colorMode,
+                                                    orientation = printState.orientation,
                                                     out = outputStream
                                                 )
                                             }
@@ -377,6 +383,7 @@ fun ShaPrintNavHost(
                                                 media = printState.selectedMedia,
                                                 colorMode = printState.colorMode,
                                                 fitToPage = printState.fitToPage,
+                                                orientation = printState.orientation,
                                                 out = outputStream
                                             )
                                         } finally {
@@ -391,6 +398,7 @@ fun ShaPrintNavHost(
                                     serverCanonicalAddress = printState.selectedPrinter?.serverCanonicalAddress ?: "LAN Server",
                                     media = printState.selectedMedia,
                                     colorMode = printState.colorMode,
+                                    orientation = printState.orientation,
                                     out = outputStream
                                 )
                             }

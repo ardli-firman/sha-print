@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import io.shaprint.client.core.domain.model.PrintColorMode
+import io.shaprint.client.core.domain.model.PrintOrientation
 import io.shaprint.client.core.domain.model.RequestedMedia
 import java.io.OutputStream
 import kotlin.math.roundToInt
@@ -20,6 +21,7 @@ object PdfRasterizer {
         media: RequestedMedia,
         colorMode: PrintColorMode,
         out: OutputStream,
+        orientation: PrintOrientation = PrintOrientation.PORTRAIT,
         onPageRendered: ((page: Int, total: Int) -> Unit)? = null
     ) {
         val pageCount = pdfRenderer.pageCount
@@ -28,8 +30,12 @@ object PdfRasterizer {
         // Write the 4-byte stream synchronization header: 'RaS2'
         out.write(PwgRasterConstants.SYNC_WORD)
 
-        val widthPx = ImageRasterizer.mmToPixels(media.widthMm)
-        val heightPx = ImageRasterizer.mmToPixels(media.heightMm)
+        val isLandscape = orientation == PrintOrientation.LANDSCAPE
+        val paperWidthMm = if (isLandscape) media.heightMm else media.widthMm
+        val paperHeightMm = if (isLandscape) media.widthMm else media.heightMm
+
+        val widthPx = ImageRasterizer.mmToPixels(paperWidthMm)
+        val heightPx = ImageRasterizer.mmToPixels(paperHeightMm)
         val colors = if (colorMode == PrintColorMode.COLOR) 3 else 1
 
         val rowPixelsInts = IntArray(widthPx)

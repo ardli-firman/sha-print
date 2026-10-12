@@ -75,16 +75,34 @@ fun PrintPreviewScreen(
     val isWorking = uiState.jobProgress.state == PrintJobState.RASTERIZING ||
         uiState.jobProgress.state == PrintJobState.STREAMING
 
-    var previewPageIndex by remember(uiState.documentUriString) { mutableIntStateOf(0) }
+    var previewPageIndex by remember(uiState.documentUriString, uiState.documentRevision) { mutableIntStateOf(0) }
     var showFullScreenPreview by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
     val previewBitmap by produceState<Bitmap?>(
-        initialValue = DocumentPreviewHelper.getCachedBitmap(uiState.documentUriString, previewPageIndex),
+        initialValue = DocumentPreviewHelper.getCachedBitmap(
+            documentUriString = uiState.documentUriString,
+            documentRevision = uiState.documentRevision,
+            pageIndex = previewPageIndex,
+            media = uiState.selectedMedia,
+            orientation = uiState.orientation,
+            fitToPage = uiState.fitToPage
+        ),
         uiState.documentUriString,
-        previewPageIndex
+        uiState.documentRevision,
+        previewPageIndex,
+        uiState.selectedMedia,
+        uiState.orientation,
+        uiState.fitToPage
     ) {
-        val cached = DocumentPreviewHelper.getCachedBitmap(uiState.documentUriString, previewPageIndex)
+        val cached = DocumentPreviewHelper.getCachedBitmap(
+            documentUriString = uiState.documentUriString,
+            documentRevision = uiState.documentRevision,
+            pageIndex = previewPageIndex,
+            media = uiState.selectedMedia,
+            orientation = uiState.orientation,
+            fitToPage = uiState.fitToPage
+        )
         if (cached != null) {
             value = cached
         }
@@ -92,9 +110,12 @@ fun PrintPreviewScreen(
             context = context,
             documentUriString = uiState.documentUriString,
             documentName = uiState.documentName,
+            documentRevision = uiState.documentRevision,
             pageIndex = previewPageIndex,
             media = uiState.selectedMedia,
             colorMode = uiState.colorMode,
+            orientation = uiState.orientation,
+            fitToPage = uiState.fitToPage,
             printerName = printerName,
             serverCanonicalAddress = uiState.selectedPrinter?.serverCanonicalAddress ?: "LAN Server",
             targetWidth = 600
@@ -111,6 +132,7 @@ fun PrintPreviewScreen(
             documentName = uiState.documentName,
             pageIndex = previewPageIndex,
             totalPages = uiState.totalPages,
+            media = uiState.selectedMedia,
             colorMode = uiState.colorMode,
             orientation = uiState.orientation,
             onDismiss = { showFullScreenPreview = false }
@@ -690,19 +712,30 @@ private fun DocumentPaperPreviewCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Realistic Paper Aspect Ratio Sheet Box
-            val isPortrait = orientation == PrintOrientation.PORTRAIT
-            val paperWidth = if (isPortrait) 190.dp else 260.dp
-            val paperHeight = if (isPortrait) 260.dp else 190.dp
+            // True 1:1 Physical Paper Aspect Ratio Sheet Box
+            val isLandscape = orientation == PrintOrientation.LANDSCAPE
+            val paperWidthMm = if (isLandscape) media.heightMm else media.widthMm
+            val paperHeightMm = if (isLandscape) media.widthMm else media.heightMm
+            val paperRatio = paperWidthMm / paperHeightMm
+
+            val (sheetWidth, sheetHeight) = if (isLandscape) {
+                val w = 270.dp
+                val h = 270.dp / paperRatio
+                w to h
+            } else {
+                val h = 280.dp
+                val w = 280.dp * paperRatio
+                w to h
+            }
 
             Surface(
                 color = Color.White,
-                shape = RoundedCornerShape(6.dp),
-                shadowElevation = 6.dp,
+                shape = RoundedCornerShape(4.dp),
+                shadowElevation = 8.dp,
                 border = BorderStroke(1.dp, Color(0xFFD1D5DB)),
                 modifier = Modifier
-                    .width(paperWidth)
-                    .height(paperHeight)
+                    .width(sheetWidth)
+                    .height(sheetHeight)
                     .clickable(onClick = onCardClick)
             ) {
                 Box(
@@ -718,7 +751,7 @@ private fun DocumentPaperPreviewCard(
                             bitmap = previewBitmap.asImageBitmap(),
                             contentDescription = "Document Page Preview",
                             modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit,
+                            contentScale = ContentScale.FillBounds,
                             colorFilter = colorFilter
                         )
 
@@ -853,6 +886,7 @@ private fun FullScreenDocumentDialog(
     documentName: String,
     pageIndex: Int,
     totalPages: Int,
+    media: RequestedMedia,
     colorMode: PrintColorMode,
     orientation: PrintOrientation,
     onDismiss: () -> Unit
@@ -885,7 +919,7 @@ private fun FullScreenDocumentDialog(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = if (totalPages > 1) "Page ${pageIndex + 1} of $totalPages • ${colorMode.displayName}" else "${colorMode.displayName} • ${orientation.displayName}",
+                            text = if (totalPages > 1) "Page ${pageIndex + 1} of $totalPages • ${media.displayName} • ${colorMode.displayName}" else "${media.displayName} • ${colorMode.displayName} • ${orientation.displayName}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -901,7 +935,7 @@ private fun FullScreenDocumentDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Large Document Sheet Container
+                // Large 1:1 Document Sheet Container
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -911,12 +945,19 @@ private fun FullScreenDocumentDialog(
                         .padding(12.dp),
                     contentAlignment = Alignment.Center
                 ) {
+                    val isLandscape = orientation == PrintOrientation.LANDSCAPE
+                    val paperWidthMm = if (isLandscape) media.heightMm else media.widthMm
+                    val paperHeightMm = if (isLandscape) media.widthMm else media.heightMm
+                    val paperRatio = paperWidthMm / paperHeightMm
+
                     Surface(
                         color = Color.White,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(4.dp),
                         shadowElevation = 8.dp,
                         border = BorderStroke(1.dp, Color(0xFFE5E7EB)),
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .aspectRatio(paperRatio)
                     ) {
                         val colorFilter = if (colorMode == PrintColorMode.MONOCHROME) {
                             ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
@@ -926,7 +967,7 @@ private fun FullScreenDocumentDialog(
                             bitmap = bitmap.asImageBitmap(),
                             contentDescription = "Full Document Preview",
                             modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit,
+                            contentScale = ContentScale.FillBounds,
                             colorFilter = colorFilter
                         )
                     }
