@@ -47,6 +47,7 @@ import io.shaprint.client.features.printers.PrintersViewModel
 import io.shaprint.client.features.servers.ServersScreen
 import io.shaprint.client.features.servers.ServersViewModel
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 
 @Composable
@@ -85,6 +86,13 @@ fun ShaPrintNavHost(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {}
+
             var displayName = "Document"
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -93,12 +101,21 @@ fun ShaPrintNavHost(
                 }
             }
 
+            // Immediately cache selected document in local app storage to avoid URI permission expiration
+            val cachedDoc = File(context.cacheDir, "shaprint_pending_print_doc")
+            try {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(cachedDoc).use { out -> input.copyTo(out) }
+                }
+            } catch (_: Exception) {}
+
             // Detect page count if PDF
             var pageCount = 1
             val mimeType = context.contentResolver.getType(uri) ?: ""
-            if (mimeType.contains("pdf", ignoreCase = true) || displayName.endsWith(".pdf", ignoreCase = true)) {
+            val isPdf = mimeType.contains("pdf", ignoreCase = true) || displayName.endsWith(".pdf", ignoreCase = true)
+            if (isPdf && cachedDoc.exists() && cachedDoc.length() > 0) {
                 try {
-                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    ParcelFileDescriptor.open(cachedDoc, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
                         PdfRenderer(pfd).use { renderer ->
                             pageCount = renderer.pageCount.coerceAtLeast(1)
                         }
@@ -108,7 +125,7 @@ fun ShaPrintNavHost(
                 }
             }
 
-            printViewModel.selectDocument(displayName, uri.toString(), pageCount)
+            printViewModel.selectDocument(displayName, Uri.fromFile(cachedDoc).toString(), pageCount)
         }
     }
 
@@ -298,15 +315,30 @@ fun ShaPrintNavHost(
                             val uriStr = printState.documentUriString
                             if (uriStr != null) {
                                 val uri = Uri.parse(uriStr)
-                                val mime = context.contentResolver.getType(uri) ?: ""
-                                if (mime.contains("pdf", ignoreCase = true) || printState.documentName.endsWith(".pdf", ignoreCase = true)) {
-                                    val tempFile = File.createTempFile("shaprint_inapp_", ".pdf", context.cacheDir)
-                                    try {
+                                val docFile = if (uri.scheme == "file") {
+                                    val f = File(uri.path ?: "")
+                                    if (f.exists() && f.length() > 0) f else null
+                                } else {
+                                    null
+                                }
+                                val mime = try { context.contentResolver.getType(uri) ?: "" } catch (_: Throwable) { "" }
+                                val isPdf = mime.contains("pdf", ignoreCase = true) || printState.documentName.endsWith(".pdf", ignoreCase = true)
+                                if (isPdf) {
+                                    val targetFile = if (docFile != null) {
+                                        docFile
+                                    } else {
+                                        val tempFile = File.createTempFile("shaprint_inapp_", ".pdf", context.cacheDir)
                                         context.contentResolver.openInputStream(uri)?.use { input ->
                                             FileOutputStream(tempFile).use { out -> input.copyTo(out) }
-                                        }
-                                        ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                                        } ?: throw java.io.IOException("Could not read selected PDF file.")
+                                        tempFile
+                                    }
+                                    try {
+                                        ParcelFileDescriptor.open(targetFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
                                             PdfRenderer(pfd).use { renderer ->
+                                                if (renderer.pageCount == 0) {
+                                                    throw java.io.IOException("Selected PDF contains no pages.")
+                                                }
                                                 PdfRasterizer.streamPdfToPwg(
                                                     pdfRenderer = renderer,
                                                     media = printState.selectedMedia,
@@ -316,26 +348,42 @@ fun ShaPrintNavHost(
                                             }
                                         }
                                     } finally {
-                                        tempFile.delete()
+                                        if (docFile == null) {
+                                            targetFile.delete()
+                                        }
                                     }
                                 } else {
-                                    context.contentResolver.openInputStream(uri)?.use { input ->
-                                        val bitmap = BitmapFactory.decodeStream(input)
-                                        if (bitmap != null) {
-                                            try {
-                                                ImageRasterizer.streamImageToPwg(
-                                                    bitmap = bitmap,
-                                                    media = printState.selectedMedia,
-                                                    colorMode = printState.colorMode,
-                                                    fitToPage = printState.fitToPage,
-                                                    out = outputStream
-                                                )
-                                            } finally {
-                                                bitmap.recycle()
-                                            }
+                                    val input = if (docFile != null) {
+                                        FileInputStream(docFile)
+                                    } else {
+                                        context.contentResolver.openInputStream(uri)
+                                    } ?: throw java.io.IOException("Could not read selected image file.")
+
+                                    input.use { inStream ->
+                                        val bitmap = BitmapFactory.decodeStream(inStream)
+                                            ?: throw java.io.IOException("Could not decode selected image file.")
+                                        try {
+                                            ImageRasterizer.streamImageToPwg(
+                                                bitmap = bitmap,
+                                                media = printState.selectedMedia,
+                                                colorMode = printState.colorMode,
+                                                fitToPage = printState.fitToPage,
+                                                out = outputStream
+                                            )
+                                        } finally {
+                                            bitmap.recycle()
                                         }
                                     }
                                 }
+                            } else {
+                                // Default to generating and streaming an official ShaPrint Test Page
+                                io.shaprint.client.core.raster.TestPageGenerator.streamTestPageToPwg(
+                                    printerName = printState.selectedPrinter?.name ?: "Shared Printer",
+                                    serverCanonicalAddress = printState.selectedPrinter?.serverCanonicalAddress ?: "LAN Server",
+                                    media = printState.selectedMedia,
+                                    colorMode = printState.colorMode,
+                                    out = outputStream
+                                )
                             }
                         }
                     }

@@ -121,6 +121,14 @@ class DefaultIppsClient : IppsClient {
                 streamRasterPayload(fos)
             }
 
+            if (tempRasterFile.length() == 0L) {
+                return@withContext IppMessage.ParsedJobSubmissionResult(
+                    statusCode = IppConstants.STATUS_CLIENT_ERROR_BAD_REQUEST,
+                    isSuccess = false,
+                    errorMessage = "Document content is empty or unreadable. Please choose a valid PDF or image file."
+                )
+            }
+
             val totalContentLength = headerBytes.size.toLong() + tempRasterFile.length()
 
             val responseBytes = postIpp(

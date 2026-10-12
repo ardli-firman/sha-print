@@ -203,6 +203,12 @@ class IppMessageTest {
         val forbiddenResult = IppMessage.parseJobResponse(forbiddenBytes)
         assertFalse(forbiddenResult.isSuccess)
         assertEquals(IppConstants.STATUS_CLIENT_ERROR_FORBIDDEN, forbiddenResult.statusCode)
+
+        val badRequestBytes = byteArrayOf(0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03)
+        val badRequestResult = IppMessage.parseJobResponse(badRequestBytes)
+        assertFalse(badRequestResult.isSuccess)
+        assertEquals(IppConstants.STATUS_CLIENT_ERROR_BAD_REQUEST, badRequestResult.statusCode)
+        assertTrue(badRequestResult.errorMessage?.contains("0x0400") == true)
     }
 
     private fun writeAttr(dos: DataOutputStream, tag: Byte, name: String, value: String) {
