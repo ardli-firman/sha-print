@@ -150,8 +150,9 @@ pub struct DaemonServer {
 }
 
 impl DaemonServer {
-    /// Builds `Shell`, restores persisted sharing state, starts autostart services, and binds the
-    /// local Unix domain socket.
+    /// Builds `Shell`, binds the local Unix domain socket first so a duplicate instance cannot
+    /// disturb active listeners, and then restores persisted sharing state and starts autostart
+    /// services.
     pub async fn launch(config: DaemonConfig) -> Result<Self, AppError> {
         std::fs::create_dir_all(&config.state_dir).map_err(|error| {
             AppError::internal(format!(
@@ -160,6 +161,9 @@ impl DaemonServer {
             ))
         })?;
         let shell = Arc::new(Shell::with_ports(&config.state_dir, config.ports)?);
+        let mut server =
+            Self::bind_with_policy(&config.socket_path, shell.runtime(), config.access_policy)
+                .await?;
         if let Err(error) = shell.restore().await {
             log::warn!(
                 "cannot restore server sharing code={} message={}",
@@ -175,9 +179,6 @@ impl DaemonServer {
             );
         }
 
-        let mut server =
-            Self::bind_with_policy(&config.socket_path, shell.runtime(), config.access_policy)
-                .await?;
         server.shell = Some(shell);
         Ok(server)
     }

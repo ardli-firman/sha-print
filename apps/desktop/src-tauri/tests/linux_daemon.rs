@@ -126,6 +126,61 @@ async fn daemon_launches_without_desktop_and_reports_stable_runtime_status_over_
 }
 
 #[tokio::test]
+async fn second_daemon_launch_on_active_socket_is_rejected_without_disturbing_first_daemon() {
+    let dir = temporary_directory("linux-daemon-single-instance");
+    std::fs::create_dir_all(&dir).expect("creates state dir");
+    let socket_path = dir.join("shaprintd.sock");
+    let proxy_port = support::free_port();
+
+    let first = DaemonServer::launch(DaemonConfig::new(&dir, &socket_path).with_ports(
+        RuntimePorts {
+            proxy_port,
+            server_port: 0,
+            discovery_ports: vec![0],
+        },
+    ))
+    .await
+    .expect("launches first daemon instance");
+
+    let second_err = match DaemonServer::launch(DaemonConfig::new(&dir, &socket_path).with_ports(
+        RuntimePorts {
+            proxy_port,
+            server_port: 0,
+            discovery_ports: vec![0],
+        },
+    ))
+    .await
+    {
+        Ok(_) => panic!("second daemon launch on active socket must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(second_err.code(), ErrorCode::InvalidState);
+    assert!(
+        second_err.message().contains("already listening"),
+        "expected already-listening error, got: {}",
+        second_err.message()
+    );
+
+    // First daemon and its proxy listener remain running and undisturbed.
+    let client = DaemonClient::new(&socket_path);
+    let status = client
+        .status()
+        .await
+        .expect("first daemon still answers status after rejected second launch");
+    assert!(status
+        .services
+        .iter()
+        .any(|s| s.id == "client-proxy" && s.state == "running"));
+    assert!(
+        TcpListener::bind(("127.0.0.1", proxy_port)).is_err(),
+        "first daemon still owns its proxy TCP listener"
+    );
+
+    first.shutdown().await.expect("shuts down first daemon");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
 async fn daemon_controls_runtimes_through_coordinator_and_shutdown_releases_all_listeners() {
     let dir = temporary_directory("linux-daemon-lifecycle");
     std::fs::create_dir_all(&dir).expect("creates test dir");
