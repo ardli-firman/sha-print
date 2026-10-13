@@ -19,7 +19,6 @@
 pub mod adapters;
 pub mod application;
 pub mod domain;
-#[cfg(feature = "desktop")]
 pub mod ipc;
 #[cfg(test)]
 mod test_support;
@@ -68,9 +67,32 @@ pub struct Shell {
     queue_installation: Arc<QueueInstallation>,
 }
 
+/// Listener ports configured for a [`Shell`] runtime instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimePorts {
+    pub proxy_port: u16,
+    pub server_port: u16,
+    pub discovery_ports: Vec<u16>,
+}
+
+impl Default for RuntimePorts {
+    fn default() -> Self {
+        Self {
+            proxy_port: adapters::CLIENT_PROXY_DEFAULT_PORT,
+            server_port: DEFAULT_PORT,
+            discovery_ports: adapters::discovery::DISCOVERY_PORTS.to_vec(),
+        }
+    }
+}
+
 impl Shell {
     /// Builds the shell for the app data directory the identity and settings live in.
     pub fn new(data_dir: &Path) -> Result<Self, AppError> {
+        Self::with_ports(data_dir, RuntimePorts::default())
+    }
+
+    /// Builds the shell with explicit listener ports for isolated daemon and lifecycle tests.
+    pub fn with_ports(data_dir: &Path, ports: RuntimePorts) -> Result<Self, AppError> {
         let identity = Arc::new(FileIdentityStore::new(data_dir).load_or_create()?);
         let printer_catalog = default_printer_catalog();
         let sharing = Arc::new(Sharing::with_persistence(
@@ -84,7 +106,7 @@ impl Shell {
         let print_failures = Arc::new(PrintFailures::new());
         let job_tracker = Arc::new(PrintJobTracker::new());
         let endpoint = Arc::new(IppsServer::new(
-            DEFAULT_PORT,
+            ports.server_port,
             identity,
             Arc::clone(&network_channel),
             default_print_job_submitter(),
@@ -102,7 +124,8 @@ impl Shell {
         ));
         let discovery = Arc::new(Discovery::new());
         let browser: Arc<dyn DiscoveryBrowser> = Arc::new(MdnsBrowser::new());
-        let advertiser: Arc<dyn ServerAdvertiser> = Arc::new(MdnsAdvertiser::new());
+        let advertiser: Arc<dyn ServerAdvertiser> =
+            Arc::new(MdnsAdvertiser::on(ports.discovery_ports));
 
         // The client proxy and discovery opt into autostart (ADR 0001: installed queues must reach
         // the proxy during normal use, and nearby servers must appear without being asked for).
@@ -116,11 +139,12 @@ impl Shell {
             Arc::clone(&network_channel) as Arc<dyn application::ChannelState>,
         );
         let runtime = Arc::new(RuntimeCoordinator::new(vec![
-            Arc::new(ClientProxyService::new(
+            Arc::new(ClientProxyService::with_port(
                 Arc::clone(&client_connections),
                 Arc::clone(&network_channel),
                 Arc::clone(&print_failures),
                 Arc::clone(&job_tracker),
+                ports.proxy_port,
             )),
             Arc::new(server_sharing),
             Arc::new(DiscoveryService::new(Arc::clone(&discovery), browser)),

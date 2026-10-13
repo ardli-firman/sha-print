@@ -7,6 +7,8 @@
 
 pub mod client_connections;
 mod client_proxy;
+#[cfg(unix)]
+pub mod daemon;
 pub mod discovery;
 pub mod elevation;
 pub mod identity;
