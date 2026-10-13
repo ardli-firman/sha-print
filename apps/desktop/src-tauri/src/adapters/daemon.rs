@@ -666,6 +666,7 @@ fn load_non_secret_config_file(config_dir: &Path) -> Result<NonSecretDaemonConfi
 pub fn parse_daemon_args<S: AsRef<str>>(arguments: &[S]) -> Result<DaemonConfig, AppError> {
     let mut config = DaemonConfig::default();
     let mut cli = NonSecretDaemonConfigFile::default();
+    let mut explicit_config_dir = false;
 
     let mut iter = arguments.iter().skip(1).map(AsRef::as_ref);
     while let Some(arg) = iter.next() {
@@ -675,6 +676,7 @@ pub fn parse_daemon_args<S: AsRef<str>>(arguments: &[S]) -> Result<DaemonConfig,
                     .next()
                     .ok_or_else(|| AppError::invalid_input("missing value for '--config-dir'"))?;
                 config.config_dir = PathBuf::from(value);
+                explicit_config_dir = true;
             }
             "--state-dir" => {
                 let value = iter
@@ -720,7 +722,11 @@ pub fn parse_daemon_args<S: AsRef<str>>(arguments: &[S]) -> Result<DaemonConfig,
         }
     }
 
-    let file_config = load_non_secret_config_file(&config.config_dir)?;
+    let file_config = if explicit_config_dir {
+        load_non_secret_config_file(&config.config_dir)?
+    } else {
+        NonSecretDaemonConfigFile::default()
+    };
     if let Some(state_dir) = cli.state_dir.or(file_config.state_dir) {
         config.state_dir = state_dir;
     }
@@ -836,7 +842,7 @@ mod tests {
 
     #[test]
     fn daemon_args_default_to_standard_linux_paths_and_ports() {
-        let defaults = DaemonConfig::default();
+        let defaults = parse_daemon_args(&["shaprintd"]).expect("parses default args");
         assert_eq!(defaults.config_dir(), Path::new(DEFAULT_CONFIG_DIR));
         assert_eq!(defaults.state_dir(), Path::new(DEFAULT_STATE_DIR));
         assert_eq!(defaults.socket_path(), Path::new(DEFAULT_SOCKET_PATH));

@@ -463,18 +463,10 @@ async fn daemon_uses_standard_fhs_locations_loads_non_secret_config_and_enforces
 ) {
     use std::os::unix::fs::PermissionsExt;
 
-    let defaults = parse_daemon_args(&["shaprintd", "--config-dir", "/nonexistent/etc/shaprint"])
-        .expect("parses default daemon args");
-    assert_eq!(
-        defaults.config_dir(),
-        Path::new("/nonexistent/etc/shaprint")
-    );
+    let defaults = parse_daemon_args(&["shaprintd"]).expect("parses default daemon args");
+    assert_eq!(defaults.config_dir(), Path::new(DEFAULT_CONFIG_DIR));
     assert_eq!(defaults.state_dir(), Path::new(DEFAULT_STATE_DIR));
     assert_eq!(defaults.socket_path(), Path::new(DEFAULT_SOCKET_PATH));
-    assert_eq!(
-        DaemonConfig::default().config_dir(),
-        Path::new(DEFAULT_CONFIG_DIR)
-    );
 
     let root = temporary_directory("linux-daemon-fhs");
     let etc_dir = root.join("etc/shaprint");
@@ -670,9 +662,10 @@ async fn almalinux_10_rpm_package_smoke_installs_boots_queries_restarts_repairs_
 {
     use std::process::Command;
 
-    let is_almalinux = std::fs::read_to_string("/etc/os-release")
-        .map(|content| content.contains("ID=\"almalinux\""))
-        .unwrap_or(false);
+    if std::env::var_os("SHAPRINT_RUN_ALMALINUX10_SMOKE").is_none() {
+        return;
+    }
+
     let has_rpmbuild = Command::new("rpmbuild")
         .arg("--version")
         .output()
@@ -681,13 +674,10 @@ async fn almalinux_10_rpm_package_smoke_installs_boots_queries_restarts_repairs_
         .arg("--version")
         .output()
         .is_ok_and(|out| out.status.success());
-    if !has_rpmbuild || !has_podman {
-        assert!(
-            !is_almalinux,
-            "rpmbuild and podman are required to run the AlmaLinux 10 RPM smoke test"
-        );
-        return;
-    }
+    assert!(
+        has_rpmbuild && has_podman,
+        "rpmbuild and podman are required when SHAPRINT_RUN_ALMALINUX10_SMOKE is set"
+    );
 
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir

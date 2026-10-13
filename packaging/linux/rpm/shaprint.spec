@@ -39,13 +39,13 @@ exit 0
 %post
 systemd-tmpfiles --create %{_tmpfilesdir}/shaprint.conf >/dev/null 2>&1 || :
 systemctl daemon-reload >/dev/null 2>&1 || :
-systemctl enable shaprintd.service >/dev/null 2>&1 || :
-if [ -d /run/systemd/system ]; then
-    if systemctl is-active --quiet shaprintd.service; then
-        systemctl restart shaprintd.service >/dev/null 2>&1 || :
-    else
+if [ "$1" -eq 1 ]; then
+    systemctl enable shaprintd.service >/dev/null 2>&1 || :
+    if [ -d /run/systemd/system ]; then
         systemctl start shaprintd.service >/dev/null 2>&1 || :
     fi
+elif [ -d /run/systemd/system ]; then
+    systemctl try-restart shaprintd.service >/dev/null 2>&1 || :
 fi
 exit 0
 
