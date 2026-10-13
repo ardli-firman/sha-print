@@ -126,6 +126,43 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
         echo 'error: unprivileged local user must not be allowed to stop shaprintd' >&2
         exit 1
     fi
+
+    # 5b. Verify Network Channel configuration, root-protected credential storage, and
+    #     multi-user status visibility without secret leakage.
+    shaprintctl network-channel status | grep -q '^network-channel: unconfigured$'
+    su - localoperator -c 'shaprintctl network-channel status' | grep -q '^network-channel: unconfigured$'
+
+    if shaprintctl network-channel set inline-forbidden-secret >/dev/null 2>&1; then
+        echo 'error: shaprintctl must reject inline Network Channel arguments' >&2
+        exit 1
+    fi
+    if su - localoperator -c 'printf \"%s\\n\" unpriv-secret | shaprintctl network-channel set --stdin' >/dev/null 2>&1; then
+        echo 'error: unprivileged local user must not be allowed to set Network Channel' >&2
+        exit 1
+    fi
+
+    SMOKE_SECRET=\"alma10-chan-\$\$-\$(date +%s)\"
+    printf '%s\n' \"\${SMOKE_SECRET}\" | shaprintctl network-channel set --stdin | grep -q '^network-channel: configured$'
+
+    CRED_STAT=\$(stat -c '%U:%G:%a' /etc/shaprint-credentials/network-channel)
+    if [[ \"\${CRED_STAT}\" != 'root:shaprint:640' ]]; then
+        echo \"error: expected /etc/shaprint-credentials/network-channel root:shaprint:640, got \${CRED_STAT}\" >&2
+        exit 1
+    fi
+    if su - localoperator -c 'cat /etc/shaprint-credentials/network-channel' >/dev/null 2>&1; then
+        echo 'error: unprivileged local user must not be able to read /etc/shaprint-credentials/network-channel' >&2
+        exit 1
+    fi
+    if grep -R -Fq \"\${SMOKE_SECRET}\" /etc/shaprint /var/lib/shaprint; then
+        echo 'error: /etc/shaprint and /var/lib/shaprint must not contain plaintext Network Channel' >&2
+        exit 1
+    fi
+    su - localoperator -c 'shaprintctl network-channel status' | grep -q '^network-channel: configured$'
+    su - localoperator -c 'shaprintctl status' | grep -q '^network-channel: configured$'
+    if journalctl -u shaprintd.service --no-pager | grep -Fq \"\${SMOKE_SECRET}\"; then
+        echo 'error: journal output must never contain Network Channel value' >&2
+        exit 1
+    fi
 "
 
 # 6. Reboot the container to verify shaprintd starts automatically at boot.

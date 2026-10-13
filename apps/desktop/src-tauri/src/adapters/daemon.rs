@@ -18,6 +18,8 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::timeout;
 
+use crate::adapters::client_connections::{ConnectionPrinters, ConnectionReview, TrustedServer};
+use crate::adapters::ipps::CLIENT_CREDENTIAL_FILE;
 use crate::application::RuntimeCoordinator;
 use crate::domain::{AppError, ErrorCode, ServiceId};
 use crate::ipc::dto::{AppErrorDto, RuntimeStatusDto};
@@ -28,6 +30,9 @@ pub const DEFAULT_CONFIG_DIR: &str = "/etc/shaprint";
 
 /// Default non-secret configuration file name inside [`DEFAULT_CONFIG_DIR`].
 pub const DEFAULT_CONFIG_FILE: &str = "config.json";
+
+/// Default root-protected machine credential directory on Linux (outside `/etc/shaprint`, ADR 0018).
+pub const DEFAULT_CREDENTIAL_DIR: &str = "/etc/shaprint-credentials";
 
 /// Default durable state directory on Linux (ADR 0018).
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/shaprint";
@@ -80,6 +85,7 @@ fn current_effective_uid() -> Option<u32> {
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
     config_dir: PathBuf,
+    credential_dir: Option<PathBuf>,
     state_dir: PathBuf,
     socket_path: PathBuf,
     access_policy: PeerAccessPolicy,
@@ -91,6 +97,7 @@ impl DaemonConfig {
     pub fn new(state_dir: impl Into<PathBuf>, socket_path: impl Into<PathBuf>) -> Self {
         Self {
             config_dir: PathBuf::from(DEFAULT_CONFIG_DIR),
+            credential_dir: None,
             state_dir: state_dir.into(),
             socket_path: socket_path.into(),
             access_policy: PeerAccessPolicy::RootOrDaemonOwner,
@@ -102,6 +109,12 @@ impl DaemonConfig {
     #[must_use]
     pub fn with_config_dir(mut self, config_dir: impl Into<PathBuf>) -> Self {
         self.config_dir = config_dir.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_credential_dir(mut self, credential_dir: impl Into<PathBuf>) -> Self {
+        self.credential_dir = Some(credential_dir.into());
         self
     }
 
@@ -125,6 +138,20 @@ impl DaemonConfig {
 
     pub fn config_dir(&self) -> &Path {
         &self.config_dir
+    }
+
+    pub fn credential_dir(&self) -> PathBuf {
+        if let Some(dir) = &self.credential_dir {
+            return dir.clone();
+        }
+        if self.config_dir == Path::new(DEFAULT_CONFIG_DIR) {
+            PathBuf::from(DEFAULT_CREDENTIAL_DIR)
+        } else {
+            self.config_dir
+                .parent()
+                .map(|parent| parent.join("shaprint-credentials"))
+                .unwrap_or_else(|| PathBuf::from(DEFAULT_CREDENTIAL_DIR))
+        }
     }
 
     pub fn state_dir(&self) -> &Path {
@@ -154,20 +181,119 @@ impl Default for DaemonConfig {
     }
 }
 
+/// Safe Network Channel configured status reported over the Unix socket; never carries the secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkChannelStatusDto {
+    pub configured: bool,
+}
+
+/// Server certificate fingerprint review returned by `shaprintctl trust inspect` and `approve`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerTrustReviewDto {
+    pub address: String,
+    pub current_fingerprint: String,
+    pub previous_fingerprint: Option<String>,
+    pub trusted: bool,
+}
+
+impl From<ConnectionReview> for ServerTrustReviewDto {
+    fn from(review: ConnectionReview) -> Self {
+        Self {
+            address: review.address,
+            current_fingerprint: review.current_fingerprint,
+            previous_fingerprint: review.previous_fingerprint,
+            trusted: review.trusted,
+        }
+    }
+}
+
+/// One Trusted Server stored in the machine trust store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustedServerEntryDto {
+    pub address: String,
+    pub fingerprint: String,
+}
+
+impl From<TrustedServer> for TrustedServerEntryDto {
+    fn from(server: TrustedServer) -> Self {
+        Self {
+            address: server.address,
+            fingerprint: server.fingerprint,
+        }
+    }
+}
+
+/// Shared printers reported by a Trusted Server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustedServerPrintersDto {
+    pub address: String,
+    pub printers: Vec<String>,
+}
+
+impl From<ConnectionPrinters> for TrustedServerPrintersDto {
+    fn from(value: ConnectionPrinters) -> Self {
+        Self {
+            address: value.address,
+            printers: value.printers,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 enum ControlRequest {
     Status,
-    StartService { id: String },
-    StopService { id: String },
+    StartService {
+        id: String,
+    },
+    StopService {
+        id: String,
+    },
     Shutdown,
+    NetworkChannelStatus,
+    SetNetworkChannel {
+        channel: String,
+    },
+    InspectServer {
+        address: String,
+    },
+    ApproveServer {
+        address: String,
+        fingerprint: String,
+    },
+    ForgetServer {
+        address: String,
+    },
+    ListTrustedServers,
+    ListServerPrinters {
+        address: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "kebab-case")]
 enum ControlResponse {
-    Ok { status: RuntimeStatusDto },
-    Err { error: AppErrorDto },
+    Ok {
+        status: RuntimeStatusDto,
+    },
+    NetworkChannel {
+        network_channel: NetworkChannelStatusDto,
+    },
+    ServerReview {
+        review: ServerTrustReviewDto,
+    },
+    TrustedServers {
+        servers: Vec<TrustedServerEntryDto>,
+    },
+    ServerPrinters {
+        printers: TrustedServerPrintersDto,
+    },
+    Forgotten {
+        address: String,
+    },
+    Err {
+        error: AppErrorDto,
+    },
 }
 
 /// Running `shaprintd` control-plane server over a local Unix domain socket.
@@ -210,10 +336,19 @@ impl DaemonServer {
                     config.state_dir.display()
                 ))
             })?;
-        let shell = Arc::new(Shell::with_ports(&config.state_dir, config.ports)?);
-        let mut server =
-            Self::bind_with_policy(&config.socket_path, shell.runtime(), config.access_policy)
-                .await?;
+        let credential_file = config.credential_dir().join(CLIENT_CREDENTIAL_FILE);
+        let shell = Arc::new(Shell::with_ports_and_credential_file(
+            &config.state_dir,
+            config.ports,
+            Some(credential_file),
+        )?);
+        let server = Self::bind_internal(
+            &config.socket_path,
+            shell.runtime(),
+            Some(Arc::clone(&shell)),
+            config.access_policy,
+        )
+        .await?;
         if let Err(error) = shell.restore().await {
             log::warn!(
                 "cannot restore server sharing code={} message={}",
@@ -234,7 +369,6 @@ impl DaemonServer {
             config.socket_path.display(),
             config.state_dir.display()
         );
-        server.shell = Some(shell);
         Ok(server)
     }
 
@@ -252,6 +386,15 @@ impl DaemonServer {
     pub async fn bind_with_policy(
         socket_path: impl Into<PathBuf>,
         runtime: Arc<RuntimeCoordinator>,
+        policy: PeerAccessPolicy,
+    ) -> Result<Self, AppError> {
+        Self::bind_internal(socket_path, runtime, None, policy).await
+    }
+
+    async fn bind_internal(
+        socket_path: impl Into<PathBuf>,
+        runtime: Arc<RuntimeCoordinator>,
+        shell: Option<Arc<Shell>>,
         policy: PeerAccessPolicy,
     ) -> Result<Self, AppError> {
         let socket_path = socket_path.into();
@@ -296,6 +439,7 @@ impl DaemonServer {
         let daemon_uid = current_effective_uid();
         let (cancel_tx, mut cancel_rx) = watch::channel(false);
         let loop_runtime = Arc::clone(&runtime);
+        let loop_shell = shell.clone();
         let loop_cancel = cancel_tx.clone();
         let accept_task = tokio::spawn(async move {
             let mut connections = JoinSet::new();
@@ -311,11 +455,13 @@ impl DaemonServer {
                         match accepted {
                             Ok((stream, _addr)) => {
                                 let conn_runtime = Arc::clone(&loop_runtime);
+                                let conn_shell = loop_shell.clone();
                                 let conn_cancel = loop_cancel.clone();
                                 connections.spawn(async move {
                                     handle_connection(
                                         stream,
                                         conn_runtime,
+                                        conn_shell,
                                         conn_cancel,
                                         policy,
                                         daemon_uid,
@@ -338,7 +484,7 @@ impl DaemonServer {
 
         Ok(Self {
             socket_path,
-            shell: None,
+            shell,
             runtime,
             cancel_tx,
             accept_task,
@@ -419,55 +565,163 @@ async fn cleanup_stale_socket(socket_path: &Path) -> Result<(), AppError> {
 async fn handle_connection(
     stream: UnixStream,
     runtime: Arc<RuntimeCoordinator>,
+    shell: Option<Arc<Shell>>,
     cancel_tx: watch::Sender<bool>,
     policy: PeerAccessPolicy,
     daemon_uid: Option<u32>,
 ) {
     let _ = timeout(
         IO_TIMEOUT,
-        process_stream(stream, runtime, cancel_tx, policy, daemon_uid),
+        process_stream(stream, runtime, shell, cancel_tx, policy, daemon_uid),
     )
     .await;
+}
+
+fn require_shell(shell: &Option<Arc<Shell>>) -> Result<&Arc<Shell>, AppError> {
+    shell.as_ref().ok_or_else(|| {
+        AppError::invalid_state(
+            "shaprintd is running without machine credential and trust storage attached",
+        )
+    })
+}
+
+fn runtime_status_dto(
+    runtime: &RuntimeCoordinator,
+    shell: &Option<Arc<Shell>>,
+) -> RuntimeStatusDto {
+    let mut dto = RuntimeStatusDto::from(&runtime.status());
+    if let Some(shell) = shell {
+        dto.network_channel_configured = Some(shell.network_channel().is_configured());
+    }
+    dto
 }
 
 async fn process_stream(
     mut stream: UnixStream,
     runtime: Arc<RuntimeCoordinator>,
+    shell: Option<Arc<Shell>>,
     cancel_tx: watch::Sender<bool>,
     policy: PeerAccessPolicy,
     daemon_uid: Option<u32>,
 ) -> Result<(), AppError> {
     let mut stop_daemon = false;
-    let outcome = async {
+    let outcome: Result<ControlResponse, AppError> = async {
         let peer_cred = stream
             .peer_cred()
             .map_err(|_| AppError::not_authorized("cannot verify local peer credentials"))?;
         match read_json_line::<ControlRequest>(&mut stream, "control request").await? {
-            ControlRequest::Status => Ok(RuntimeStatusDto::from(&runtime.status())),
+            ControlRequest::Status => Ok(ControlResponse::Ok {
+                status: runtime_status_dto(&runtime, &shell),
+            }),
             ControlRequest::StartService { id } => {
                 policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
                 let service = ServiceId::parse(&id)?;
                 runtime.start(service).await?;
-                Ok(RuntimeStatusDto::from(&runtime.status()))
+                Ok(ControlResponse::Ok {
+                    status: runtime_status_dto(&runtime, &shell),
+                })
             }
             ControlRequest::StopService { id } => {
                 policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
                 let service = ServiceId::parse(&id)?;
                 runtime.stop(service).await?;
-                Ok(RuntimeStatusDto::from(&runtime.status()))
+                Ok(ControlResponse::Ok {
+                    status: runtime_status_dto(&runtime, &shell),
+                })
             }
             ControlRequest::Shutdown => {
                 policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
                 runtime.shutdown().await?;
                 stop_daemon = true;
-                Ok(RuntimeStatusDto::from(&runtime.status()))
+                Ok(ControlResponse::Ok {
+                    status: runtime_status_dto(&runtime, &shell),
+                })
+            }
+            ControlRequest::NetworkChannelStatus => {
+                let shell = require_shell(&shell)?;
+                Ok(ControlResponse::NetworkChannel {
+                    network_channel: NetworkChannelStatusDto {
+                        configured: shell.network_channel().is_configured(),
+                    },
+                })
+            }
+            ControlRequest::SetNetworkChannel { channel } => {
+                policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
+                let shell = require_shell(&shell)?;
+                let configured = shell.network_channel().configure(&channel).await?;
+                log::info!("configured machine Network Channel configured={configured}");
+                Ok(ControlResponse::NetworkChannel {
+                    network_channel: NetworkChannelStatusDto { configured },
+                })
+            }
+            ControlRequest::InspectServer { address } => {
+                let shell = require_shell(&shell)?;
+                let review = shell.client_connections().inspect(&address).await?;
+                log::info!(
+                    "inspected server certificate address={} trusted={}",
+                    review.address,
+                    review.trusted
+                );
+                Ok(ControlResponse::ServerReview {
+                    review: ServerTrustReviewDto::from(review),
+                })
+            }
+            ControlRequest::ApproveServer {
+                address,
+                fingerprint,
+            } => {
+                policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
+                let shell = require_shell(&shell)?;
+                let review = shell
+                    .client_connections()
+                    .approve(&address, &fingerprint)
+                    .await?;
+                log::info!(
+                    "approved trusted server address={} fingerprint={}",
+                    review.address,
+                    review.current_fingerprint
+                );
+                Ok(ControlResponse::ServerReview {
+                    review: ServerTrustReviewDto::from(review),
+                })
+            }
+            ControlRequest::ForgetServer { address } => {
+                policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
+                let shell = require_shell(&shell)?;
+                let parsed = crate::adapters::client_connections::ServerAddress::parse(&address)?;
+                shell
+                    .client_connections()
+                    .forget_trusted_server(&address)
+                    .await?;
+                log::info!("forgot trusted server address={}", parsed.normalized);
+                Ok(ControlResponse::Forgotten {
+                    address: parsed.normalized,
+                })
+            }
+            ControlRequest::ListTrustedServers => {
+                let shell = require_shell(&shell)?;
+                let servers = shell
+                    .client_connections()
+                    .list_trusted_servers()
+                    .await?
+                    .into_iter()
+                    .map(TrustedServerEntryDto::from)
+                    .collect();
+                Ok(ControlResponse::TrustedServers { servers })
+            }
+            ControlRequest::ListServerPrinters { address } => {
+                let shell = require_shell(&shell)?;
+                let printers = shell.client_connections().printers(&address).await?;
+                Ok(ControlResponse::ServerPrinters {
+                    printers: TrustedServerPrintersDto::from(printers),
+                })
             }
         }
     }
     .await;
 
     let response = match outcome {
-        Ok(status) => ControlResponse::Ok { status },
+        Ok(response) => response,
         Err(error) => ControlResponse::Err {
             error: AppErrorDto::from(&error),
         },
@@ -535,27 +789,135 @@ impl DaemonClient {
 
     /// Queries the current status of all supervised services from `shaprintd`.
     pub async fn status(&self) -> Result<RuntimeStatusDto, AppError> {
-        self.send(&ControlRequest::Status).await
+        match self.send(&ControlRequest::Status).await? {
+            ControlResponse::Ok { status } => Ok(status),
+            other => Err(unexpected_response(&other)),
+        }
     }
 
     /// Starts a supervised service and returns the updated runtime status.
     pub async fn start_service(&self, id: &str) -> Result<RuntimeStatusDto, AppError> {
-        self.send(&ControlRequest::StartService { id: id.to_owned() })
-            .await
+        match self
+            .send(&ControlRequest::StartService { id: id.to_owned() })
+            .await?
+        {
+            ControlResponse::Ok { status } => Ok(status),
+            other => Err(unexpected_response(&other)),
+        }
     }
 
     /// Stops a supervised service and returns the updated runtime status.
     pub async fn stop_service(&self, id: &str) -> Result<RuntimeStatusDto, AppError> {
-        self.send(&ControlRequest::StopService { id: id.to_owned() })
-            .await
+        match self
+            .send(&ControlRequest::StopService { id: id.to_owned() })
+            .await?
+        {
+            ControlResponse::Ok { status } => Ok(status),
+            other => Err(unexpected_response(&other)),
+        }
     }
 
     /// Stops every supervised service and shuts down `shaprintd`.
     pub async fn shutdown(&self) -> Result<RuntimeStatusDto, AppError> {
-        self.send(&ControlRequest::Shutdown).await
+        match self.send(&ControlRequest::Shutdown).await? {
+            ControlResponse::Ok { status } => Ok(status),
+            other => Err(unexpected_response(&other)),
+        }
     }
 
-    async fn send(&self, request: &ControlRequest) -> Result<RuntimeStatusDto, AppError> {
+    /// Queries whether the machine Network Channel is configured without returning its value.
+    pub async fn network_channel_status(&self) -> Result<NetworkChannelStatusDto, AppError> {
+        match self.send(&ControlRequest::NetworkChannelStatus).await? {
+            ControlResponse::NetworkChannel { network_channel } => Ok(network_channel),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Configures or replaces the machine Network Channel and returns the safe configured status.
+    pub async fn configure_network_channel(
+        &self,
+        channel: &str,
+    ) -> Result<NetworkChannelStatusDto, AppError> {
+        match self
+            .send(&ControlRequest::SetNetworkChannel {
+                channel: channel.to_owned(),
+            })
+            .await?
+        {
+            ControlResponse::NetworkChannel { network_channel } => Ok(network_channel),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Inspects a Server's presented TLS certificate fingerprint before any printer query.
+    pub async fn inspect_server(&self, address: &str) -> Result<ServerTrustReviewDto, AppError> {
+        match self
+            .send(&ControlRequest::InspectServer {
+                address: address.to_owned(),
+            })
+            .await?
+        {
+            ControlResponse::ServerReview { review } => Ok(review),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Approves or reapproves a Server's certificate fingerprint as a machine Trusted Server.
+    pub async fn approve_server(
+        &self,
+        address: &str,
+        fingerprint: &str,
+    ) -> Result<ServerTrustReviewDto, AppError> {
+        match self
+            .send(&ControlRequest::ApproveServer {
+                address: address.to_owned(),
+                fingerprint: fingerprint.to_owned(),
+            })
+            .await?
+        {
+            ControlResponse::ServerReview { review } => Ok(review),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Removes a Server from machine Trusted Servers.
+    pub async fn forget_server(&self, address: &str) -> Result<String, AppError> {
+        match self
+            .send(&ControlRequest::ForgetServer {
+                address: address.to_owned(),
+            })
+            .await?
+        {
+            ControlResponse::Forgotten { address } => Ok(address),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Lists all machine-wide Trusted Servers and their pinned fingerprints.
+    pub async fn list_trusted_servers(&self) -> Result<Vec<TrustedServerEntryDto>, AppError> {
+        match self.send(&ControlRequest::ListTrustedServers).await? {
+            ControlResponse::TrustedServers { servers } => Ok(servers),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Queries shared printers on an explicitly approved Trusted Server.
+    pub async fn list_server_printers(
+        &self,
+        address: &str,
+    ) -> Result<TrustedServerPrintersDto, AppError> {
+        match self
+            .send(&ControlRequest::ListServerPrinters {
+                address: address.to_owned(),
+            })
+            .await?
+        {
+            ControlResponse::ServerPrinters { printers } => Ok(printers),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    async fn send(&self, request: &ControlRequest) -> Result<ControlResponse, AppError> {
         let mut stream = timeout(IO_TIMEOUT, UnixStream::connect(&self.socket_path))
             .await
             .map_err(|_| AppError::timeout("connecting to shaprintd timed out"))?
@@ -578,10 +940,14 @@ impl DaemonClient {
         .map_err(|_| AppError::timeout("waiting for shaprintd response timed out"))??;
 
         match response {
-            ControlResponse::Ok { status } => Ok(status),
             ControlResponse::Err { error } => Err(app_error_from_dto(error)),
+            other => Ok(other),
         }
     }
+}
+
+fn unexpected_response(response: &ControlResponse) -> AppError {
+    AppError::internal(format!("unexpected shaprintd response: {response:?}"))
 }
 
 /// Handle used by signal handlers to request a clean `DaemonServer` shutdown.
@@ -604,6 +970,19 @@ fn app_error_from_dto(dto: AppErrorDto) -> AppError {
     AppError::new(code, dto.message)
 }
 
+/// Permitted non-argument sources for reading the Network Channel secret in `shaprintctl`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecretInputSource {
+    /// Interactive hidden prompt when stdin is a terminal, or standard input otherwise.
+    PromptOrStdin,
+    /// Standard input (`--stdin`).
+    Stdin,
+    /// Open file descriptor number (`--fd <fd>`).
+    FileDescriptor(i32),
+    /// System credential file path (`--credential-file <path>`).
+    CredentialFile(PathBuf),
+}
+
 /// Action requested through `shaprintctl`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
@@ -611,6 +990,22 @@ pub enum CliCommand {
     StartService(ServiceId),
     StopService(ServiceId),
     Shutdown,
+    NetworkChannelStatus,
+    SetNetworkChannel(SecretInputSource),
+    InspectServer {
+        address: String,
+    },
+    ApproveServer {
+        address: String,
+        fingerprint: String,
+    },
+    ForgetServer {
+        address: String,
+    },
+    ListTrustedServers,
+    ListServerPrinters {
+        address: String,
+    },
 }
 
 /// Parsed command-line options for `shaprintctl`.
@@ -768,6 +1163,10 @@ fn parse_port(value: &str, flag: &str) -> Result<u16, AppError> {
 pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppError> {
     let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
     let mut json = false;
+    let mut stdin_flag = false;
+    let mut fd_arg: Option<i32> = None;
+    let mut credential_file_arg: Option<PathBuf> = None;
+    let mut fingerprint_arg: Option<String> = None;
     let mut positional = Vec::new();
 
     let mut iter = arguments.iter().skip(1).map(AsRef::as_ref);
@@ -782,37 +1181,267 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
             "--json" => {
                 json = true;
             }
+            "--stdin" => {
+                stdin_flag = true;
+            }
+            "--fd" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| AppError::invalid_input("missing value for '--fd'"))?;
+                let parsed = value
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|fd| *fd >= 0)
+                    .ok_or_else(|| {
+                        AppError::invalid_input(format!(
+                            "invalid file descriptor '{value}' for '--fd'"
+                        ))
+                    })?;
+                fd_arg = Some(parsed);
+            }
+            "--credential-file" => {
+                let value = iter.next().ok_or_else(|| {
+                    AppError::invalid_input("missing value for '--credential-file'")
+                })?;
+                credential_file_arg = Some(PathBuf::from(value));
+            }
+            "--fingerprint" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| AppError::invalid_input("missing value for '--fingerprint'"))?;
+                fingerprint_arg = Some(value.to_owned());
+            }
+            other
+                if other == "--network-channel"
+                    || other.starts_with("--network-channel=")
+                    || other == "--channel"
+                    || other.starts_with("--channel=")
+                    || other == "--value"
+                    || other.starts_with("--value=")
+                    || other == "--secret"
+                    || other.starts_with("--secret=") =>
+            {
+                return Err(AppError::invalid_input(
+                    "the Network Channel must not be passed as a command-line argument; use a hidden prompt, --stdin, --fd, or --credential-file",
+                ));
+            }
             other if other.starts_with('-') => {
+                let option_name = other.split('=').next().unwrap_or(other);
                 return Err(AppError::invalid_input(format!(
-                    "unrecognized shaprintctl option '{other}'"
+                    "unrecognized shaprintctl option '{option_name}'"
                 )));
             }
             other => positional.push(other),
         }
     }
 
-    let command =
-        match positional.as_slice() {
-            ["status"] => CliCommand::Status,
-            ["start", service] => CliCommand::StartService(ServiceId::parse(service)?),
-            ["stop"] | ["stop", "daemon"] | ["shutdown"] => CliCommand::Shutdown,
-            ["stop", service] => CliCommand::StopService(ServiceId::parse(service)?),
-            [] => return Err(AppError::invalid_input(
-                "missing command (expected: status, start <service>, stop [service], or shutdown)",
-            )),
-            other => {
-                return Err(AppError::invalid_input(format!(
-                    "invalid command '{}'",
-                    other.join(" ")
-                )))
+    let secret_sources_count = usize::from(stdin_flag)
+        + usize::from(fd_arg.is_some())
+        + usize::from(credential_file_arg.is_some());
+    if secret_sources_count > 1 {
+        return Err(AppError::invalid_input(
+            "specify at most one of '--stdin', '--fd', or '--credential-file'",
+        ));
+    }
+
+    let is_set_network_channel = matches!(positional.as_slice(), ["network-channel", "set", ..]);
+    if !is_set_network_channel && secret_sources_count > 0 {
+        return Err(AppError::invalid_input(
+            "'--stdin', '--fd', and '--credential-file' are only valid with 'network-channel set'",
+        ));
+    }
+    if fingerprint_arg.is_some() && !matches!(positional.as_slice(), ["trust", "approve", ..]) {
+        return Err(AppError::invalid_input(
+            "'--fingerprint' is only valid with 'trust approve'",
+        ));
+    }
+
+    let command = match positional.as_slice() {
+        ["status"] => CliCommand::Status,
+        ["start", service] => CliCommand::StartService(ServiceId::parse(service)?),
+        ["stop"] | ["stop", "daemon"] | ["shutdown"] => CliCommand::Shutdown,
+        ["stop", service] => CliCommand::StopService(ServiceId::parse(service)?),
+        ["network-channel"] | ["network-channel", "status"] => CliCommand::NetworkChannelStatus,
+        ["network-channel", "set"] => {
+            let source = if stdin_flag {
+                SecretInputSource::Stdin
+            } else if let Some(fd) = fd_arg {
+                SecretInputSource::FileDescriptor(fd)
+            } else if let Some(path) = credential_file_arg {
+                SecretInputSource::CredentialFile(path)
+            } else {
+                SecretInputSource::PromptOrStdin
+            };
+            CliCommand::SetNetworkChannel(source)
+        }
+        ["network-channel", "set", ..] => {
+            return Err(AppError::invalid_input(
+                "the Network Channel must not be passed as a command-line argument; use a hidden prompt, --stdin, --fd, or --credential-file",
+            ));
+        }
+        ["trust", "list"] | ["trusted-servers"] => CliCommand::ListTrustedServers,
+        ["trust", "inspect", address] | ["inspect", address] => CliCommand::InspectServer {
+            address: (*address).to_owned(),
+        },
+        ["trust", "approve", address] => {
+            let fingerprint = fingerprint_arg.ok_or_else(|| {
+                AppError::invalid_input(
+                    "missing certificate fingerprint for 'trust approve' (pass --fingerprint <SHA256>)",
+                )
+            })?;
+            CliCommand::ApproveServer {
+                address: (*address).to_owned(),
+                fingerprint,
             }
-        };
+        }
+        ["trust", "approve", address, fingerprint] => {
+            if fingerprint_arg.is_some() {
+                return Err(AppError::invalid_input(
+                    "specify the fingerprint either positionally or with '--fingerprint', not both",
+                ));
+            }
+            CliCommand::ApproveServer {
+                address: (*address).to_owned(),
+                fingerprint: (*fingerprint).to_owned(),
+            }
+        }
+        ["trust", "forget", address] | ["forget", address] => CliCommand::ForgetServer {
+            address: (*address).to_owned(),
+        },
+        ["trust", "printers", address] | ["printers", address] => CliCommand::ListServerPrinters {
+            address: (*address).to_owned(),
+        },
+        [] => {
+            return Err(AppError::invalid_input(
+                "missing command (expected: status, start <service>, stop [service], shutdown, network-channel, trust, or printers)",
+            ))
+        }
+        other => {
+            return Err(AppError::invalid_input(format!(
+                "invalid command '{}'",
+                other.join(" ")
+            )))
+        }
+    };
 
     Ok(CliOptions {
         socket_path,
         json,
         command,
     })
+}
+
+/// Reads and trims a single line secret from a buffered reader, rejecting empty values.
+pub fn read_secret_from_reader<R: std::io::Read>(reader: R) -> Result<String, AppError> {
+    use std::io::BufRead;
+
+    let mut line = String::new();
+    let mut buffered = std::io::BufReader::new(reader.take((MAX_MESSAGE_BYTES + 1) as u64));
+    buffered.read_line(&mut line).map_err(|error| {
+        AppError::internal(format!("cannot read Network Channel input: {error}"))
+    })?;
+    if line.len() > MAX_MESSAGE_BYTES {
+        return Err(AppError::invalid_input(
+            "Network Channel input is too large",
+        ));
+    }
+    let trimmed = line.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() {
+        return Err(AppError::invalid_input("Network Channel cannot be empty"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// Reads the Network Channel value from the configured [`SecretInputSource`].
+pub fn read_secret_input(source: &SecretInputSource) -> Result<String, AppError> {
+    match source {
+        SecretInputSource::Stdin => read_secret_from_reader(std::io::stdin().lock()),
+        SecretInputSource::CredentialFile(path) => {
+            let file = std::fs::File::open(path).map_err(|error| {
+                AppError::invalid_input(format!(
+                    "cannot open credential file '{}': {error}",
+                    path.display()
+                ))
+            })?;
+            read_secret_from_reader(file)
+        }
+        SecretInputSource::FileDescriptor(fd) => read_secret_from_fd(*fd),
+        SecretInputSource::PromptOrStdin => {
+            use std::io::IsTerminal;
+            if std::io::stdin().is_terminal() {
+                read_secret_from_tty_hidden_prompt("Network Channel: ")
+            } else {
+                read_secret_from_reader(std::io::stdin().lock())
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn read_secret_from_fd(fd: i32) -> Result<String, AppError> {
+    use std::io::Read;
+    // Duplicate the file descriptor via `/dev/fd/<fd>` or `/proc/self/fd/<fd>` so we can read it
+    // safely without `unsafe` raw-fd ownership assumptions.
+    let proc_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+    let dev_path = PathBuf::from(format!("/dev/fd/{fd}"));
+    let path = if proc_path.exists() {
+        proc_path
+    } else {
+        dev_path
+    };
+    let file = std::fs::File::open(&path).map_err(|error| {
+        AppError::invalid_input(format!("cannot read from file descriptor {fd}: {error}"))
+    })?;
+    read_secret_from_reader(file.take((MAX_MESSAGE_BYTES + 1) as u64))
+}
+
+#[cfg(unix)]
+fn read_secret_from_tty_hidden_prompt(prompt: &str) -> Result<String, AppError> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut tty_out = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/tty")
+        .map_err(|error| AppError::internal(format!("cannot open /dev/tty for prompt: {error}")))?;
+    tty_out
+        .write_all(prompt.as_bytes())
+        .and_then(|_| tty_out.flush())
+        .map_err(|error| AppError::internal(format!("cannot write prompt to /dev/tty: {error}")))?;
+
+    let tty_in_for_stty = std::fs::File::open("/dev/tty")
+        .map_err(|error| AppError::internal(format!("cannot open /dev/tty: {error}")))?;
+    let stty_status = Command::new("stty")
+        .arg("-echo")
+        .stdin(Stdio::from(tty_in_for_stty))
+        .status()
+        .map_err(|error| AppError::internal(format!("cannot disable terminal echo: {error}")))?;
+    if !stty_status.success() {
+        return Err(AppError::internal(
+            "cannot disable terminal echo for hidden prompt",
+        ));
+    }
+
+    struct RestoreEcho;
+    impl Drop for RestoreEcho {
+        fn drop(&mut self) {
+            if let Ok(tty) = std::fs::File::open("/dev/tty") {
+                let _ = Command::new("stty")
+                    .arg("echo")
+                    .stdin(Stdio::from(tty))
+                    .status();
+            }
+            if let Ok(mut out) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+                let _ = out.write_all(b"\n");
+                let _ = out.flush();
+            }
+        }
+    }
+    let _restore = RestoreEcho;
+
+    let tty_in = std::fs::File::open("/dev/tty")
+        .map_err(|error| AppError::internal(format!("cannot read from /dev/tty: {error}")))?;
+    read_secret_from_reader(tty_in)
 }
 
 /// Formats `RuntimeStatusDto` for `shaprintctl` output.
@@ -832,7 +1461,164 @@ pub fn format_runtime_status(status: &RuntimeStatusDto, json: bool) -> Result<St
             ));
         }
     }
+    if let Some(configured) = status.network_channel_configured {
+        let state = if configured {
+            "configured"
+        } else {
+            "unconfigured"
+        };
+        output.push_str(&format!("network-channel: {state}\n"));
+    }
     Ok(output)
+}
+
+/// Executes a parsed [`CliOptions`] command against `shaprintd` and returns formatted output.
+pub async fn execute_cli_command(options: &CliOptions) -> Result<String, AppError> {
+    let client = DaemonClient::new(&options.socket_path);
+    match &options.command {
+        CliCommand::Status => {
+            let status = client.status().await?;
+            format_runtime_status(&status, options.json)
+        }
+        CliCommand::StartService(id) => {
+            let status = client.start_service(id.as_str()).await?;
+            format_runtime_status(&status, options.json)
+        }
+        CliCommand::StopService(id) => {
+            let status = client.stop_service(id.as_str()).await?;
+            format_runtime_status(&status, options.json)
+        }
+        CliCommand::Shutdown => {
+            let status = client.shutdown().await?;
+            format_runtime_status(&status, options.json)
+        }
+        CliCommand::NetworkChannelStatus => {
+            let nc = client.network_channel_status().await?;
+            format_network_channel_status(&nc, options.json)
+        }
+        CliCommand::SetNetworkChannel(source) => {
+            let secret = read_secret_input(source)?;
+            // When `shaprintctl` runs as root on the default machine socket, persist the Client
+            // credential directly into `/etc/shaprint-credentials/network-channel` (`0640
+            // root:shaprint` or `0600`) so it lives in root-owned machine credential storage that
+            // the unprivileged `shaprint` daemon can read while `/etc/shaprint` remains
+            // strictly non-secret (ADR 0018). If the subsequent IPC call fails, restore the
+            // previous credential file state so Client and Server never diverge.
+            let root_cred = if options.socket_path == Path::new(DEFAULT_SOCKET_PATH)
+                && current_effective_uid() == Some(0)
+            {
+                let cred_path = Path::new(DEFAULT_CREDENTIAL_DIR).join(CLIENT_CREDENTIAL_FILE);
+                let previous = std::fs::read_to_string(&cred_path).ok();
+                crate::adapters::ipps::persist_root_machine_credential(&cred_path, &secret)?;
+                Some((cred_path, previous))
+            } else {
+                None
+            };
+            match client.configure_network_channel(&secret).await {
+                Ok(nc) => format_network_channel_status(&nc, options.json),
+                Err(error) => {
+                    if let Some((cred_path, previous)) = root_cred {
+                        match previous {
+                            Some(prev) => {
+                                let _ = crate::adapters::ipps::persist_root_machine_credential(
+                                    &cred_path,
+                                    prev.trim_end_matches(['\r', '\n']),
+                                );
+                            }
+                            None => {
+                                let _ = std::fs::remove_file(&cred_path);
+                            }
+                        }
+                    }
+                    Err(error)
+                }
+            }
+        }
+        CliCommand::InspectServer { address } => {
+            let review = client.inspect_server(address).await?;
+            format_server_review(&review, options.json)
+        }
+        CliCommand::ApproveServer {
+            address,
+            fingerprint,
+        } => {
+            let review = client.approve_server(address, fingerprint).await?;
+            format_server_review(&review, options.json)
+        }
+        CliCommand::ForgetServer { address } => {
+            let forgotten = client.forget_server(address).await?;
+            if options.json {
+                format_json_line(
+                    &serde_json::json!({
+                        "address": forgotten,
+                        "trusted": false,
+                    }),
+                    "forget",
+                )
+            } else {
+                Ok(format!("forgotten: {forgotten}\n"))
+            }
+        }
+        CliCommand::ListTrustedServers => {
+            let servers = client.list_trusted_servers().await?;
+            if options.json {
+                format_json_line(&servers, "trusted servers")
+            } else {
+                let mut out = String::new();
+                for server in &servers {
+                    out.push_str(&format!("{} {}\n", server.address, server.fingerprint));
+                }
+                Ok(out)
+            }
+        }
+        CliCommand::ListServerPrinters { address } => {
+            let printers = client.list_server_printers(address).await?;
+            if options.json {
+                format_json_line(&printers, "server printers")
+            } else {
+                let mut out = String::new();
+                for printer in &printers.printers {
+                    out.push_str(&format!("{printer}\n"));
+                }
+                Ok(out)
+            }
+        }
+    }
+}
+
+fn format_json_line<T: Serialize>(value: &T, label: &str) -> Result<String, AppError> {
+    let mut payload = serde_json::to_string(value)
+        .map_err(|error| AppError::internal(format!("cannot format {label} JSON: {error}")))?;
+    payload.push('\n');
+    Ok(payload)
+}
+
+fn format_network_channel_status(
+    status: &NetworkChannelStatusDto,
+    json: bool,
+) -> Result<String, AppError> {
+    if json {
+        format_json_line(status, "network-channel")
+    } else if status.configured {
+        Ok("network-channel: configured\n".to_owned())
+    } else {
+        Ok("network-channel: unconfigured\n".to_owned())
+    }
+}
+
+fn format_server_review(review: &ServerTrustReviewDto, json: bool) -> Result<String, AppError> {
+    if json {
+        format_json_line(review, "server review")
+    } else {
+        let mut out = format!(
+            "address: {}\ncurrent_fingerprint: {}\ntrusted: {}\n",
+            review.address, review.current_fingerprint, review.trusted
+        );
+        if let Some(prev) = &review.previous_fingerprint {
+            out.push_str(&format!("previous_fingerprint: {prev}\n"));
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -893,6 +1679,7 @@ mod tests {
                     detail: String::new(),
                 },
             ],
+            network_channel_configured: None,
         };
 
         let text = format_runtime_status(&dto, false).expect("formats text");
@@ -901,5 +1688,160 @@ mod tests {
         let json = format_runtime_status(&dto, true).expect("formats json");
         let parsed: RuntimeStatusDto = serde_json::from_str(&json).expect("valid json");
         assert_eq!(parsed, dto);
+    }
+
+    #[test]
+    fn cli_args_parse_network_channel_and_trust_commands_and_reject_secret_arguments() {
+        let nc_status =
+            parse_cli_args(&["shaprintctl", "network-channel", "status"]).expect("nc status");
+        assert_eq!(nc_status.command, CliCommand::NetworkChannelStatus);
+
+        let nc_prompt =
+            parse_cli_args(&["shaprintctl", "network-channel", "set"]).expect("nc prompt");
+        assert_eq!(
+            nc_prompt.command,
+            CliCommand::SetNetworkChannel(SecretInputSource::PromptOrStdin)
+        );
+
+        let nc_stdin = parse_cli_args(&["shaprintctl", "network-channel", "set", "--stdin"])
+            .expect("nc stdin");
+        assert_eq!(
+            nc_stdin.command,
+            CliCommand::SetNetworkChannel(SecretInputSource::Stdin)
+        );
+
+        let nc_fd =
+            parse_cli_args(&["shaprintctl", "network-channel", "set", "--fd", "3"]).expect("nc fd");
+        assert_eq!(
+            nc_fd.command,
+            CliCommand::SetNetworkChannel(SecretInputSource::FileDescriptor(3))
+        );
+
+        let nc_cred = parse_cli_args(&[
+            "shaprintctl",
+            "network-channel",
+            "set",
+            "--credential-file",
+            "/run/credentials/shaprintd.service/network-channel",
+        ])
+        .expect("nc credential file");
+        assert_eq!(
+            nc_cred.command,
+            CliCommand::SetNetworkChannel(SecretInputSource::CredentialFile(PathBuf::from(
+                "/run/credentials/shaprintd.service/network-channel"
+            )))
+        );
+
+        // Passing the Network Channel value on the command line must be rejected so it never leaks
+        // into process listings or shell history.
+        for forbidden in [
+            &["shaprintctl", "network-channel", "set", "inline-secret"][..],
+            &[
+                "shaprintctl",
+                "network-channel",
+                "set",
+                "--value",
+                "inline-secret",
+            ][..],
+            &["shaprintctl", "--network-channel", "inline-secret"][..],
+            &["shaprintctl", "--network-channel=inline-secret"][..],
+            &[
+                "shaprintctl",
+                "network-channel",
+                "set",
+                "--channel=inline-secret",
+            ][..],
+            &[
+                "shaprintctl",
+                "network-channel",
+                "set",
+                "--secret=inline-secret",
+            ][..],
+            &[
+                "shaprintctl",
+                "network-channel",
+                "set",
+                "--unknown-flag=inline-secret",
+            ][..],
+        ] {
+            let err = parse_cli_args(forbidden).expect_err("must reject inline secret on CLI");
+            assert_eq!(err.code(), ErrorCode::InvalidInput);
+            assert!(
+                !err.message().contains("inline-secret"),
+                "error message must never echo an inline secret value: {}",
+                err.message()
+            );
+        }
+
+        let inspect = parse_cli_args(&["shaprintctl", "trust", "inspect", "10.0.0.5:48631"])
+            .expect("inspect");
+        assert_eq!(
+            inspect.command,
+            CliCommand::InspectServer {
+                address: "10.0.0.5:48631".to_owned()
+            }
+        );
+
+        let approve_flag = parse_cli_args(&[
+            "shaprintctl",
+            "trust",
+            "approve",
+            "10.0.0.5:48631",
+            "--fingerprint",
+            "AA:BB",
+        ])
+        .expect("approve with flag");
+        assert_eq!(
+            approve_flag.command,
+            CliCommand::ApproveServer {
+                address: "10.0.0.5:48631".to_owned(),
+                fingerprint: "AA:BB".to_owned(),
+            }
+        );
+
+        let approve_positional =
+            parse_cli_args(&["shaprintctl", "trust", "approve", "10.0.0.5:48631", "AA:BB"])
+                .expect("approve positional");
+        assert_eq!(
+            approve_positional.command,
+            CliCommand::ApproveServer {
+                address: "10.0.0.5:48631".to_owned(),
+                fingerprint: "AA:BB".to_owned(),
+            }
+        );
+
+        let forget =
+            parse_cli_args(&["shaprintctl", "trust", "forget", "10.0.0.5:48631"]).expect("forget");
+        assert_eq!(
+            forget.command,
+            CliCommand::ForgetServer {
+                address: "10.0.0.5:48631".to_owned()
+            }
+        );
+
+        let list = parse_cli_args(&["shaprintctl", "trust", "list"]).expect("trust list");
+        assert_eq!(list.command, CliCommand::ListTrustedServers);
+
+        let printers =
+            parse_cli_args(&["shaprintctl", "printers", "10.0.0.5:48631"]).expect("printers");
+        assert_eq!(
+            printers.command,
+            CliCommand::ListServerPrinters {
+                address: "10.0.0.5:48631".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn secret_input_reader_reads_from_reader_fd_and_credential_file_and_rejects_empty() {
+        use std::io::Cursor;
+
+        let from_reader =
+            read_secret_from_reader(Cursor::new(b"my-channel-value\r\n")).expect("reads line");
+        assert_eq!(from_reader, "my-channel-value");
+
+        let empty_err =
+            read_secret_from_reader(Cursor::new(b"\n")).expect_err("rejects empty secret");
+        assert_eq!(empty_err.code(), ErrorCode::InvalidInput);
     }
 }

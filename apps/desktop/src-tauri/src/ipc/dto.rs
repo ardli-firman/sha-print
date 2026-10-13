@@ -43,6 +43,8 @@ impl From<&ServiceStatus> for ServiceStatusDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeStatusDto {
     pub services: Vec<ServiceStatusDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_channel_configured: Option<bool>,
 }
 
 impl From<&RuntimeStatus> for RuntimeStatusDto {
@@ -53,6 +55,7 @@ impl From<&RuntimeStatus> for RuntimeStatusDto {
                 .iter()
                 .map(ServiceStatusDto::from)
                 .collect(),
+            network_channel_configured: None,
         }
     }
 }
