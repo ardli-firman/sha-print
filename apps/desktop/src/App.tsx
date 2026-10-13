@@ -21,6 +21,7 @@ import { PrinterSharingPanel, usePrinterSharing } from "@/features/printer-shari
 import {
   RuntimeStatusPanel,
   SystemDiagnosticsDialog,
+  useControlMode,
   useRuntimeStatus,
 } from "@/features/runtime-status";
 import {
@@ -42,7 +43,7 @@ type PageId = (typeof NAV_ITEMS)[number]["id"];
 const PAGE_CONTENT: Record<PageId, { title: string; description: string }> = {
   "my-printers": {
     title: "My printers",
-    description: "Printers available to your Windows apps through ShaPrint.",
+    description: "Printers available to your apps through ShaPrint.",
   },
   share: {
     title: "Share printers",
@@ -59,6 +60,7 @@ function App() {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [addPrinterOpen, setAddPrinterOpen] = useState(false);
 
+  const controlMode = useControlMode();
   const runtime = useRuntimeStatus();
   const failures = usePrintFailures();
   const startup = useStartup();
@@ -84,7 +86,9 @@ function App() {
   const serverSharingState = runtime.status?.services.find((s) => s.id === "server-sharing")?.state;
   const hasRunningPath = clientProxyState === "running" || serverSharingState === "running";
   const statusLabel = isUnreachable
-    ? "Runtime unavailable"
+    ? controlMode === "machine"
+      ? "Machine daemon unavailable"
+      : "Runtime unavailable"
     : hasFailedService
       ? "Service needs attention"
       : isTransitioning
@@ -127,7 +131,7 @@ function App() {
               )}
             </span>
             <span className="brand-caption">
-              {isNightlyBuild ? `Nightly preview (v${currentAppVersion})` : "Windows print sharing"}
+              {isNightlyBuild ? `Nightly preview (v${currentAppVersion})` : "Print sharing"}
             </span>
           </span>
         </div>
@@ -152,7 +156,7 @@ function App() {
 
         <div className="sidebar-note">
           <span className="sidebar-note-rule" aria-hidden="true" />
-          <p>Print from the Windows dialog you already use.</p>
+          <p>Print from the dialog you already use.</p>
         </div>
       </aside>
 
@@ -250,9 +254,9 @@ function App() {
             {page === "settings" ? (
               <>
                 <NetworkChannelPanel settings={networkChannel} />
-                <StartupPanel startup={startup} />
-                <SoftwareUpdatesPanel updates={updates} />
-                <RuntimeStatusPanel runtime={runtime} />
+                <StartupPanel startup={startup} controlMode={controlMode} />
+                <SoftwareUpdatesPanel updates={updates} controlMode={controlMode} />
+                <RuntimeStatusPanel runtime={runtime} controlMode={controlMode} />
                 <LegacyImportPanel legacy={legacy} />
               </>
             ) : null}
@@ -292,6 +296,7 @@ function App() {
         open={diagnosticsOpen}
         onOpenChange={setDiagnosticsOpen}
         runtime={runtime}
+        controlMode={controlMode}
       />
     </div>
   );

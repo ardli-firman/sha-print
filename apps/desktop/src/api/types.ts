@@ -22,6 +22,12 @@ export interface RuntimeStatus {
   services: ServiceStatus[];
 }
 
+/**
+ * Which control plane the desktop shell administers: `local` for the in-process runtime this
+ * window owns, `machine` for the system daemon it talks to over the local control socket.
+ */
+export type ControlMode = "local" | "machine";
+
 /** Stable error codes the shell can report. */
 export const ERROR_CODES = [
   "invalid-input",

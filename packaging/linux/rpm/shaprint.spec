@@ -29,6 +29,8 @@ install -D -m 0644 "%{_sourcedir}/90-shaprint.preset" "%{buildroot}%{_presetdir}
 install -d -m 0750 "%{buildroot}%{_sysconfdir}/shaprint"
 install -d -m 0750 "%{buildroot}%{_sysconfdir}/shaprint-credentials"
 install -D -m 0640 "%{_sourcedir}/config.json" "%{buildroot}%{_sysconfdir}/shaprint/config.json"
+# Narrow polkit actions for the desktop GUI's `pkexec shaprintctl` machine mutations (ADR 0018).
+install -D -m 0644 "%{_sourcedir}/org.shaprint.control.policy" "%{buildroot}%{_datadir}/polkit-1/actions/org.shaprint.control.policy"
 install -d -m 0700 "%{buildroot}%{_sharedstatedir}/shaprint"
 
 %pre
@@ -76,6 +78,7 @@ exit 0
 %dir %attr(0750,root,shaprint) %{_sysconfdir}/shaprint-credentials
 %config(noreplace) %attr(0640,root,shaprint) %{_sysconfdir}/shaprint/config.json
 %dir %attr(0700,shaprint,shaprint) %{_sharedstatedir}/shaprint
+%attr(0644,root,root) %{_datadir}/polkit-1/actions/org.shaprint.control.policy
 
 %changelog
 * Tue Oct 13 2026 ShaPrint Maintainers <maintainers@shaprint.local> - 3.4.0-1

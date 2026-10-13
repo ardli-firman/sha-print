@@ -10,6 +10,8 @@ mod client_proxy;
 #[cfg(unix)]
 pub mod daemon;
 pub mod discovery;
+#[cfg(unix)]
+pub mod elevated_ctl;
 pub mod elevation;
 pub mod identity;
 pub mod ipps;

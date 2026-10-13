@@ -46,6 +46,10 @@ use application::{
     TrustedServerPrinters,
 };
 use domain::AppError;
+#[cfg(feature = "desktop")]
+use domain::ServiceId;
+#[cfg(feature = "desktop")]
+use ipc::control::ControlMode;
 
 /// The state the desktop shell manages, built once at startup.
 ///
@@ -415,8 +419,10 @@ pub fn run(background: bool) -> Result<(), AppError> {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             ipc::commands::get_runtime_status,
+            ipc::commands::get_control_mode,
             ipc::commands::start_service,
             ipc::commands::stop_service,
+            ipc::commands::shutdown_daemon,
             ipc::commands::get_print_failures,
             ipc::commands::dismiss_print_failure,
             ipc::commands::list_local_printers,
@@ -452,23 +458,32 @@ pub fn run(background: bool) -> Result<(), AppError> {
             let data_dir = app.path().app_data_dir().map_err(|error| {
                 AppError::internal(format!("cannot locate the app data directory: {error}"))
             })?;
-            let shell = Shell::new(&data_dir)?;
+            let shell = Arc::new(Shell::new(&data_dir)?);
 
-            ipc::emitter::forward_status(app.handle().clone(), shell.runtime());
+            // One control plane behind every administrative command: on Linux the window
+            // administers the machine daemon over its local socket (ADR 0018); everywhere else
+            // it owns the runtimes in-process.
+            let control = ipc::control::system_control_plane(&shell);
+            let machine = control.mode() == ControlMode::Machine;
+            app.manage(Arc::clone(&control));
+            // The shell keeps every component this window built alive for as long as it runs;
+            // commands reach the pieces they need through their own managed state or control.
+            app.manage(Arc::clone(&shell));
+
+            if machine {
+                // The daemon is a separate root process: its status is polled over the local
+                // socket, never read from its state files.
+                ipc::emitter::forward_daemon_status(app.handle().clone(), Arc::clone(&control));
+            } else {
+                ipc::emitter::forward_status(app.handle().clone(), shell.runtime());
+            }
             ipc::emitter::forward_nearby_servers(app.handle().clone(), shell.discovery());
             ipc::emitter::forward_print_failures(app.handle().clone(), shell.print_failures());
             ipc::emitter::forward_legacy_import(app.handle().clone(), shell.legacy_import());
-            app.manage(shell.runtime());
-            app.manage(shell.sharing());
-            app.manage(shell.printer_catalog());
-            app.manage(shell.endpoint());
-            app.manage(shell.client_connections());
-            app.manage(shell.network_channel());
             app.manage(shell.discovery());
             app.manage(shell.print_failures());
             app.manage(shell.startup());
             app.manage(shell.legacy_import());
-            app.manage(shell.queue_installation());
             let job_tracker = shell.job_tracker();
             app.manage(Arc::clone(&job_tracker));
             let updates = Arc::new(ipc::updates::UpdateManager::new(
@@ -478,7 +493,12 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ));
             ipc::updates::forward_status(app.handle().clone(), Arc::clone(&updates.coordinator));
             app.manage(Arc::clone(&updates));
-            start_update_workers(app.handle().clone(), updates, Arc::clone(&job_tracker));
+            start_update_workers(
+                app.handle().clone(),
+                updates,
+                Arc::clone(&job_tracker),
+                Arc::clone(&control),
+            );
 
             // The tray is what makes the app reachable after its window is closed, so its
             // availability decides what closing the window means.
@@ -486,13 +506,16 @@ pub fn run(background: bool) -> Result<(), AppError> {
             app.manage(ShellLifecycle { tray_ready });
 
             // Starting with Windows is the product default, applied once: after the user has made a
-            // choice — including "off" — a launch leaves the registration alone.
-            if let Err(error) = shell.startup().apply_default() {
-                log::warn!(
-                    "login startup is not registered code={} message={}",
-                    error.code_str(),
-                    error
-                );
+            // choice — including "off" — a launch leaves the registration alone. In machine mode
+            // login startup belongs to the daemon package, not to this window.
+            if !machine {
+                if let Err(error) = shell.startup().apply_default() {
+                    log::warn!(
+                        "login startup is not registered code={} message={}",
+                        error.code_str(),
+                        error
+                    );
+                }
             }
 
             // A login launch stays out of the way: the proxy is up, and the window waits in the
@@ -516,6 +539,19 @@ pub fn run(background: bool) -> Result<(), AppError> {
             let legacy_import = shell.legacy_import();
             let sharing = shell.sharing();
             drop(tauri::async_runtime::spawn(async move {
+                if machine {
+                    // The window only browses for nearby servers itself; the client proxy, the
+                    // server sharing, and the machine advertisement belong to `shaprintd` and
+                    // are never started, restored, or imported by this window (ADR 0018).
+                    if let Err(error) = runtime.start(ServiceId::ServerDiscovery).await {
+                        log::warn!(
+                            "local server browsing could not start code={} message={}",
+                            error.code_str(),
+                            error
+                        );
+                    }
+                    return;
+                }
                 match legacy_import.apply().await {
                     Ok(report) => log::info!(
                         "legacy import found={} channel={} queues_need_reselection={}",
@@ -574,12 +610,20 @@ pub fn run(background: bool) -> Result<(), AppError> {
                 // our own `exit` call.
                 if !stopping.swap(true, Ordering::SeqCst) {
                     api.prevent_exit();
-                    let runtime = app
-                        .try_state::<Arc<RuntimeCoordinator>>()
-                        .map(|runtime| Arc::clone(&runtime));
+                    let control = app
+                        .try_state::<ipc::control::SharedControl>()
+                        .map(|control| Arc::clone(control.inner()));
                     let handle = app.clone();
                     drop(tauri::async_runtime::spawn(async move {
-                        if let Some(runtime) = runtime {
+                        // In machine mode this window owns no print services: it exits and leaves
+                        // the client proxy and the enabled server of `shaprintd` running for the
+                        // whole machine (#130, AC5). Only the in-process runtimes of the local
+                        // control plane are stopped on the way out.
+                        let local_runtime = control
+                            .as_ref()
+                            .and_then(|control| control.local_shell())
+                            .map(|shell| shell.runtime());
+                        if let Some(runtime) = local_runtime {
                             if let Err(error) = runtime.shutdown().await {
                                 log::warn!(
                                     "runtime shutdown did not complete code={} message={}",
@@ -602,11 +646,20 @@ fn start_update_workers(
     app: tauri::AppHandle,
     updates: Arc<ipc::updates::UpdateManager>,
     jobs: Arc<PrintJobTracker>,
+    control: crate::ipc::control::SharedControl,
 ) {
     use application::{
         UpdateState, INITIAL_CHECK_DELAY, RESTART_POLL_INTERVAL, UPDATE_CHECK_INTERVAL,
     };
     use tauri::Manager;
+
+    // In machine mode the package manager owns ShaPrint updates and the window has no local
+    // print runtimes to restart, so background polling is disabled: it could only ever log a
+    // failing check against a server this build does not ship updates from.
+    if control.mode() == crate::ipc::control::ControlMode::Machine {
+        log::info!("machine control mode; background update polling is disabled");
+        return;
+    }
 
     let polling_manager = Arc::clone(&updates);
     drop(tauri::async_runtime::spawn(async move {
@@ -625,12 +678,14 @@ fn start_update_workers(
 
     let restart_app = app.clone();
     let manager = Arc::clone(&updates);
-    let runtime = app
-        .try_state::<Arc<RuntimeCoordinator>>()
-        .map(|state| Arc::clone(state.inner()));
-    let sharing = app
-        .try_state::<Arc<Sharing>>()
-        .map(|state| Arc::clone(state.inner()));
+    // Only the local control plane owns print services this window may stop and restore around an
+    // update. In machine mode the runtimes belong to `shaprintd`: the window restarts itself and
+    // leaves the machine's services untouched.
+    let local = control
+        .local_shell()
+        .map(|shell| (shell.runtime(), shell.sharing()));
+    let runtime = local.as_ref().map(|(runtime, _)| Arc::clone(runtime));
+    let sharing = local.as_ref().map(|(_, sharing)| Arc::clone(sharing));
     drop(tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(RESTART_POLL_INTERVAL).await;
@@ -721,7 +776,21 @@ fn show_main_window(app: &tauri::AppHandle) {
 ///
 /// Returns whether the app can still be reached once its window is closed: a tray that could not
 /// be created leaves the window as the only way in, which is what closing then means.
-#[cfg(feature = "desktop")]
+#[cfg(all(feature = "desktop", unix))]
+fn install_tray(app: &tauri::AppHandle) -> bool {
+    // On Linux there is no guaranteed StatusNotifier host (GNOME ships none by default), so a
+    // hide-to-tray close would leave the app unreachable. Closing exits instead — with machine
+    // control the Client proxy and enabled Server keep running as machine services (spec #123).
+    let _ = app;
+    log::info!("tray disabled on Linux; closing the window exits the GUI");
+    false
+}
+
+/// Builds the tray icon with its menu.
+///
+/// Returns whether the app can still be reached once its window is closed: a tray that could not
+/// be created leaves the window as the only way in, which is what closing then means.
+#[cfg(all(feature = "desktop", windows))]
 fn install_tray(app: &tauri::AppHandle) -> bool {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};

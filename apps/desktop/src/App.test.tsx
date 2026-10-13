@@ -37,6 +37,8 @@ vi.mock("./api/ipc", () => ({
   listLocalPrinters: vi.fn(),
   setSharedPrinters: vi.fn(),
   getServerIdentity: vi.fn(),
+  getControlMode: vi.fn(),
+  shutdownDaemon: vi.fn(),
 }));
 
 vi.mock("./api/networkChannel", () => ({
@@ -148,6 +150,7 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(ipc.onRuntimeStatus).mockResolvedValue(() => {});
+  vi.mocked(ipc.getControlMode).mockResolvedValue("local");
   vi.mocked(updatesApi.getUpdateStatus).mockResolvedValue({
     current_version: "3.1.1",
     update: { state: "idle" },
@@ -1584,6 +1587,100 @@ describe("startup panel", () => {
     expect(
       within(panel).queryByLabelText(/Start ShaPrint when I sign in to Windows/),
     ).toBeNull();
+  });
+});
+
+describe("machine control mode", () => {
+  it("offers stopping the machine daemon and keeps state when authorization is declined", async () => {
+    vi.mocked(ipc.getControlMode).mockResolvedValue("machine");
+    vi.mocked(ipc.shutdownDaemon).mockRejectedValue({
+      code: "not-authorized",
+      message:
+        "Administrator authentication is required to stop the machine daemon (polkit action org.shaprint.control.stop); approve the authentication prompt and retry. No changes were made.",
+    });
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Client printing ready. Open service diagnostics",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Print service status" });
+
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Stop ShaPrint daemon" }));
+
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("not-authorized");
+    expect(alert.textContent).toContain("org.shaprint.control.stop");
+    expect(alert.textContent).toContain("No changes were made.");
+    expect(ipc.shutdownDaemon).toHaveBeenCalledTimes(1);
+    // The declined prompt changed nothing: the Client proxy is still reported running.
+    const proxy = within(dialog).getByRole("region", { name: "Client proxy" });
+    expect(proxy.getAttribute("data-state")).toBe("running");
+    expect(within(dialog).getByRole("button", { name: "Stop ShaPrint daemon" })).toBeTruthy();
+  });
+
+  it("explains an unreachable machine daemon with the command that starts it again", async () => {
+    vi.mocked(ipc.getControlMode).mockResolvedValue("machine");
+    vi.mocked(ipc.getRuntimeStatus).mockRejectedValue({
+      code: "server-unavailable",
+      message: "the machine control socket is not reachable",
+    });
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Machine daemon unavailable\. Open service diagnostics/,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Print service status" });
+
+    expect(within(dialog).getByText("Machine daemon unavailable")).toBeTruthy();
+    const recovery = await within(dialog).findAllByText(/sudo systemctl start shaprintd/);
+    expect(recovery.length).toBeGreaterThan(0);
+  });
+
+  it("reports that the system service owns startup instead of a Windows login entry", async () => {
+    vi.mocked(ipc.getControlMode).mockResolvedValue("machine");
+    vi.mocked(startupApi.getStartupStatus).mockResolvedValue({
+      supported: false,
+      enabled: false,
+      command: "",
+    });
+    render(<App />);
+    navigateTo("Settings");
+
+    const panel = await screen.findByRole("region", { name: "Startup" });
+    expect(await within(panel).findByText(/system service starts with this machine/i)).toBeTruthy();
+    expect(await within(panel).findByText(/closing the window only closes the gui/i)).toBeTruthy();
+    expect(within(panel).queryByText(/sign in to Windows/i)).toBeNull();
+    expect(
+      within(panel).queryByLabelText(/Start ShaPrint when I sign in to Windows/),
+    ).toBeNull();
+  });
+
+  it("points machine-mode updates at the package manager instead of the in-app updater", async () => {
+    vi.mocked(ipc.getControlMode).mockResolvedValue("machine");
+    render(<App />);
+    navigateTo("Settings");
+
+    const panel = await screen.findByRole("region", { name: "Software updates" });
+    const notes = await within(panel).findAllByText(/Updates are installed by your package manager/i);
+    expect(notes.length).toBeGreaterThan(0);
+    expect((await within(panel).findAllByText(/sudo dnf upgrade shaprint/)).length).toBeGreaterThan(0);
+    expect(within(panel).queryByRole("button", { name: "Check for updates" })).toBeNull();
+    expect(within(panel).queryByText(/Restart Now/i)).toBeNull();
+  });
+
+  it("keeps the in-app wording when the shell administers the local runtime", async () => {
+    vi.mocked(ipc.getControlMode).mockResolvedValue("local");
+    render(<App />);
+    navigateTo("Settings");
+
+    const panel = await screen.findByRole("region", { name: "Software updates" });
+    expect(within(panel).getByRole("button", { name: "Check for updates" })).toBeTruthy();
+    const startupPanel = await screen.findByRole("region", { name: "Startup" });
+    expect(startupPanel.textContent).toContain("Start ShaPrint when you sign in to Windows.");
   });
 });
 

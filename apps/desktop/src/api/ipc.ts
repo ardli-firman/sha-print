@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
+  ControlMode,
   LocalPrinters,
   RuntimeStatus,
   ServerIdentity,
@@ -42,6 +43,20 @@ export function setSharedPrinters(printers: string[]): Promise<LocalPrinters> {
 /** The certificate fingerprint clients approve, and the port they connect to. */
 export function getServerIdentity(): Promise<ServerIdentity> {
   return invoke<ServerIdentity>("get_server_identity");
+}
+
+/** Which control plane this window administers: its in-process runtime or the machine daemon. */
+export function getControlMode(): Promise<ControlMode> {
+  return invoke<ControlMode>("get_control_mode");
+}
+
+/**
+ * Stops every machine service and the machine daemon itself; machine control plane only.
+ * Resolves with the resulting status snapshot, or rejects with the stable error the elevated
+ * helper reported (for example `not-authorized` when the polkit prompt was declined).
+ */
+export function shutdownDaemon(): Promise<RuntimeStatus> {
+  return invoke<RuntimeStatus>("shutdown_daemon");
 }
 
 /** Subscribes to live status changes; resolve the returned function to unsubscribe. */

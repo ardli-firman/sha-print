@@ -2,18 +2,25 @@ import { FlaskConical, RefreshCw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import type { ControlMode } from "@/api/types";
 import { isNightly } from "@/lib/version";
 import type { useUpdates } from "../hooks/useUpdates";
 
 export interface SoftwareUpdatesPanelProps {
   updates: ReturnType<typeof useUpdates>;
+  /**
+   * Control plane the shell administers. In `machine` mode the installation is a system package,
+   * so updates arrive through the package manager rather than through this window.
+   */
+  controlMode?: ControlMode;
 }
 
-export function SoftwareUpdatesPanel({ updates }: SoftwareUpdatesPanelProps) {
+export function SoftwareUpdatesPanel({ updates, controlMode = "local" }: SoftwareUpdatesPanelProps) {
   const { status, error, checking, check, restart } = updates;
   const update = status?.update;
   const isReady = update?.state === "ready_to_restart";
   const nightly = isNightly(status?.current_version);
+  const isMachine = controlMode === "machine";
 
   return (
     <Card className="panel space-y-3" aria-labelledby="software-updates-heading">
@@ -37,47 +44,63 @@ export function SoftwareUpdatesPanel({ updates }: SoftwareUpdatesPanelProps) {
               )}
             </div>
             <p className="hint text-xs mt-1 text-muted-foreground">
-              Current version {status?.current_version ? `v${status.current_version}` : "installed"}. Updates are downloaded and verified automatically.
+              Current version {status?.current_version ? `v${status.current_version}` : "installed"}.{" "}
+              {isMachine
+                ? "Updates are installed by your package manager."
+                : "Updates are downloaded and verified automatically."}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {isReady ? (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              onClick={() => void restart()}
-              className="text-xs h-8"
-            >
-              {status?.waiting_for_jobs ? "Restart queued" : "Restart Now"}
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void check()}
-              disabled={checking || update?.state === "checking"}
-              className="text-xs h-8"
-              aria-label="Check for updates"
-            >
-              <RefreshCw
-                size={14}
-                className={checking || update?.state === "checking" ? "animate-spin mr-1.5" : "mr-1.5"}
-                aria-hidden="true"
-              />
-              {checking || update?.state === "checking" ? "Checking…" : "Check for updates"}
-            </Button>
-          )}
-        </div>
+        {!isMachine ? (
+          <div className="flex items-center gap-2">
+            {isReady ? (
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                onClick={() => void restart()}
+                className="text-xs h-8"
+              >
+                {status?.waiting_for_jobs ? "Restart queued" : "Restart Now"}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void check()}
+                disabled={checking || update?.state === "checking"}
+                className="text-xs h-8"
+                aria-label="Check for updates"
+              >
+                <RefreshCw
+                  size={14}
+                  className={checking || update?.state === "checking" ? "animate-spin mr-1.5" : "mr-1.5"}
+                  aria-hidden="true"
+                />
+                {checking || update?.state === "checking" ? "Checking…" : "Check for updates"}
+              </Button>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {error ? (
         <p className="text-xs text-destructive font-medium" role="alert">
           {error}
         </p>
+      ) : null}
+
+      {isMachine ? (
+        <div className="rounded-md border border-border bg-muted/40 p-2.5 text-xs space-y-1">
+          <strong className="text-foreground">Updates are installed by your package manager.</strong>
+          <p className="text-muted-foreground">
+            ShaPrint is installed as a system package on this machine, so install updates the way
+            you update everything else (for example <strong>sudo dnf upgrade shaprint</strong>).
+            The package restarts the machine daemon for you.
+          </p>
+        </div>
       ) : null}
 
       {nightly ? (
@@ -96,7 +119,7 @@ export function SoftwareUpdatesPanel({ updates }: SoftwareUpdatesPanelProps) {
         </div>
       ) : null}
 
-      {isReady ? (
+      {isReady && !isMachine ? (
         <div className="rounded-md bg-emerald-500/10 border border-emerald-500/30 p-2.5 text-xs text-emerald-800 dark:text-emerald-200">
           <strong>ShaPrint {update.version} is ready to install.</strong>
           <p className="mt-0.5 text-muted-foreground">

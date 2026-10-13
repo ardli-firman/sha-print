@@ -5,6 +5,8 @@ pub mod client_connections;
 #[cfg(feature = "desktop")]
 pub mod commands;
 #[cfg(feature = "desktop")]
+pub mod control;
+#[cfg(feature = "desktop")]
 pub mod discovery;
 pub mod dto;
 #[cfg(feature = "desktop")]
