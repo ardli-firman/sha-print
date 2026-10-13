@@ -60,6 +60,7 @@ struct TrackerState {
     active_jobs: usize,
     active_requests: usize,
     accepting_jobs: bool,
+    draining: bool,
     last_completed_at: Option<Instant>,
     last_busy_at: Instant,
 }
@@ -67,6 +68,7 @@ struct TrackerState {
 #[derive(Debug)]
 struct PrintJobTrackerInner {
     state: RwLock<TrackerState>,
+    drain_notify: tokio::sync::Notify,
 }
 
 impl PrintJobTrackerInner {
@@ -74,6 +76,9 @@ impl PrintJobTrackerInner {
         let Ok(mut state) = self.state.write() else {
             return false;
         };
+        if state.draining || !state.accepting_jobs {
+            return false;
+        }
         state.active_requests = state.active_requests.saturating_sub(1);
         state.active_jobs += 1;
         state.last_busy_at = Instant::now();
@@ -91,6 +96,9 @@ impl PrintJobTrackerInner {
                 }
             } else {
                 state.active_requests = state.active_requests.saturating_sub(1);
+            }
+            if state.active_jobs == 0 && state.active_requests == 0 {
+                self.drain_notify.notify_waiters();
             }
         }
     }
@@ -117,9 +125,11 @@ impl PrintJobTracker {
                     active_jobs: 0,
                     active_requests: 0,
                     accepting_jobs: true,
+                    draining: false,
                     last_completed_at: None,
                     last_busy_at: now,
                 }),
+                drain_notify: tokio::sync::Notify::new(),
             }),
         }
     }
@@ -131,6 +141,72 @@ impl PrintJobTracker {
             .read()
             .map(|state| state.active_jobs)
             .unwrap_or(0)
+    }
+
+    /// Number of active requests currently being decoded.
+    pub fn active_requests(&self) -> usize {
+        self.inner
+            .state
+            .read()
+            .map(|state| state.active_requests)
+            .unwrap_or(0)
+    }
+
+    /// Reports whether the tracker is currently draining active print jobs.
+    pub fn is_draining(&self) -> bool {
+        self.inner
+            .state
+            .read()
+            .map(|state| state.draining)
+            .unwrap_or(false)
+    }
+
+    /// Enters graceful drain mode: existing active jobs are allowed to complete, but new print work
+    /// (Print-Job and Create-Job) will be refused with a stable retryable result.
+    pub fn begin_drain(&self) {
+        if let Ok(mut state) = self.inner.state.write() {
+            state.draining = true;
+        }
+    }
+
+    /// Cancels graceful drain mode, resuming normal job admission.
+    pub fn cancel_drain(&self) {
+        if let Ok(mut state) = self.inner.state.write() {
+            state.draining = false;
+            state.accepting_jobs = true;
+        }
+    }
+
+    /// Bounded drain: enters drain mode and waits up to `timeout` for all active print jobs and
+    /// requests to complete. Returns an explicit timeout error and restores admission if the
+    /// window expires before active work finishes.
+    pub async fn drain(&self, timeout: Duration) -> Result<(), crate::domain::AppError> {
+        self.begin_drain();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let (jobs, requests) = match self.inner.state.read() {
+                Ok(state) => (state.active_jobs, state.active_requests),
+                Err(_) => {
+                    self.cancel_drain();
+                    return Err(crate::domain::AppError::internal(
+                        "tracker lock is poisoned",
+                    ));
+                }
+            };
+            if jobs == 0 && requests == 0 {
+                return Ok(());
+            }
+
+            tokio::select! {
+                _ = self.inner.drain_notify.notified() => {}
+                _ = tokio::time::sleep_until(deadline) => {
+                    self.cancel_drain();
+                    return Err(crate::domain::AppError::timeout(
+                        "active print jobs did not complete within the drain window",
+                    ));
+                }
+            }
+        }
     }
 
     /// Acquires an IPP request lease before reading its body; returns `None` while restarting.
@@ -326,5 +402,65 @@ mod tests {
 
         tokio::time::sleep(short_window + Duration::from_millis(5)).await;
         assert!(tracker.is_idle_for(short_window));
+    }
+
+    #[tokio::test]
+    async fn drain_refuses_new_jobs_while_allowing_in_flight_jobs_to_complete() {
+        let tracker = PrintJobTracker::new();
+        let job1 = print_job(&tracker);
+        assert_eq!(tracker.active_count(), 1);
+
+        tracker.begin_drain();
+        assert!(tracker.is_draining());
+
+        // A new request can be accepted to inspect its operation, but promoting it to a print job is refused
+        let mut job2 = tracker.try_acquire_request().expect("inspectable request");
+        assert!(!job2.mark_print_job());
+        drop(job2);
+
+        // In-flight job1 can still complete cleanly
+        drop(job1);
+        assert_eq!(tracker.active_count(), 0);
+
+        // Cancelling drain restores admission
+        tracker.cancel_drain();
+        assert!(!tracker.is_draining());
+        let _resumed = print_job(&tracker);
+        assert_eq!(tracker.active_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn drain_completes_when_active_jobs_clear() {
+        let tracker = PrintJobTracker::new();
+        let job = print_job(&tracker);
+
+        let tracker_clone = tracker.clone();
+        let drain_task =
+            tokio::spawn(async move { tracker_clone.drain(Duration::from_millis(150)).await });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(tracker.is_draining());
+
+        // Releasing active job completes drain
+        drop(job);
+        let result = drain_task.await.expect("task completes");
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn drain_times_out_and_restores_admission_when_timeout_exceeded() {
+        let tracker = PrintJobTracker::new();
+        let job = print_job(&tracker);
+
+        let result = tracker.drain(Duration::from_millis(30)).await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().code(),
+            crate::domain::ErrorCode::Timeout
+        );
+
+        // Admission is restored on timeout
+        assert!(!tracker.is_draining());
+        drop(job);
     }
 }

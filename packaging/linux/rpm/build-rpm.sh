@@ -27,6 +27,8 @@ OUTPUT_DIR="${RPM_OUTPUT_DIR:-${TAURI_DIR}/target/rpm}"
 RPMBUILD_TOPDIR="$(mktemp -d "${TMPDIR:-/tmp}/shaprint-rpmbuild.XXXXXX")"
 trap 'rm -rf "${RPMBUILD_TOPDIR}"' EXIT
 
+RELEASE="${RPM_RELEASE:-1}"
+
 mkdir -p "${RPMBUILD_TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS} "${OUTPUT_DIR}"
 
 cp "${SHAPRINTD_BIN}" "${RPMBUILD_TOPDIR}/SOURCES/shaprintd"
@@ -42,6 +44,7 @@ cp "${SCRIPT_DIR}/shaprint.spec" "${RPMBUILD_TOPDIR}/SPECS/shaprint.spec"
 rpmbuild -bb \
     --define "_topdir ${RPMBUILD_TOPDIR}" \
     --define "_shaprint_version ${VERSION}" \
+    --define "_shaprint_release ${RELEASE}" \
     "${RPMBUILD_TOPDIR}/SPECS/shaprint.spec" >&2
 
 BUILT_RPM="$(find "${RPMBUILD_TOPDIR}/RPMS" -type f -name "shaprint-${VERSION}-*.rpm" | head -n 1)"

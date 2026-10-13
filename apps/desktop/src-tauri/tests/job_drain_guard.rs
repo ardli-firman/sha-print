@@ -377,3 +377,188 @@ async fn client_proxy_tracks_in_flight_print_job_and_releases_counter() {
         .await
         .expect("stops server runtime");
 }
+
+#[tokio::test]
+async fn drain_allows_in_flight_client_proxy_print_job_to_finish_while_refusing_new_ones() {
+    let (submitter, started, cont, received) = BlockingSubmitter::new();
+    let server_tracker = Arc::new(PrintJobTracker::new());
+    let proxy_tracker = Arc::new(PrintJobTracker::new());
+
+    let channel = Arc::new(NetworkChannel::in_memory());
+    channel
+        .configure("proxy_secret")
+        .await
+        .expect("configures server channel");
+
+    let sharing = Arc::new(Sharing::new(FakeCatalog::new(&[TEST_QUEUE])));
+    sharing
+        .set_shared(vec![PrinterName::parse(TEST_QUEUE).expect("valid queue")])
+        .await
+        .expect("selects queue");
+
+    let identity =
+        Arc::new(shaprint_desktop::adapters::identity::ServerIdentity::generate().unwrap());
+    let endpoint = Arc::new(IppsServer::new(
+        0,
+        identity,
+        Arc::clone(&channel),
+        Arc::new(submitter),
+        Arc::new(PrintFailures::new()),
+        Arc::clone(&server_tracker),
+    ));
+
+    let server_runtime = Arc::new(RuntimeCoordinator::new(vec![Arc::new(
+        support::sharing_service(sharing, Arc::clone(&endpoint)),
+    )]));
+    server_runtime
+        .start(ServiceId::ServerSharing)
+        .await
+        .expect("starts server");
+    let server_addr = endpoint.bound_address().expect("server listening");
+
+    let client_connections = Arc::new(
+        ClientConnections::new(support::temporary_directory("drain-client-proxy-test"))
+            .expect("opens client trust store"),
+    );
+    let review = client_connections
+        .inspect(&format!("127.0.0.1:{}", server_addr.port()))
+        .await
+        .expect("inspects server identity");
+    client_connections
+        .approve(&review.address, &review.current_fingerprint)
+        .await
+        .expect("approves server identity");
+
+    let client_channel = Arc::new(NetworkChannel::in_memory());
+    client_channel
+        .configure("proxy_secret")
+        .await
+        .expect("configures client channel");
+
+    let proxy = Arc::new(ClientProxyService::with_port(
+        Arc::clone(&client_connections),
+        client_channel,
+        Arc::new(PrintFailures::new()),
+        Arc::clone(&proxy_tracker),
+        0,
+    ));
+
+    let client_runtime = Arc::new(RuntimeCoordinator::new(vec![proxy.clone()]));
+    client_runtime
+        .start_autostart()
+        .await
+        .expect("starts client proxy");
+    let proxy_addr = proxy.bound_address().expect("proxy listening");
+
+    let queue_uri = shaprint_desktop::adapters::client_queue_uri(
+        &proxy_addr.to_string(),
+        &format!("127.0.0.1:{}", server_addr.port()),
+        TEST_QUEUE,
+    )
+    .expect("constructs queue uri");
+
+    let ipp_payload = sample_print_job_request(&queue_uri, "proxy_secret");
+
+    // Client sends plain HTTP POST for the first job to the local client proxy
+    let proxy_port = proxy_addr.port();
+    let payload_1 = ipp_payload.clone();
+    let send_task = tokio::spawn(async move {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", proxy_port))
+            .await
+            .expect("connects to proxy");
+        let head = format!(
+            "POST /ipp/print HTTP/1.1\r\nHost: 127.0.0.1:{proxy_port}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            payload_1.len()
+        );
+        tokio::io::AsyncWriteExt::write_all(&mut stream, head.as_bytes())
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut stream, &payload_1)
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::flush(&mut stream).await.unwrap();
+
+        let mut res = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut res)
+            .await
+            .unwrap();
+        res
+    });
+
+    // Wait until the first job is in flight
+    started.notified().await;
+    assert!(received.load(Ordering::SeqCst));
+    assert_eq!(proxy_tracker.active_count(), 1);
+
+    // Enter update drain on the proxy tracker
+    proxy_tracker.begin_drain();
+    assert!(proxy_tracker.is_draining());
+
+    // A second job arrives during the drain window: must be refused with Status::NotAcceptingJobs (0x0508)
+    let payload_2 = ipp_payload.clone();
+    let second_response = {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", proxy_port))
+            .await
+            .expect("connects to proxy");
+        let head = format!(
+            "POST /ipp/print HTTP/1.1\r\nHost: 127.0.0.1:{proxy_port}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            payload_2.len()
+        );
+        tokio::io::AsyncWriteExt::write_all(&mut stream, head.as_bytes())
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut stream, &payload_2)
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::flush(&mut stream).await.unwrap();
+
+        let mut res = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut res)
+            .await
+            .unwrap();
+        res
+    };
+    // Extract IPP body from HTTP response (skip HTTP headers separated by \r\n\r\n)
+    let http_sep = b"\r\n\r\n";
+    let sep_pos = second_response
+        .windows(http_sep.len())
+        .position(|window| window == http_sep)
+        .expect("valid HTTP response");
+    let ipp_body = &second_response[sep_pos + http_sep.len()..];
+    assert!(
+        ipp_body.len() >= 4,
+        "IPP body must be at least 4 bytes for status"
+    );
+    let status_code = u16::from_be_bytes([ipp_body[2], ipp_body[3]]);
+    assert_eq!(
+        status_code,
+        shaprint_desktop::adapters::ipps::protocol::Status::NotAcceptingJobs.code(),
+        "new print job during drain must be refused with NotAcceptingJobs (0x0508)"
+    );
+
+    // Launch drain waiter task
+    let proxy_tracker_drain = Arc::clone(&proxy_tracker);
+    let drain_waiter =
+        tokio::spawn(async move { proxy_tracker_drain.drain(Duration::from_secs(10)).await });
+
+    // Unblock the first job so it finishes cleanly
+    cont.notify_waiters();
+    let response = send_task.await.expect("first job completes");
+    assert!(!response.is_empty());
+
+    // Drain completes when active jobs reach 0
+    drain_waiter
+        .await
+        .expect("drain waiter finished")
+        .expect("drain succeeded");
+    assert_eq!(proxy_tracker.active_count(), 0);
+
+    client_runtime
+        .shutdown()
+        .await
+        .expect("stops client runtime");
+    server_runtime
+        .shutdown()
+        .await
+        .expect("stops server runtime");
+}

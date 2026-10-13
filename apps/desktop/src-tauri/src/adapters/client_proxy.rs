@@ -4,7 +4,7 @@
 //! trusted server, adds the configured Network Channel for Print-Job, and forwards the request over
 //! IPPS so the Windows inbox driver does not handle the authentication challenge (issue #34).
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use tokio::{
@@ -12,7 +12,7 @@ use tokio::{
     net::TcpStream,
     sync::Mutex,
     task::JoinSet,
-    time::timeout,
+    time::{timeout, Instant},
 };
 
 use crate::{
@@ -20,7 +20,7 @@ use crate::{
         client_connections::ClientConnections, ipps::protocol, ipps::NetworkChannel,
         port_binding::PortBinder,
     },
-    application::{PrintFailures, PrintJobTracker, RuntimeService, ServiceContext},
+    application::{PrintFailures, PrintJobTracker, RequestLease, RuntimeService, ServiceContext},
     domain::{AppError, ErrorCode, PrintFailure, PrinterName, ServiceId},
 };
 
@@ -29,6 +29,12 @@ pub const CLIENT_PROXY_DEFAULT_PORT: u16 = 48632;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_HEAD_BYTES: usize = 8 * 1024;
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+
+struct PendingJob {
+    _lease: RequestLease,
+    created_at: Instant,
+}
+
 /// Supervises the local client proxy.
 pub struct ClientProxyService {
     connections: Arc<ClientConnections>,
@@ -38,6 +44,7 @@ pub struct ClientProxyService {
     port: u16,
     binder: PortBinder,
     bound: Mutex<Option<SocketAddr>>,
+    pending_jobs: Arc<Mutex<HashMap<(String, i32), PendingJob>>>,
 }
 
 impl std::fmt::Debug for ClientProxyService {
@@ -100,6 +107,7 @@ impl ClientProxyService {
             port,
             binder,
             bound: Mutex::new(None),
+            pending_jobs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -158,6 +166,7 @@ impl RuntimeService for ClientProxyService {
                     let channel = Arc::clone(&self.channel);
                     let failures = Arc::clone(&self.failures);
                     let tracker = Arc::clone(&self.tracker);
+                    let pending_jobs = Arc::clone(&self.pending_jobs);
                     let authority = local.to_string();
                     connections.spawn(async move {
                         if let Err(error) = serve_client(
@@ -167,6 +176,7 @@ impl RuntimeService for ClientProxyService {
                             &channel,
                             &failures,
                             &tracker,
+                            &pending_jobs,
                         )
                         .await
                         {
@@ -193,6 +203,7 @@ async fn serve_client(
     channel: &NetworkChannel,
     failures: &PrintFailures,
     tracker: &PrintJobTracker,
+    pending_jobs: &Arc<Mutex<HashMap<(String, i32), PendingJob>>>,
 ) -> Result<(), AppError> {
     let (read, mut write) = tokio::io::split(stream);
     let mut reader = BufReader::new(read);
@@ -306,13 +317,22 @@ async fn serve_client(
         write_ipp_error(&mut write, protocol::Status::NotFound).await?;
         return Ok(());
     };
-    let _job_lease = if matches!(
+
+    // Clean up expired multi-step job leases older than 2 minutes
+    if let Ok(mut pending) = pending_jobs.try_lock() {
+        pending.retain(|_, job| job.created_at.elapsed() < Duration::from_secs(120));
+    }
+
+    let is_new_job_submission = matches!(
         operation,
-        protocol::OPERATION_PRINT_JOB
-            | protocol::OPERATION_CREATE_JOB
-            | protocol::OPERATION_SEND_DOCUMENT
-            | protocol::OPERATION_CANCEL_JOB
-    ) {
+        protocol::OPERATION_PRINT_JOB | protocol::OPERATION_CREATE_JOB
+    );
+    let is_active_job_flow = matches!(
+        operation,
+        protocol::OPERATION_SEND_DOCUMENT | protocol::OPERATION_CANCEL_JOB
+    );
+
+    let mut _job_lease = if is_new_job_submission {
         if !request_lease.mark_print_job() {
             if is_print_submission(operation) {
                 failures.report(PrintFailure::client(
@@ -325,6 +345,8 @@ async fn serve_client(
             write_http(&mut write, "200 OK", &response).await?;
             return Ok(());
         }
+        Some(request_lease)
+    } else if is_active_job_flow {
         Some(request_lease)
     } else {
         drop(request_lease);
@@ -397,11 +419,48 @@ async fn serve_client(
             } else {
                 response
             };
+            if operation == protocol::OPERATION_CREATE_JOB && status.is_some_and(|s| s <= 0x00ff) {
+                if let Ok(parsed_resp) = protocol::Request::parse(&response) {
+                    if let Some(job_id) = parsed_resp.integer("job-id").filter(|id| *id > 0) {
+                        if let Some(lease) = _job_lease.take() {
+                            let mut pending = pending_jobs.lock().await;
+                            pending.insert(
+                                (server_address.clone(), job_id),
+                                PendingJob {
+                                    _lease: lease,
+                                    created_at: Instant::now(),
+                                },
+                            );
+                        }
+                    }
+                }
+            } else if operation == protocol::OPERATION_SEND_DOCUMENT {
+                if let Some(job_id) = request.integer("job-id").filter(|id| *id > 0) {
+                    let is_last = request.boolean("last-document").unwrap_or(true);
+                    if is_last || status.is_none_or(|s| s > 0x00ff) {
+                        let mut pending = pending_jobs.lock().await;
+                        pending.remove(&(server_address.clone(), job_id));
+                    }
+                }
+            } else if operation == protocol::OPERATION_CANCEL_JOB {
+                if let Some(job_id) = request.integer("job-id").filter(|id| *id > 0) {
+                    let mut pending = pending_jobs.lock().await;
+                    pending.remove(&(server_address.clone(), job_id));
+                }
+            }
             write_http(&mut write, "200 OK", &response).await
         }
         Err(error) => {
             if is_print_submission(operation) {
                 failures.report(PrintFailure::client(error.code(), Some(&printer_name)));
+            }
+            if operation == protocol::OPERATION_SEND_DOCUMENT
+                || operation == protocol::OPERATION_CANCEL_JOB
+            {
+                if let Some(job_id) = request.integer("job-id").filter(|id| *id > 0) {
+                    let mut pending = pending_jobs.lock().await;
+                    pending.remove(&(server_address.clone(), job_id));
+                }
             }
             let response =
                 protocol::response(request_id, version, ipp_status_for(error.code()), &[]);
