@@ -269,7 +269,7 @@ impl ControlPlane {
                 #[cfg(not(unix))]
                 {
                     Ok(DiagnosticsReportDto {
-                        checks: vec![DiagnosticCheckDto {
+                        checks: vec![crate::ipc::dto::DiagnosticCheckDto {
                             check: "daemon".to_owned(),
                             status: "ok".to_owned(),
                             code: None,

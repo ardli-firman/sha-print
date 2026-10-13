@@ -41,7 +41,7 @@ pub async fn diagnose_daemon_environment(
     checks.push(check_ports(&port_inspector, ports));
 
     // 3. CUPS check
-    checks.push(check_cups(cups_endpoint));
+    checks.push(check_cups(cups_endpoint).await);
 
     // 4. Trust check
     checks.push(check_trust(shell).await);
@@ -108,7 +108,7 @@ pub async fn diagnose_host(
     checks.push(check_ports(&port_inspector, &ports));
 
     // 3. CUPS check
-    checks.push(check_cups(cups_endpoint));
+    checks.push(check_cups(cups_endpoint).await);
 
     // 4. Trust check
     checks.push(DiagnosticCheckDto {
@@ -207,7 +207,7 @@ fn check_ports(inspector: &impl PortOwnerInspector, ports: &RuntimePorts) -> Dia
     }
 }
 
-fn check_cups(override_endpoint: Option<&CupsServerEndpoint>) -> DiagnosticCheckDto {
+async fn check_cups(override_endpoint: Option<&CupsServerEndpoint>) -> DiagnosticCheckDto {
     let endpoint = CupsServerEndpoint::resolve(override_endpoint);
     let target = endpoint.lpadmin_host_arg();
 
@@ -221,8 +221,14 @@ fn check_cups(override_endpoint: Option<&CupsServerEndpoint>) -> DiagnosticCheck
         };
     }
 
-    match std::process::Command::new("lpstat").arg("-r").output() {
-        Ok(out) if out.status.success() => DiagnosticCheckDto {
+    let lpstat_result = tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        tokio::task::spawn_blocking(|| std::process::Command::new("lpstat").arg("-r").output()),
+    )
+    .await;
+
+    match lpstat_result {
+        Ok(Ok(Ok(out))) if out.status.success() => DiagnosticCheckDto {
             check: "cups".to_owned(),
             status: "ok".to_owned(),
             code: None,
