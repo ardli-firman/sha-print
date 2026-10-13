@@ -51,7 +51,9 @@ impl PortOwner {
             .next()
             .unwrap_or(self.process_name.as_str())
             .trim_end_matches(".exe");
-        name.eq_ignore_ascii_case("shaprint") || name.eq_ignore_ascii_case("shaprint-desktop")
+        name.eq_ignore_ascii_case("shaprint")
+            || name.eq_ignore_ascii_case("shaprint-desktop")
+            || name.eq_ignore_ascii_case("shaprintd")
     }
 
     fn is_unknown(&self) -> bool {
@@ -526,7 +528,12 @@ mod tests {
 
     #[test]
     fn only_known_shaprint_image_names_are_reclaimable() {
-        for name in ["shaprint", "ShaPrint.exe", "shaprint-desktop.exe"] {
+        for name in [
+            "shaprint",
+            "ShaPrint.exe",
+            "shaprint-desktop.exe",
+            "shaprintd",
+        ] {
             assert!(PortOwner::new(17, name).is_shaprint(), "{name}");
         }
         for name in ["not-shaprint", "shaprint-helper", "other.exe"] {
