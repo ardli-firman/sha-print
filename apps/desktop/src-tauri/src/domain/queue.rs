@@ -247,10 +247,15 @@ impl SpoolerRecord {
                         return SpoolerRecordClassification::AmbiguousClientQueue;
                     };
 
-                    if expected_queue_name.as_str() == name_trimmed {
+                    let base_name =
+                        strip_trailing_copy_suffix(name_trimmed).unwrap_or(name_trimmed);
+                    if expected_queue_name.as_str() == base_name {
+                        let Ok(actual_queue_name) = ClientQueueName::parse(name_trimmed) else {
+                            return SpoolerRecordClassification::AmbiguousClientQueue;
+                        };
                         return SpoolerRecordClassification::RecognisedClientQueue(
                             RecognisedClientQueue {
-                                queue_name: expected_queue_name,
+                                queue_name: actual_queue_name,
                                 server_address: server_decoded,
                                 printer_name,
                             },
@@ -363,7 +368,9 @@ fn hex_val(b: u8) -> Option<u8> {
 
 fn parse_client_queue_name(name: &str) -> Option<(PrinterName, String, ClientQueueName)> {
     let name_trimmed = name.trim();
-    let without_suffix = name_trimmed.strip_suffix(')')?;
+    let actual_queue_name = ClientQueueName::parse(name_trimmed).ok()?;
+    let base_name = strip_trailing_copy_suffix(name_trimmed).unwrap_or(name_trimmed);
+    let without_suffix = base_name.strip_suffix(')')?;
     let (printer_raw, label) = without_suffix.rsplit_once(" (ShaPrint ")?;
     let printer_name = PrinterName::parse(printer_raw).ok()?;
 
@@ -383,11 +390,21 @@ fn parse_client_queue_name(name: &str) -> Option<(PrinterName, String, ClientQue
 
     let expected_queue_name =
         ClientQueueName::for_shared_printer(&printer_name, &candidate_address).ok()?;
-    if expected_queue_name.as_str() != name_trimmed {
+    if expected_queue_name.as_str() != base_name {
         return None;
     }
 
-    Some((printer_name, candidate_address, expected_queue_name))
+    Some((printer_name, candidate_address, actual_queue_name))
+}
+
+fn strip_trailing_copy_suffix(name: &str) -> Option<&str> {
+    let without_close = name.strip_suffix(')')?;
+    let (before_copy, copy_number) = without_close.rsplit_once(" (Copy ")?;
+    if !copy_number.is_empty() && copy_number.chars().all(|c| c.is_ascii_digit()) {
+        Some(before_copy)
+    } else {
+        None
+    }
 }
 
 /// Accepts only the canonical `host:port` shapes the client trust store produces.
@@ -775,6 +792,44 @@ mod tests {
                 );
                 assert_eq!(q.server_address(), "10.102.10.21:48631");
                 assert_eq!(q.printer_name().as_str(), "EPSON L3210 Series (Copy 1)");
+            }
+            other => panic!("expected RecognisedClientQueue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spooler_record_classifies_shaprint_queue_with_trailing_windows_copy_suffix() {
+        let authority = "127.0.0.1:48632";
+        let wsd_record = SpoolerRecord::new(
+            "EPSON L3210 Series (ShaPrint 10.102.10.21-48631) (Copy 1)",
+            "WSD-3b5a3ba4-1211-4937-8b8b-ad7bf63e5a22",
+        );
+
+        match wsd_record.classify(authority) {
+            SpoolerRecordClassification::RecognisedClientQueue(q) => {
+                assert_eq!(
+                    q.queue_name().as_str(),
+                    "EPSON L3210 Series (ShaPrint 10.102.10.21-48631) (Copy 1)"
+                );
+                assert_eq!(q.server_address(), "10.102.10.21:48631");
+                assert_eq!(q.printer_name().as_str(), "EPSON L3210 Series");
+            }
+            other => panic!("expected RecognisedClientQueue, got {other:?}"),
+        }
+
+        let loopback_record = SpoolerRecord::new(
+            "EPSON L3210 Series (ShaPrint 10.102.10.21-48631) (Copy 1)",
+            "ipp://127.0.0.1:48632/ipp/print/10.102.10.21%3A48631/EPSON%20L3210%20Series",
+        );
+
+        match loopback_record.classify(authority) {
+            SpoolerRecordClassification::RecognisedClientQueue(q) => {
+                assert_eq!(
+                    q.queue_name().as_str(),
+                    "EPSON L3210 Series (ShaPrint 10.102.10.21-48631) (Copy 1)"
+                );
+                assert_eq!(q.server_address(), "10.102.10.21:48631");
+                assert_eq!(q.printer_name().as_str(), "EPSON L3210 Series");
             }
             other => panic!("expected RecognisedClientQueue, got {other:?}"),
         }
