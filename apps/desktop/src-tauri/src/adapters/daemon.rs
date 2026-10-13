@@ -22,9 +22,9 @@ use crate::adapters::client_connections::{ConnectionPrinters, ConnectionReview, 
 use crate::adapters::ipps::CLIENT_CREDENTIAL_FILE;
 use crate::application::RuntimeCoordinator;
 use crate::domain::{AppError, ErrorCode, PrinterName, ServiceId};
-use crate::ipc::client_connections::RecognisedClientQueueDto;
 use crate::ipc::dto::{
-    AppErrorDto, ClientQueueDto, LocalPrinterDto, LocalPrintersDto, RuntimeStatusDto,
+    AppErrorDto, ClientQueueDto, LocalPrinterDto, LocalPrintersDto, RecognisedClientQueueDto,
+    RuntimeStatusDto,
 };
 use crate::{RuntimePorts, Shell};
 

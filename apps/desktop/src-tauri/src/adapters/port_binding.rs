@@ -5,6 +5,9 @@
 
 use std::{collections::HashSet, io, net::SocketAddr, process, sync::Arc, time::Duration};
 
+#[cfg(target_os = "linux")]
+use std::path::Path;
+
 use tokio::net::{TcpListener, UdpSocket};
 
 use crate::domain::AppError;
@@ -34,6 +37,15 @@ impl PortTransport {
 pub struct PortOwner {
     pub process_id: u32,
     pub process_name: String,
+    #[cfg(target_os = "linux")]
+    linux_identity: Option<LinuxProcessIdentity>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LinuxProcessIdentity {
+    executable: String,
+    start_time: u64,
 }
 
 impl PortOwner {
@@ -41,7 +53,15 @@ impl PortOwner {
         Self {
             process_id,
             process_name: process_name.into(),
+            #[cfg(target_os = "linux")]
+            linux_identity: None,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn with_linux_identity(mut self, identity: Option<LinuxProcessIdentity>) -> Self {
+        self.linux_identity = identity;
+        self
     }
 
     fn is_shaprint(&self) -> bool {
@@ -346,19 +366,207 @@ impl PortOwnerInspector for SystemPortOwnerInspector {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+impl PortOwnerInspector for SystemPortOwnerInspector {
+    fn owners(&self, transport: PortTransport, port: u16) -> io::Result<Vec<PortOwner>> {
+        let socket_inodes = linux_socket_inodes(transport, port)?;
+        if socket_inodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut owners = Vec::new();
+        let mut seen_pids = HashSet::new();
+        for entry in std::fs::read_dir("/proc")? {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse().ok())
+            else {
+                continue;
+            };
+            if !seen_pids.insert(pid) {
+                continue;
+            }
+
+            let fd_dir = entry.path().join("fd");
+            let fds = match std::fs::read_dir(fd_dir) {
+                Ok(fds) => fds,
+                Err(_) => continue,
+            };
+            let owns_socket = fds.flatten().any(|fd| {
+                let target = match std::fs::read_link(fd.path()) {
+                    Ok(target) => target,
+                    Err(_) => return false,
+                };
+                let target = target.to_string_lossy();
+                let Some(inode) = target
+                    .strip_prefix("socket:[")
+                    .and_then(|value| value.strip_suffix(']'))
+                    .and_then(|value| value.parse::<u64>().ok())
+                else {
+                    return false;
+                };
+                socket_inodes.contains(&inode)
+            });
+            if owns_socket {
+                owners.push(
+                    PortOwner::new(pid, linux_process_name(pid))
+                        .with_linux_identity(linux_process_identity(pid)),
+                );
+            }
+        }
+
+        owners.sort_by_key(|owner| owner.process_id);
+        Ok(owners)
+    }
+
+    fn terminate(&self, owner: &PortOwner) -> io::Result<()> {
+        if owner.process_id == process::id() || !owner.is_shaprint() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "refusing to terminate the current or an unrelated process",
+            ));
+        }
+        let Some(expected_identity) = owner.linux_identity.as_ref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "stale port owner identity is unavailable; refusing to terminate it",
+            ));
+        };
+        // Re-read the executable and start time immediately before signalling. This avoids sending
+        // SIGTERM to a reused PID, even when the replacement process has the same name.
+        let Some(current_identity) = linux_process_identity(owner.process_id) else {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "stale port owner identity disappeared; refusing to terminate it",
+            ));
+        };
+        if &current_identity != expected_identity
+            || !linux_executable_is_shaprint(&current_identity.executable)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "stale port owner identity changed; refusing to terminate it",
+            ));
+        }
+        let current_name = linux_process_name(owner.process_id);
+        if current_name == UNKNOWN_PROCESS_NAME
+            || !current_name.eq_ignore_ascii_case(&owner.process_name)
+            || !PortOwner::new(owner.process_id, current_name.as_str()).is_shaprint()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "stale port owner identity changed; refusing to terminate it",
+            ));
+        }
+        let status = process::Command::new("/bin/kill")
+            .arg("-TERM")
+            .arg(owner.process_id.to_string())
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "kill -TERM failed with status {status}"
+            )))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_socket_inodes(transport: PortTransport, port: u16) -> io::Result<HashSet<u64>> {
+    let paths: &[&str] = match transport {
+        PortTransport::Tcp => &["/proc/net/tcp", "/proc/net/tcp6"],
+        PortTransport::Udp => &["/proc/net/udp", "/proc/net/udp6"],
+    };
+    let mut inodes = HashSet::new();
+    for path in paths {
+        let contents = match std::fs::read_to_string(path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        for fields in contents
+            .lines()
+            .skip(1)
+            .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        {
+            let Some(local_address) = fields.get(1) else {
+                continue;
+            };
+            let Some((_, port_hex)) = local_address.rsplit_once(':') else {
+                continue;
+            };
+            if u16::from_str_radix(port_hex, 16).ok() != Some(port) {
+                continue;
+            }
+            // TCP state 0A is LISTEN. UDP has no listening state and may be represented by 07.
+            if transport == PortTransport::Tcp && fields.get(3) != Some(&"0A") {
+                continue;
+            }
+            if let Some(inode) = fields.get(9).and_then(|value| value.parse::<u64>().ok()) {
+                inodes.insert(inode);
+            }
+        }
+    }
+    Ok(inodes)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_name(pid: u32) -> String {
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .map(|name| name.trim().to_owned())
+        .ok()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| UNKNOWN_PROCESS_NAME.to_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_identity(pid: u32) -> Option<LinuxProcessIdentity> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let command_end = stat.rfind(')')?;
+    let start_time = stat
+        .get(command_end + 1..)?
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()?;
+    let executable = std::fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()?
+        .to_string_lossy()
+        .into_owned();
+    Some(LinuxProcessIdentity {
+        executable,
+        start_time,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_executable_is_shaprint(executable: &str) -> bool {
+    Path::new(executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| PortOwner::new(0, name).is_shaprint())
+        .unwrap_or(false)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 impl PortOwnerInspector for SystemPortOwnerInspector {
     fn owners(&self, _transport: PortTransport, _port: u16) -> io::Result<Vec<PortOwner>> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "automatic process inspection is currently supported on Windows only",
+            "automatic process inspection is currently supported on Windows and Linux only",
         ))
     }
 
     fn terminate(&self, _owner: &PortOwner) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "automatic process termination is currently supported on Windows only",
+            "automatic process termination is currently supported on Windows and Linux only",
         ))
     }
 }
@@ -524,6 +732,21 @@ mod tests {
         assert!(error.message().contains("other-app"));
         assert!(error.message().contains("4512"));
         assert_eq!(inspector.terminations.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_port_inspection_reports_an_unrelated_current_process_without_signalling_it() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test port");
+        let address = held.local_addr().expect("read test port");
+        let error = PortBinder::system()
+            .bind_tcp(address)
+            .await
+            .expect_err("the current test process owns the port");
+
+        assert!(error.message().contains("did not terminate it"));
+        assert!(error.message().contains(&process::id().to_string()));
+        drop(held);
     }
 
     #[test]
