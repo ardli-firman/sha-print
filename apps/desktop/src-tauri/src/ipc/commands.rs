@@ -19,8 +19,8 @@ use crate::application::{LegacyImport, PrintFailures, PrintJobTracker, Startup};
 use crate::domain::{AppError, PrinterName, ServiceId};
 use crate::ipc::control::{ControlMode, ControlPlane, SharedControl};
 use crate::ipc::dto::{
-    AppErrorDto, ClientQueueDto, LegacyImportReportDto, LocalPrintersDto, PrintFailureDto,
-    RuntimeStatusDto, ServerIdentityDto, StartupStatusDto,
+    AppErrorDto, ClientQueueDto, DiagnosticsReportDto, LegacyImportReportDto, LocalPrintersDto,
+    PrintFailureDto, RuntimeStatusDto, ServerIdentityDto, StartupStatusDto,
 };
 
 /// The latest failed print attempt, as the window reports it.
@@ -68,6 +68,22 @@ pub async fn get_runtime_status(
     control.status().await.map_err(|error| {
         log::warn!(
             "command=get_runtime_status code={} message={}",
+            error.code_str(),
+            error
+        );
+        AppErrorDto::from(&error)
+    })
+}
+
+/// Returns the diagnostic report across daemon, ports, CUPS, trust, credential, and firewall.
+#[tauri::command]
+pub async fn get_diagnostics(
+    control: State<'_, SharedControl>,
+) -> Result<DiagnosticsReportDto, AppErrorDto> {
+    log::info!("command=get_diagnostics");
+    control.diagnostics().await.map_err(|error| {
+        log::warn!(
+            "command=get_diagnostics code={} message={}",
             error.code_str(),
             error
         );

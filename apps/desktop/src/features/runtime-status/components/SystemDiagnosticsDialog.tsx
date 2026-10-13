@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Power, RefreshCw, Server } from "lucide-react";
 
 import { printRecovery } from "@/api/availability";
-import { shutdownDaemon } from "@/api/ipc";
+import { getDiagnostics, shutdownDaemon } from "@/api/ipc";
 import {
   toAppError,
   type AppError,
   type ControlMode,
+  type DiagnosticCheck,
+  type DiagnosticsReport,
   type ServiceId,
   type ServiceState,
   type ServiceStatus,
@@ -61,6 +63,33 @@ const CONTROLS: Record<ServiceState, { canStart: boolean; canStop: boolean }> = 
   failed: { canStart: true, canStop: false },
 };
 
+const CHECK_LABELS: Record<string, { title: string; description: string }> = {
+  daemon: {
+    title: "Daemon service",
+    description: "Evaluates whether shaprintd is running and responsive.",
+  },
+  ports: {
+    title: "Network ports",
+    description: "Evaluates whether IPPS Server, Client proxy, and Discovery ports are available or owned by ShaPrint.",
+  },
+  cups: {
+    title: "CUPS printing system",
+    description: "Evaluates whether the local CUPS print spooler is responsive.",
+  },
+  trust: {
+    title: "Machine trust store",
+    description: "Evaluates certificate trust storage and configuration.",
+  },
+  credential: {
+    title: "Network Channel credential",
+    description: "Evaluates whether the shared secret Network Channel is configured for authorized printing.",
+  },
+  firewall: {
+    title: "System firewall",
+    description: "Evaluates whether inbound ports 48631/tcp and 48633/udp are permitted in the system firewall.",
+  },
+};
+
 export interface SystemDiagnosticsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -81,7 +110,23 @@ export function SystemDiagnosticsDialog({
   const { status, error, busy, unreachable, refresh, start, stop, dismissError } = runtime;
   const [daemonBusy, setDaemonBusy] = useState(false);
   const [daemonError, setDaemonError] = useState<AppError | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsReport | null>(null);
   const isMachine = controlMode === "machine";
+
+  const loadDiagnostics = useCallback(async () => {
+    try {
+      const report = await getDiagnostics();
+      setDiagnostics(report);
+    } catch {
+      // Diagnostic check failure does not block the dialog
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open) {
+      void loadDiagnostics();
+    }
+  }, [open, loadDiagnostics]);
 
   const stopDaemon = async () => {
     setDaemonBusy(true);
@@ -225,6 +270,89 @@ export function SystemDiagnosticsDialog({
           </div>
         ) : null}
 
+        {status?.readiness || status?.failure_code || (status?.shared_printers && status.shared_printers.length > 0) || (status?.client_queues && status.client_queues.length > 0) ? (
+          <section
+            className="diagnostic-readiness p-3 rounded-lg border bg-muted/30 space-y-2 text-xs"
+            aria-labelledby="diagnostic-readiness-title"
+          >
+            <h4 id="diagnostic-readiness-title" className="font-semibold text-xs text-muted-foreground uppercase tracking-wider">
+              System Readiness & Destinations
+            </h4>
+            {status.readiness ? (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Configured readiness:</span>
+                <span className="font-mono font-medium" data-testid="readiness-status">{status.readiness}</span>
+              </div>
+            ) : null}
+            {status.failure_code ? (
+              <div className="flex items-center justify-between text-destructive">
+                <span className="font-medium">Failure code:</span>
+                <span className="font-mono font-bold" data-testid="failure-code">{status.failure_code}</span>
+              </div>
+            ) : null}
+            {status.shared_printers && status.shared_printers.length > 0 ? (
+              <div>
+                <span className="text-muted-foreground">Shared printers: </span>
+                <span className="font-medium">{status.shared_printers.join(", ")}</span>
+              </div>
+            ) : null}
+            {status.client_queues && status.client_queues.length > 0 ? (
+              <div>
+                <span className="text-muted-foreground">Client queues: </span>
+                <span className="font-medium">{status.client_queues.join(", ")}</span>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        {diagnostics?.checks && diagnostics.checks.length > 0 ? (
+          <div className="space-y-3">
+            <h4 className="font-semibold text-xs text-muted-foreground uppercase tracking-wider">
+              Subsystem Diagnostics
+            </h4>
+            {diagnostics.checks.map((check: DiagnosticCheck) => {
+              const meta = CHECK_LABELS[check.check];
+              const isOk = check.status === "ok";
+              return (
+                <section
+                  key={check.check}
+                  className="diagnostic-check service"
+                  data-check={check.check}
+                  data-status={check.status}
+                  aria-labelledby={`diagnostic-check-${check.check}`}
+                >
+                  <header className="service-header">
+                    <div>
+                      <h4 id={`diagnostic-check-${check.check}`} className="font-semibold text-sm">
+                        {meta?.title ?? check.check}
+                      </h4>
+                      <p className="service-description">{meta?.description}</p>
+                    </div>
+                    <Badge variant={isOk ? "success" : "destructive"} role="status">
+                      {isOk ? "OK" : "Failed"}
+                    </Badge>
+                  </header>
+
+                  <p className="service-detail">{check.detail}</p>
+
+                  {check.code ? (
+                    <div className="text-xs font-mono font-bold text-destructive">
+                      {check.code}
+                    </div>
+                  ) : null}
+
+                  {check.recovery ? (
+                    <p className="service-recovery" role="status" data-recovery={check.recovery}>
+                      <span className="service-recovery-label">Recovery</span>
+                      {check.recovery}
+                    </p>
+                  ) : null}
+                </section>
+              );
+            })}
+          </div>
+        ) : null}
+
         {isMachine ? (
           <section
             className="diagnostic-service service"
@@ -274,7 +402,10 @@ export function SystemDiagnosticsDialog({
           variant="outline"
           size="sm"
           className="gap-1.5 text-xs"
-          onClick={() => void refresh()}
+          onClick={() => {
+            void refresh();
+            void loadDiagnostics();
+          }}
           disabled={busy !== null}
         >
           <RefreshCw size={13} className={busy ? "animate-spin" : ""} />

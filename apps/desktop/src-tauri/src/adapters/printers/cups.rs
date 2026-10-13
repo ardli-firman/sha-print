@@ -250,6 +250,12 @@ struct CupsHttpConnection {
 
 impl CupsHttpConnection {
     fn connect(endpoint: &CupsServerEndpoint) -> Result<Self, AppError> {
+        if endpoint.host.starts_with('/') && !Path::new(&endpoint.host).exists() {
+            return Err(AppError::queue_unavailable(format!(
+                "cannot connect to the local CUPS service at '{}'",
+                endpoint.lpadmin_host_arg()
+            )));
+        }
         let lib = libcups()?;
         let host_c = CString::new(endpoint.host.as_str())
             .map_err(|_| AppError::invalid_input("invalid CUPS server host"))?;

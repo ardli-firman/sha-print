@@ -45,6 +45,16 @@ pub struct RuntimeStatusDto {
     pub services: Vec<ServiceStatusDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_channel_configured: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_printers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_queues: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recent_failure: Option<PrintFailureDto>,
 }
 
 impl From<&RuntimeStatus> for RuntimeStatusDto {
@@ -56,8 +66,39 @@ impl From<&RuntimeStatus> for RuntimeStatusDto {
                 .map(ServiceStatusDto::from)
                 .collect(),
             network_channel_configured: None,
+            readiness: None,
+            shared_printers: None,
+            client_queues: None,
+            failure_code: None,
+            recent_failure: None,
         }
     }
+}
+
+/// One diagnostic check result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticCheckDto {
+    /// Distinct subsystem checked: `daemon`, `ports`, `cups`, `trust`, `credential`, `firewall`.
+    pub check: String,
+    /// Stable check status: `ok`, `failed`, or `warning`.
+    pub status: String,
+    /// Stable error code when failed, for example `server-unavailable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Safe human-readable summary of the condition. Never contains credentials or print content.
+    pub detail: String,
+    /// Concrete recovery action for resolving the failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<String>,
+}
+
+/// Comprehensive diagnostic view of the ShaPrint environment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticsReportDto {
+    pub checks: Vec<DiagnosticCheckDto>,
+    pub healthy: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recent_failure: Option<PrintFailureDto>,
 }
 
 /// The latest print failure the shell reported.
@@ -464,6 +505,52 @@ mod tests {
                 "server_address": "10.0.0.5:8631",
                 "printer_name": "Office Printer",
                 "uri": "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Printer"
+            })
+        );
+    }
+
+    #[test]
+    fn diagnostics_report_payload_shape_is_stable() {
+        let report = DiagnosticsReportDto {
+            checks: vec![
+                DiagnosticCheckDto {
+                    check: "daemon".to_owned(),
+                    status: "ok".to_owned(),
+                    code: None,
+                    detail: "shaprintd is running".to_owned(),
+                    recovery: None,
+                },
+                DiagnosticCheckDto {
+                    check: "firewall".to_owned(),
+                    status: "failed".to_owned(),
+                    code: Some("not-authorized".to_owned()),
+                    detail: "inbound ports blocked".to_owned(),
+                    recovery: Some("open ports".to_owned()),
+                },
+            ],
+            healthy: false,
+            recent_failure: None,
+        };
+
+        let payload = serde_json::to_value(report).expect("serializes");
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "checks": [
+                    {
+                        "check": "daemon",
+                        "status": "ok",
+                        "detail": "shaprintd is running"
+                    },
+                    {
+                        "check": "firewall",
+                        "status": "failed",
+                        "code": "not-authorized",
+                        "detail": "inbound ports blocked",
+                        "recovery": "open ports"
+                    }
+                ],
+                "healthy": false
             })
         );
     }

@@ -20,6 +20,33 @@ export interface ServiceStatus {
 /** Status of every supervised service. */
 export interface RuntimeStatus {
   services: ServiceStatus[];
+  network_channel_configured?: boolean | null;
+  readiness?: string | null;
+  shared_printers?: string[] | null;
+  client_queues?: string[] | null;
+  failure_code?: ErrorCode | string | null;
+  recent_failure?: PrintFailure | null;
+}
+
+/** One diagnostic check result. */
+export interface DiagnosticCheck {
+  /** Distinct subsystem checked: `daemon`, `ports`, `cups`, `trust`, `credential`, `firewall`. */
+  check: string;
+  /** Stable check status: `ok`, `failed`, or `warning`. */
+  status: "ok" | "failed" | "warning" | string;
+  /** Stable error code when failed, for example `server-unavailable`. */
+  code?: ErrorCode | string | null;
+  /** Safe human-readable summary of the condition. Never contains credentials or print content. */
+  detail: string;
+  /** Concrete recovery action for resolving the failure. */
+  recovery?: string | null;
+}
+
+/** Comprehensive diagnostic view of the ShaPrint environment. */
+export interface DiagnosticsReport {
+  checks: DiagnosticCheck[];
+  healthy: boolean;
+  recent_failure?: PrintFailure | null;
 }
 
 /**

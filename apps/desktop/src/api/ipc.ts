@@ -10,6 +10,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   ControlMode,
+  DiagnosticsReport,
   LocalPrinters,
   RuntimeStatus,
   ServerIdentity,
@@ -48,6 +49,13 @@ export function getServerIdentity(): Promise<ServerIdentity> {
 /** Which control plane this window administers: its in-process runtime or the machine daemon. */
 export function getControlMode(): Promise<ControlMode> {
   return invoke<ControlMode>("get_control_mode");
+}
+
+/**
+ * Evaluates system diagnostics across daemon, ports, CUPS, trust, credential, and firewall readiness.
+ */
+export function getDiagnostics(): Promise<DiagnosticsReport> {
+  return invoke<DiagnosticsReport>("get_diagnostics");
 }
 
 /**

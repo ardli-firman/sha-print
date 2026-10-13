@@ -24,7 +24,7 @@ pub enum PortTransport {
 }
 
 impl PortTransport {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Tcp => "TCP",
             Self::Udp => "UDP",
@@ -64,7 +64,7 @@ impl PortOwner {
         self
     }
 
-    fn is_shaprint(&self) -> bool {
+    pub fn is_shaprint(&self) -> bool {
         let name = self
             .process_name
             .rsplit(['\\', '/'])
@@ -282,7 +282,7 @@ fn conflict_error(transport: PortTransport, port: u16, owner: &PortOwner) -> App
 }
 
 /// Platform socket-table lookup and process termination.
-struct SystemPortOwnerInspector;
+pub struct SystemPortOwnerInspector;
 
 #[cfg(windows)]
 fn powershell_command() -> std::process::Command {
@@ -374,8 +374,42 @@ impl PortOwnerInspector for SystemPortOwnerInspector {
             return Ok(Vec::new());
         }
 
+        let mut remaining_inodes = socket_inodes.clone();
+        let current_pid = process::id();
+
+        // Fast-path: check current process first.
+        let mut owns_self = false;
+        if let Ok(fds) = std::fs::read_dir(format!("/proc/{current_pid}/fd")) {
+            for fd in fds.flatten() {
+                if let Ok(target) = std::fs::read_link(fd.path()) {
+                    let target_str = target.to_string_lossy();
+                    if let Some(inode) = target_str
+                        .strip_prefix("socket:[")
+                        .and_then(|value| value.strip_suffix(']'))
+                        .and_then(|value| value.parse::<u64>().ok())
+                    {
+                        if remaining_inodes.remove(&inode) {
+                            owns_self = true;
+                        }
+                    }
+                }
+            }
+        }
+
         let mut owners = Vec::new();
+        if owns_self {
+            owners.push(
+                PortOwner::new(current_pid, linux_process_name(current_pid))
+                    .with_linux_identity(linux_process_identity(current_pid)),
+            );
+            if remaining_inodes.is_empty() {
+                return Ok(owners);
+            }
+        }
+
         let mut seen_pids = HashSet::new();
+        seen_pids.insert(current_pid);
+
         for entry in std::fs::read_dir("/proc")? {
             let entry = match entry {
                 Ok(entry) => entry,
@@ -397,10 +431,11 @@ impl PortOwnerInspector for SystemPortOwnerInspector {
                 Ok(fds) => fds,
                 Err(_) => continue,
             };
-            let owns_socket = fds.flatten().any(|fd| {
+            let mut owns_socket = false;
+            for fd in fds.flatten() {
                 let target = match std::fs::read_link(fd.path()) {
                     Ok(target) => target,
-                    Err(_) => return false,
+                    Err(_) => continue,
                 };
                 let target = target.to_string_lossy();
                 let Some(inode) = target
@@ -408,15 +443,20 @@ impl PortOwnerInspector for SystemPortOwnerInspector {
                     .and_then(|value| value.strip_suffix(']'))
                     .and_then(|value| value.parse::<u64>().ok())
                 else {
-                    return false;
+                    continue;
                 };
-                socket_inodes.contains(&inode)
-            });
+                if remaining_inodes.remove(&inode) {
+                    owns_socket = true;
+                }
+            }
             if owns_socket {
                 owners.push(
                     PortOwner::new(pid, linux_process_name(pid))
                         .with_linux_identity(linux_process_identity(pid)),
                 );
+                if remaining_inodes.is_empty() {
+                    break;
+                }
             }
         }
 

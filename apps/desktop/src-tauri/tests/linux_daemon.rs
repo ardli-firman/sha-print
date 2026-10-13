@@ -2385,6 +2385,252 @@ esac
     std::fs::remove_dir_all(&root).ok();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shaprintctl_diagnostics_and_status_distinguish_subsystem_failures_with_concrete_recovery_actions_and_zero_leakage(
+) {
+    use shaprint_desktop::adapters::printers::cups::CupsServerEndpoint;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let root = temporary_directory("linux-daemon-diagnostics");
+    let state_dir = root.join("var/lib/shaprint");
+    let etc_dir = root.join("etc/shaprint");
+    let socket_path = root.join("run/shaprint/shaprintd.sock");
+    std::fs::create_dir_all(&state_dir).expect("creates state dir");
+    std::fs::create_dir_all(&etc_dir).expect("creates etc dir");
+    std::fs::create_dir_all(socket_path.parent().expect("socket parent"))
+        .expect("creates socket dir");
+
+    let ctl_bin = env!("CARGO_BIN_EXE_shaprintctl");
+    let socket_str = socket_path.to_string_lossy().into_owned();
+
+    // Create mock firewall script that fails (returns code 1):
+    let fake_firewall = root.join("fake-firewall.sh");
+    std::fs::write(&fake_firewall, "#!/bin/sh\nexit 1\n").expect("writes fake firewall script");
+    std::fs::set_permissions(&fake_firewall, std::fs::Permissions::from_mode(0o755))
+        .expect("sets exec permissions");
+    std::env::set_var("SHAPRINT_FIREWALL_PROGRAM", &fake_firewall);
+
+    // 1. Daemon offline / stopped:
+    //    shaprintctl diagnostics against non-existent socket reports daemon: failed,
+    //    code: server-unavailable, and recovery: sudo systemctl start shaprintd.
+    let offline_output = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "diagnostics"])
+        .output()
+        .expect("runs shaprintctl diagnostics on offline daemon");
+    assert!(offline_output.status.success());
+    let offline_text = String::from_utf8_lossy(&offline_output.stdout);
+    assert!(offline_text.contains("[FAILED] daemon:"));
+    assert!(offline_text.contains("code: server-unavailable"));
+    assert!(offline_text.contains("sudo systemctl start shaprintd"));
+
+    let offline_json_out = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "diagnostics", "--json"])
+        .output()
+        .expect("runs shaprintctl diagnostics --json on offline daemon");
+    assert!(offline_json_out.status.success());
+    let json_val: serde_json::Value =
+        serde_json::from_slice(&offline_json_out.stdout).expect("valid json");
+    assert_eq!(json_val["healthy"], false);
+    let daemon_check = json_val["checks"]
+        .as_array()
+        .expect("checks array")
+        .iter()
+        .find(|c| c["check"] == "daemon")
+        .expect("daemon check present");
+    assert_eq!(daemon_check["status"], "failed");
+    assert_eq!(daemon_check["code"], "server-unavailable");
+    assert!(daemon_check["recovery"]
+        .as_str()
+        .expect("recovery string")
+        .contains("sudo systemctl start shaprintd"));
+
+    // 2. Port owner conflict:
+    //    Bind a conflicting process listener on port 48631, and verify offline/host diagnostics
+    //    detects port conflict with invalid-state and recovery naming conflicting process/PID.
+    {
+        let conflicting_listener = TcpListener::bind("127.0.0.1:48631");
+        if let Ok(listener) = conflicting_listener {
+            let port_diag = Command::new(ctl_bin)
+                .args(["--socket", &socket_str, "diagnostics"])
+                .output()
+                .expect("runs shaprintctl diagnostics during port conflict");
+            let port_text = String::from_utf8_lossy(&port_diag.stdout);
+            assert!(
+                port_text.contains("[FAILED] ports:"),
+                "expected ports check failure in: {port_text}"
+            );
+            assert!(port_text.contains("code: invalid-state"));
+            assert!(port_text.contains("Stop the conflicting process"));
+            drop(listener);
+        }
+    }
+
+    // 3. Launch daemon with:
+    //    - Non-existent CUPS socket
+    //    - Failing firewall script
+    //    - Unconfigured Network Channel
+    let fake_cups_socket = root.join("nonexistent-cups.sock");
+    let proxy_port = support::free_port();
+    let server_port = support::free_port();
+    let discovery_port = support::free_udp_port();
+
+    let server = DaemonServer::launch(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_config_dir(&etc_dir)
+            .with_ports(RuntimePorts {
+                proxy_port,
+                server_port,
+                discovery_ports: vec![discovery_port],
+            })
+            .with_cups_endpoint(CupsServerEndpoint::parse(
+                &fake_cups_socket.to_string_lossy(),
+            ))
+            .with_firewall_program(&fake_firewall),
+    )
+    .await
+    .expect("launches test daemon");
+
+    // 5. Query diagnostics from the running daemon:
+    //    - daemon: ok
+    //    - cups: failed (queue-unavailable, sudo systemctl start cups)
+    //    - credential: failed (not-authorized, sudo shaprintctl network-channel set)
+    //    - firewall: failed (not-authorized, sudo firewall-cmd)
+    let diag_output = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "diagnostics"])
+        .output()
+        .expect("runs shaprintctl diagnostics");
+    assert!(
+        diag_output.status.success(),
+        "status: {}\nstdout:\n{}\nstderr:\n{}",
+        diag_output.status,
+        String::from_utf8_lossy(&diag_output.stdout),
+        String::from_utf8_lossy(&diag_output.stderr)
+    );
+    let diag_text = String::from_utf8_lossy(&diag_output.stdout);
+
+    assert!(
+        diag_text.contains("[OK] daemon:"),
+        "expected daemon ok: {diag_text}"
+    );
+    assert!(
+        diag_text.contains("[FAILED] cups:"),
+        "expected cups failed: {diag_text}"
+    );
+    assert!(diag_text.contains("code: queue-unavailable"));
+    assert!(diag_text.contains("sudo systemctl start cups"));
+
+    assert!(
+        diag_text.contains("[FAILED] credential:"),
+        "expected credential failed: {diag_text}"
+    );
+    assert!(diag_text.contains("code: not-authorized"));
+    assert!(diag_text.contains("sudo shaprintctl network-channel set"));
+
+    assert!(
+        diag_text.contains("[FAILED] firewall:"),
+        "expected firewall failed: {diag_text}"
+    );
+    assert!(diag_text.contains("code: not-authorized"));
+    assert!(diag_text.contains("sudo firewall-cmd"));
+
+    // 6. Query status before configuration:
+    //    - client-proxy: running
+    //    - readiness: not-ready
+    let status_before = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "status"])
+        .output()
+        .expect("runs shaprintctl status");
+    assert!(status_before.status.success());
+    let status_before_text = String::from_utf8_lossy(&status_before.stdout);
+    assert!(status_before_text.contains("client-proxy: running"));
+    assert!(status_before_text.contains("readiness: not-ready"));
+
+    // 7. Configure Network Channel:
+    let sensitive_secret = "very-sensitive-channel-secret-alpha-9988";
+    let mut child = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "network-channel", "set", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawns shaprintctl network-channel set");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe")
+        .write_all(format!("{sensitive_secret}\n").as_bytes())
+        .expect("writes secret");
+    let set_res = child.wait_with_output().expect("waits for set");
+    assert!(
+        set_res.status.success(),
+        "network-channel set failed: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&set_res.stdout),
+        String::from_utf8_lossy(&set_res.stderr)
+    );
+
+    // 8. Verify status reports destinations and readiness:
+    let status_after = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "status"])
+        .output()
+        .expect("runs shaprintctl status after config");
+    assert!(status_after.status.success());
+    let status_after_text = String::from_utf8_lossy(&status_after.stdout);
+    assert!(status_after_text.contains("readiness: ready"));
+    assert!(status_after_text.contains("shared-printers: none"));
+
+    // Status --json check:
+    let status_json_out = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "status", "--json"])
+        .output()
+        .expect("runs shaprintctl status --json");
+    assert!(status_json_out.status.success());
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status_json_out.stdout).expect("valid json status");
+    assert_eq!(status_json["readiness"], "ready");
+    assert_eq!(status_json["shared_printers"], serde_json::json!([]));
+
+    // 9. Diagnostics after credential set now reports credential: ok:
+    let diag_after = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "diagnostics"])
+        .output()
+        .expect("runs shaprintctl diagnostics after credential set");
+    let diag_after_text = String::from_utf8_lossy(&diag_after.stdout);
+    assert!(diag_after_text.contains("[OK] credential:"));
+
+    // 10. SECRET HYGIENE VERIFICATION:
+    //     Assert that the sensitive Network Channel value NEVER appears in stdout or stderr
+    //     of status, status --json, diagnostics, or diagnostics --json.
+    for cmd_args in [
+        vec!["status"],
+        vec!["status", "--json"],
+        vec!["diagnostics"],
+        vec!["diagnostics", "--json"],
+    ] {
+        let mut full_args = vec!["--socket", &socket_str];
+        full_args.extend(cmd_args);
+        let out = Command::new(ctl_bin)
+            .args(&full_args)
+            .output()
+            .expect("runs command for secret hygiene verification");
+        let stdout_str = String::from_utf8_lossy(&out.stdout);
+        let stderr_str = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stdout_str.contains(sensitive_secret),
+            "stdout must NEVER contain Network Channel secret! cmd={full_args:?}\nstdout={stdout_str}"
+        );
+        assert!(
+            !stderr_str.contains(sensitive_secret),
+            "stderr must NEVER contain Network Channel secret! cmd={full_args:?}\nstderr={stderr_str}"
+        );
+    }
+
+    std::env::remove_var("SHAPRINT_FIREWALL_PROGRAM");
+    server.shutdown().await.expect("stops test daemon");
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[tokio::test]
 async fn almalinux_10_rpm_package_smoke_installs_boots_queries_restarts_repairs_and_stops_service()
 {

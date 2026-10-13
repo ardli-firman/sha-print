@@ -31,6 +31,7 @@ vi.mock("./api/updates", () => ({
 vi.mock("./api/ipc", () => ({
   RUNTIME_STATUS_EVENT: "runtime://status",
   getRuntimeStatus: vi.fn(),
+  getDiagnostics: vi.fn(),
   startService: vi.fn(),
   stopService: vi.fn(),
   onRuntimeStatus: vi.fn(),
@@ -168,6 +169,11 @@ beforeEach(() => {
     waiting_for_jobs: false,
   });
   vi.mocked(ipc.getRuntimeStatus).mockResolvedValue(runtimeWith("running", "stopped"));
+  vi.mocked(ipc.getDiagnostics).mockResolvedValue({
+    checks: [],
+    healthy: true,
+    recent_failure: null,
+  });
   vi.mocked(ipc.listLocalPrinters).mockResolvedValue(printersWith());
   vi.mocked(ipc.getServerIdentity).mockResolvedValue(IDENTITY);
   vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([]);
@@ -1744,5 +1750,142 @@ describe("previous app panel", () => {
 
     await waitFor(() => expect(legacyApi.importLegacySettings).toHaveBeenCalledTimes(1));
     expect(await within(panel).findByText(LEGACY_REPORT.channel_note)).toBeTruthy();
+  });
+});
+
+describe("system diagnostics and readiness", () => {
+  it("presents subsystem diagnostics with failure codes and concrete recovery actions matching CLI semantics", async () => {
+    vi.mocked(ipc.getDiagnostics).mockResolvedValue({
+      checks: [
+        {
+          check: "daemon",
+          status: "failed",
+          code: "server-unavailable",
+          detail: "shaprintd is not running",
+          recovery: "Start the system service: sudo systemctl start shaprintd",
+        },
+        {
+          check: "ports",
+          status: "failed",
+          code: "invalid-state",
+          detail: "port 48631 is occupied by conflicting process 'other-print' (PID 1234)",
+          recovery: "Stop the conflicting process (PID 1234, 'other-print')",
+        },
+        {
+          check: "cups",
+          status: "failed",
+          code: "queue-unavailable",
+          detail: "cannot connect to the local CUPS service",
+          recovery: "Start the CUPS service: sudo systemctl start cups",
+        },
+        {
+          check: "credential",
+          status: "failed",
+          code: "not-authorized",
+          detail: "machine Network Channel is not configured",
+          recovery: "Configure the Network Channel: sudo shaprintctl network-channel set",
+        },
+        {
+          check: "firewall",
+          status: "failed",
+          code: "not-authorized",
+          detail: "inbound ports 48631/tcp and 48633/udp are blocked",
+          recovery:
+            "Open required ports: sudo firewall-cmd --permanent --add-port=48631/tcp --add-port=48633/udp && sudo firewall-cmd --reload",
+        },
+      ],
+      healthy: false,
+      recent_failure: null,
+    });
+
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Client printing ready\. Open service diagnostics/i,
+      }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Print service status" });
+    expect(dialog).toBeTruthy();
+
+    // Subsystem checks are rendered
+    expect(within(dialog).getByRole("heading", { name: "Daemon service" })).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Network ports" })).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "CUPS printing system" })).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Network Channel credential" })).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "System firewall" })).toBeTruthy();
+
+    // Failure codes are presented
+    expect(within(dialog).getByText("server-unavailable")).toBeTruthy();
+    expect(within(dialog).getByText("invalid-state")).toBeTruthy();
+    expect(within(dialog).getByText("queue-unavailable")).toBeTruthy();
+
+    // Concrete recovery actions match CLI semantics
+    expect(within(dialog).getByText(/sudo systemctl start shaprintd/)).toBeTruthy();
+    expect(
+      within(dialog).getByText(/Stop the conflicting process \(PID 1234, 'other-print'\)/),
+    ).toBeTruthy();
+    expect(within(dialog).getByText(/sudo systemctl start cups/)).toBeTruthy();
+    expect(within(dialog).getByText(/sudo shaprintctl network-channel set/)).toBeTruthy();
+    expect(within(dialog).getByText(/sudo firewall-cmd --permanent --add-port=48631\/tcp/)).toBeTruthy();
+  });
+
+  it("reports configured readiness, shared printers, and client queues from status snapshot", async () => {
+    vi.mocked(ipc.getRuntimeStatus).mockResolvedValue({
+      services: [
+        { id: "client-proxy", state: "running", detail: "running" },
+        { id: "server-sharing", state: "running", detail: "sharing 2 printers" },
+      ],
+      readiness: "client-and-server-ready",
+      shared_printers: ["HP-LaserJet-Shared", "Receipt-Printer"],
+      client_queues: ["Office-Color-Queue"],
+      failure_code: null,
+    });
+
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Client \+ server ready\. Open service diagnostics/i,
+      }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Print service status" });
+    expect(within(dialog).getByTestId("readiness-status").textContent).toBe("client-and-server-ready");
+    expect(within(dialog).getByText(/HP-LaserJet-Shared, Receipt-Printer/)).toBeTruthy();
+    expect(within(dialog).getByText(/Office-Color-Queue/)).toBeTruthy();
+  });
+
+  it("never exposes secret Network Channel values or keyed URIs in the diagnostics dialog", async () => {
+    const SECRET_CHANNEL = "super-secret-network-channel-do-not-leak";
+    const KEYED_URI = "ipps://192.168.1.100:48631/ipp/print/printer?key=secret-token-12345";
+
+    vi.mocked(ipc.getDiagnostics).mockResolvedValue({
+      checks: [
+        {
+          check: "credential",
+          status: "ok",
+          code: null,
+          detail: "machine Network Channel is configured",
+          recovery: null,
+        },
+      ],
+      healthy: true,
+      recent_failure: null,
+    });
+
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Client printing ready\. Open service diagnostics/i,
+      }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Print service status" });
+    expect(dialog.textContent).not.toContain(SECRET_CHANNEL);
+    expect(dialog.textContent).not.toContain(KEYED_URI);
+    expect(dialog.textContent).not.toContain("secret-token");
   });
 });
