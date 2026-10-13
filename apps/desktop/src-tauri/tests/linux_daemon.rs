@@ -1329,12 +1329,18 @@ async fn almalinux_client_queue_and_server_cups_sharing_roundtrip_across_restart
         let _ = std::os::unix::fs::symlink("ipp", backend_dir.join("http"));
         let _ = std::os::unix::fs::symlink("ipp", backend_dir.join("ipps"));
         let captured_usb_file_for_backend = cups_dir.join("usb-captured.pwg");
+        let captured_usb_invocations_for_backend = cups_dir.join("usb-captured.invocations");
         let usb_backend = backend_dir.join("usbcapture");
         std::fs::write(
             &usb_backend,
             format!(
                 r#"#!/usr/bin/env bash
 set -euo pipefail
+count=0
+if [[ -f "{count_file}" ]]; then
+  count=$(<"{count_file}")
+fi
+echo $((count + 1)) > "{count_file}"
 if [[ $# -eq 0 ]]; then
   echo 'direct usbcapture "Unknown" "Controlled USB Capture Backend"'
   exit 0
@@ -1347,6 +1353,7 @@ fi
 exit 0
 "#,
                 out = captured_usb_file_for_backend.display(),
+                count_file = captured_usb_invocations_for_backend.display(),
             ),
         )
         .expect("writes usbcapture backend");
@@ -1410,6 +1417,7 @@ exit 0
     // 1) A driverless IPP queue (`Driverless_Office`) backed by `file:/dev/null`
     // 2) A local/USB controlled queue (`USB_Receipt_Printer`) backed by a capture file
     let captured_usb_file = cups_dir.join("usb-captured.pwg");
+    let captured_usb_invocations = cups_dir.join("usb-captured.invocations");
     for (name, uri) in [
         ("Driverless_Office", "file:/dev/null".to_owned()),
         ("USB_Receipt_Printer", "usbcapture:/receipt".to_owned()),
@@ -2061,6 +2069,123 @@ esac
         ]
     );
 
+    // === PART C: Issue #129 (one AlmaLinux installation as Client and Server) ===
+    // Trust this daemon's own Server identity, install a native CUPS Client queue that routes back
+    // through its Client proxy, and print to the Server queue through both roles. The Client queue
+    // must remain absent from the Server selection, so this also proves the forwarding-loop guard.
+    let own_server_address = format!("127.0.0.1:{linux_server_port}");
+    let own_server_fingerprint = daemon
+        .shell()
+        .expect("daemon has a Linux shell")
+        .endpoint()
+        .fingerprint()
+        .to_string();
+    let own_approve = Command::new(ctl_bin)
+        .args([
+            "--socket",
+            &socket_str,
+            "trust",
+            "approve",
+            &own_server_address,
+            "--fingerprint",
+            &own_server_fingerprint,
+        ])
+        .output()
+        .expect("approves this daemon's Server identity");
+    assert!(
+        own_approve.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&own_approve.stderr)
+    );
+
+    let own_queue_request = ClientQueueRequest::new(
+        &own_server_address,
+        PrinterName::parse("USB_Receipt_Printer").expect("server CUPS printer"),
+    )
+    .expect("builds own-server Client queue request");
+    let own_queue_install = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args([
+            "--socket",
+            &socket_str,
+            "queue",
+            "install",
+            &own_server_address,
+            "USB_Receipt_Printer",
+        ])
+        .output()
+        .expect("installs own-server Client queue");
+    assert!(
+        own_queue_install.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&own_queue_install.stderr)
+    );
+
+    let sharing_after_client_queue = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args(["--socket", &socket_str, "sharing", "printers"])
+        .output()
+        .expect("lists Server queues after Client queue installation");
+    let sharing_after_client_queue_stdout =
+        String::from_utf8_lossy(&sharing_after_client_queue.stdout);
+    assert!(sharing_after_client_queue.status.success());
+    assert!(
+        !sharing_after_client_queue_stdout.contains(&own_queue_request.cups_destination_name()),
+        "ShaPrint-owned Client queue must stay excluded while both roles run: {sharing_after_client_queue_stdout}"
+    );
+
+    let own_usb_invocations = || {
+        std::fs::read_to_string(&captured_usb_invocations)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .unwrap_or_default()
+    };
+    let usb_invocations_before_own = own_usb_invocations();
+    let expected_own_usb_invocations = usb_invocations_before_own + 1;
+    let own_cups_submitter =
+        shaprint_desktop::adapters::printers::CupsPrintJobSubmitter::with_endpoint(
+            cups_endpoint.clone(),
+        );
+    let own_cups_job = own_cups_submitter
+        .submit(
+            &PrinterName::parse(&own_queue_request.cups_destination_name())
+                .expect("valid own Client queue name"),
+            PrintJob::from_ipp_body(
+                build_pwg_raster(),
+                0,
+                PrintSettings {
+                    media: Some("iso_a4_210x297mm".to_owned()),
+                    color: Some(true),
+                    duplex: Some(DuplexMode::LongEdge),
+                    copies: Some(2),
+                    orientation: Some(PrintOrientation::Landscape),
+                },
+            ),
+        )
+        .await
+        .expect("submits a Linux Client job through this daemon's Client and Server roles");
+    assert!(own_cups_job > 0);
+    for _ in 0..80 {
+        if own_usb_invocations() >= expected_own_usb_invocations
+            && captured_usb_file
+                .metadata()
+                .is_ok_and(|meta| meta.len() >= 1807)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        own_usb_invocations(),
+        expected_own_usb_invocations,
+        "one Linux Client job must invoke the Server CUPS destination exactly once"
+    );
+    assert_eq!(
+        std::fs::read(&captured_usb_file).expect("reads Linux-to-Linux CUPS output"),
+        build_pwg_raster(),
+        "the selected Server CUPS destination receives the Linux Client document once"
+    );
+
     // 5. Exercise a Windows Client (`ClientConnections`) manually addressing the AlmaLinux Server,
     //    inspecting and approving its TLS fingerprint, and listing its shared printers, then submit
     //    print jobs over IPPS:
@@ -2163,14 +2288,59 @@ esac
         build_pwg_raster(),
         "controlled USB/local CUPS destination must receive the streamed PWG Raster document"
     );
+    assert_eq!(
+        own_usb_invocations(),
+        expected_own_usb_invocations + 1,
+        "the later Windows Client job adds exactly one CUPS destination invocation"
+    );
 
-    // 6. Verify Stop releases the Server listener and rejects new jobs, and Start/Stop persists
-    //    across daemon restart.
+    // 6. A failed Client start is isolated while Server Sharing stays live: an unrelated process
+    // owns only the Client port, and the Server listener remains reachable.
+    let stop_proxy = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "stop", "client-proxy"])
+        .output()
+        .expect("stops client-proxy independently");
+    assert!(stop_proxy.status.success());
+    let held_proxy = TcpListener::bind(("127.0.0.1", proxy_port)).expect("holds Client port");
+    let start_proxy_conflict = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "start", "client-proxy"])
+        .output()
+        .expect("attempts Client start with unrelated port owner");
+    assert!(!start_proxy_conflict.status.success());
+    let status_after_proxy_conflict = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "status"])
+        .output()
+        .expect("checks Server status after Client start failure");
+    let status_after_proxy_conflict_stdout =
+        String::from_utf8_lossy(&status_after_proxy_conflict.stdout);
+    assert!(status_after_proxy_conflict_stdout.contains("client-proxy: failed"));
+    assert!(status_after_proxy_conflict_stdout.contains("server-sharing: running"));
+    assert!(
+        tokio::net::TcpStream::connect(&linux_server_addr)
+            .await
+            .is_ok(),
+        "a Client port conflict must not terminate Server Sharing"
+    );
+    drop(held_proxy);
+    let start_proxy_again = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "start", "client-proxy"])
+        .output()
+        .expect("restarts Client after conflict is gone");
+    assert!(start_proxy_again.status.success());
+
+    // Verify explicit Server Stop releases only the Server listener, while the Client proxy remains
+    // available, and that the choice persists across daemon restart.
     let stop_sharing = Command::new(ctl_bin)
         .args(["--socket", &socket_str, "stop", "server-sharing"])
         .output()
         .expect("stops server-sharing");
     assert!(stop_sharing.status.success());
+    let status_after_server_stop = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "status"])
+        .output()
+        .expect("checks independent Client status after Server stop");
+    let status_after_server_stop_stdout = String::from_utf8_lossy(&status_after_server_stop.stdout);
+    assert!(status_after_server_stop_stdout.contains("client-proxy: running"));
     assert!(
         tokio::net::TcpStream::connect(&linux_server_addr)
             .await

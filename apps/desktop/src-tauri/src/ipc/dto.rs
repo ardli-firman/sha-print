@@ -136,6 +136,27 @@ impl From<&[LocalPrinter]> for LocalPrintersDto {
     }
 }
 
+/// A ShaPrint Client queue recognised by the local printer service.
+///
+/// This DTO is shared by the headless Linux daemon and the desktop IPC commands, so it lives in
+/// the feature-independent serialization module rather than the Tauri command module.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecognisedClientQueueDto {
+    pub queue_name: String,
+    pub server_address: String,
+    pub printer_name: String,
+}
+
+impl From<crate::domain::RecognisedClientQueue> for RecognisedClientQueueDto {
+    fn from(queue: crate::domain::RecognisedClientQueue) -> Self {
+        Self {
+            queue_name: queue.queue_name().to_string(),
+            server_address: queue.server_address().to_string(),
+            printer_name: queue.printer_name().to_string(),
+        }
+    }
+}
+
 /// The server identity a client user approves, and where clients reach it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerIdentityDto {
