@@ -28,6 +28,7 @@ pub const ARGUMENTS: [&str; 3] = ["-NoProfile", "-NonInteractive", "-Command"];
 /// Environment variables the script reads. Values never appear in the script text.
 pub const QUEUE_NAME_VARIABLE: &str = "SHAPRINT_QUEUE_NAME";
 pub const QUEUE_IPP_URL_VARIABLE: &str = "SHAPRINT_QUEUE_IPP_URL";
+pub const PRINTER_NAME_VARIABLE: &str = "SHAPRINT_PRINTER_NAME";
 pub const QUEUE_MODE_VARIABLE: &str = "SHAPRINT_QUEUE_MODE";
 const INSTALL_MODE: &str = "install";
 const REPAIR_MODE: &str = "repair";
@@ -56,15 +57,60 @@ if ($null -eq $spooler -or $spooler.Status -ne 'Running') {
 }
 $name = $env:SHAPRINT_QUEUE_NAME
 $url = $env:SHAPRINT_QUEUE_IPP_URL
+$printer = $env:SHAPRINT_PRINTER_NAME
 $mode = $env:SHAPRINT_QUEUE_MODE
 if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($url) -or
     @('install', 'repair') -notcontains $mode) {
     Write-Output 'SHAPRINT-FAIL invalid-request'
     exit 1
 }
+if ([string]::IsNullOrWhiteSpace($printer) -and $name -match '^(.*) \(ShaPrint [^)]+\)$') {
+    $printer = $Matches[1]
+}
+function Sync-ShaPrintQueueName([string[]]$BeforeNames, $AddError) {
+    $httpUrl = $url.Replace('ipp://', 'http://')
+    if (-not (Get-Printer -Name $name -ErrorAction SilentlyContinue)) {
+        $candidate = @(Get-Printer -ErrorAction SilentlyContinue | Where-Object {
+            $p = "$($_.PortName)"
+            ($p -eq $url -or $p -eq $httpUrl -or $p -like 'WSD-*') -and ($BeforeNames -notcontains $_.Name)
+        }) | Select-Object -First 1
+        if (-not $candidate) {
+            $candidate = @(Get-Printer -ErrorAction SilentlyContinue | Where-Object {
+                $p = "$($_.PortName)"
+                ($p -eq $url -or $p -eq $httpUrl) -or
+                ($p -like 'WSD-*' -and -not [string]::IsNullOrWhiteSpace($printer) -and (
+                    $_.Name -eq $printer -or
+                    $_.Name -like "$printer (Copy *)" -or
+                    $_.Name -like "$name (Copy *)" -or
+                    $_.Name -like "* - $printer" -or
+                    $_.Name -like "$printer on *"
+                ))
+            }) | Select-Object -First 1
+        }
+        if ($candidate) {
+            Rename-Printer -Name $candidate.Name -NewName $name -ErrorAction Stop
+        } elseif ($null -ne $AddError) {
+            throw $AddError
+        }
+    }
+    if (-not (Get-Printer -Name $name -ErrorAction SilentlyContinue)) {
+        if ($null -ne $AddError) {
+            throw $AddError
+        }
+        throw "Windows did not create the queue '$name'"
+    }
+}
 try {
     $existing = Get-Printer -Name $name -ErrorAction SilentlyContinue
+    if (-not $existing -and $mode -eq 'repair') {
+        $httpUrl = $url.Replace('ipp://', 'http://')
+        $existing = @(Get-Printer -ErrorAction SilentlyContinue | Where-Object {
+            $p = "$($_.PortName)"
+            ($p -eq $url -or $p -eq $httpUrl -or $p -like 'WSD-*') -and $_.Name -like "$name (Copy *)"
+        }) | Select-Object -First 1
+    }
     if ($existing) {
+        $existingName = "$($existing.Name)"
         $port = "$($existing.PortName)"
         if ($mode -eq 'repair') {
             if (-not ($port -eq $url -or $port -eq $url.Replace('ipp://', 'http://') -or $port -like 'WSD-*')) {
@@ -72,21 +118,25 @@ try {
                 [Console]::Error.WriteLine("the queue '$name' already exists and points at '$port'")
                 exit 1
             }
-            if (@(Get-PrintJob -PrinterName $name -ErrorAction Stop).Count -gt 0) {
+            if (@(Get-PrintJob -PrinterName $existingName -ErrorAction Stop).Count -gt 0) {
                 Write-Output 'SHAPRINT-FAIL queue-busy'
                 [Console]::Error.WriteLine("the queue '$name' still has pending jobs")
                 exit 1
             }
-            Remove-Printer -Name $name -ErrorAction Stop
+            $before = @(Get-Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne $existingName } | Select-Object -ExpandProperty Name)
+            Remove-Printer -Name $existingName -ErrorAction Stop
             Add-Printer -Name $name -IppURL $url -ErrorAction Stop
+            Sync-ShaPrintQueueName $before $null
             exit 0
         }
         if ($port -eq $url -or $port -eq $url.Replace('ipp://', 'http://') -or $port -like 'WSD-*') {
             exit 0
         }
         if ($port -match '^(?i)(ipp|http)://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/ipp/print/') {
+            $before = @(Get-Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne $name } | Select-Object -ExpandProperty Name)
             Remove-Printer -Name $name -ErrorAction Stop
             Add-Printer -Name $name -IppURL $url -ErrorAction Stop
+            Sync-ShaPrintQueueName $before $null
             exit 0
         }
         Write-Output 'SHAPRINT-FAIL existing-queue-conflict'
@@ -98,7 +148,14 @@ try {
         [Console]::Error.WriteLine("the queue '$name' no longer exists")
         exit 1
     }
-    Add-Printer -Name $name -IppURL $url -ErrorAction Stop
+    $before = @(Get-Printer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name)
+    $addError = $null
+    try {
+        Add-Printer -Name $name -IppURL $url -ErrorAction Stop
+    } catch {
+        $addError = $_
+    }
+    Sync-ShaPrintQueueName $before $addError
 } catch {
     Write-Output 'SHAPRINT-FAIL queue-rejected'
     [Console]::Error.WriteLine($_.Exception.Message)
@@ -126,6 +183,7 @@ impl WindowsQueueInstaller {
             .arg(SCRIPT)
             .env(QUEUE_NAME_VARIABLE, request.queue_name().as_str())
             .env(QUEUE_IPP_URL_VARIABLE, &uri)
+            .env(PRINTER_NAME_VARIABLE, request.printer().as_str())
             .env(QUEUE_MODE_VARIABLE, mode);
         hide_console(&mut command);
 
@@ -303,11 +361,18 @@ mod tests {
     #[test]
     fn repair_recreates_only_an_idle_matching_queue() {
         assert!(SCRIPT.contains("if ($mode -eq 'repair')"));
-        assert!(SCRIPT.contains("Get-PrintJob -PrinterName $name"));
+        assert!(SCRIPT.contains("Get-PrintJob -PrinterName"));
         assert!(SCRIPT.contains("SHAPRINT-FAIL queue-busy"));
         assert!(SCRIPT.contains("SHAPRINT-FAIL queue-not-found"));
-        assert!(SCRIPT.contains("Remove-Printer -Name $name -ErrorAction Stop"));
+        assert!(SCRIPT.contains("Remove-Printer -Name"));
         assert!(SCRIPT.contains("Add-Printer -Name $name -IppURL $url -ErrorAction Stop"));
+    }
+
+    #[test]
+    fn the_script_renames_a_stubborn_windows_ipp_queue_to_the_derived_shaprint_name() {
+        assert!(SCRIPT.contains(PRINTER_NAME_VARIABLE));
+        assert!(SCRIPT.contains("Rename-Printer -Name"));
+        assert!(SCRIPT.contains("-NewName $name -ErrorAction Stop"));
     }
 
     #[test]

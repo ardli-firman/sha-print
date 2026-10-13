@@ -365,12 +365,32 @@ async fn printer_attributes_advertise_the_local_queue_uri() {
     assert_eq!(http_status, 200);
     assert_eq!(ipp_status(&response), 0x0000);
     let attributes = protocol::Request::parse(&response).expect("valid IPP response");
+    let expected_queue_name = shaprint_desktop::domain::ClientQueueName::for_shared_printer(
+        &PrinterName::parse(SERVER_QUEUE).expect("valid printer"),
+        &pair.server_address,
+    )
+    .expect("derives client queue name");
     assert_eq!(
         attributes.value("printer-uri-supported"),
         Some(local_uri.as_str())
     );
     assert_eq!(attributes.value("uri-security-supported"), Some("none"));
-    assert!(attributes.value("printer-uuid").is_some());
+    assert_eq!(
+        attributes.value("printer-name"),
+        Some(expected_queue_name.as_str())
+    );
+    assert_eq!(
+        attributes.value("printer-info"),
+        Some(expected_queue_name.as_str())
+    );
+    assert_eq!(
+        attributes.value("printer-make-and-model"),
+        Some(expected_queue_name.as_str())
+    );
+    assert_eq!(
+        attributes.value("printer-uuid"),
+        Some(protocol::printer_uuid(expected_queue_name.as_str()).as_str())
+    );
     pair.stop().await;
 }
 

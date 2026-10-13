@@ -353,16 +353,29 @@ pub fn prepare_proxy_request(
     Err(ParseError::Truncated)
 }
 
-/// Rewrites the advertised URI for a proxied printer so the local client sees the URI it used to
-/// reach the proxy instead of the server's IPPS URI.
+/// Rewrites the advertised URI and naming attributes for a proxied printer so the local Windows
+/// spooler sees the loopback URI and derived ShaPrint queue name instead of the server's raw
+/// printer name and IPPS URI.
 pub fn rewrite_printer_uri_supported(
     bytes: &[u8],
     remote_printer_uri: &str,
     local_printer_uri: &str,
 ) -> Result<Vec<u8>, ParseError> {
-    Request::parse(bytes)?;
+    let parsed = Request::parse(bytes)?;
+    let local_queue_name = proxied_queue_name(&parsed, remote_printer_uri, local_printer_uri);
+    let local_queue_uuid = local_queue_name.as_deref().map(printer_uuid);
+    let local_is_unencrypted = local_printer_uri
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("ipp://"))
+        || local_printer_uri
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"));
 
-    let mut output = Vec::with_capacity(bytes.len() + local_printer_uri.len());
+    let mut output = Vec::with_capacity(
+        bytes.len()
+            + local_printer_uri.len()
+            + local_queue_name.as_ref().map_or(0, |name| name.len() * 3),
+    );
     output.extend_from_slice(&bytes[..8]);
     let mut position = 8;
     let mut current_name = &[][..];
@@ -411,7 +424,7 @@ pub fn rewrite_printer_uri_supported(
             output.extend_from_slice(local_printer_uri.as_bytes());
         } else if current_name == b"uri-security-supported"
             && rewrite_security_in_current_group
-            && local_printer_uri.starts_with("ipp://")
+            && local_is_unencrypted
         {
             let none_value = b"none";
             output.push(value_tag);
@@ -419,12 +432,81 @@ pub fn rewrite_printer_uri_supported(
             output.extend_from_slice(name);
             output.extend((none_value.len() as u16).to_be_bytes());
             output.extend_from_slice(none_value);
+        } else if current_name == b"printer-uuid"
+            && rewrite_security_in_current_group
+            && local_queue_uuid.is_some()
+        {
+            let uuid = local_queue_uuid.as_deref().unwrap_or_default();
+            output.push(value_tag);
+            output.extend((name_length as u16).to_be_bytes());
+            output.extend_from_slice(name);
+            output.extend((uuid.len() as u16).to_be_bytes());
+            output.extend_from_slice(uuid.as_bytes());
+        } else if matches!(
+            current_name,
+            b"printer-name" | b"printer-info" | b"printer-make-and-model"
+        ) && rewrite_security_in_current_group
+            && local_queue_name.is_some()
+        {
+            let queue_name = local_queue_name.as_deref().unwrap_or_default();
+            output.push(value_tag);
+            output.extend((name_length as u16).to_be_bytes());
+            output.extend_from_slice(name);
+            output.extend((queue_name.len() as u16).to_be_bytes());
+            output.extend_from_slice(queue_name.as_bytes());
         } else {
             output.extend_from_slice(&bytes[start..value_end]);
         }
         position = value_end;
     }
     Err(ParseError::Truncated)
+}
+
+fn proxied_queue_name(
+    parsed: &Request<'_>,
+    remote_printer_uri: &str,
+    local_printer_uri: &str,
+) -> Option<String> {
+    let server_address = server_from_proxy_uri(local_printer_uri)
+        .or_else(|| authority_from_uri(remote_printer_uri))?;
+    let printer_raw = parsed
+        .value("printer-name")
+        .map(str::to_owned)
+        .or_else(|| printer_from_remote_uri(remote_printer_uri))
+        .or_else(|| printer_from_proxy_uri(local_printer_uri))?;
+    let printer = crate::domain::PrinterName::parse(&printer_raw).ok()?;
+    let queue =
+        crate::domain::ClientQueueName::for_shared_printer(&printer, &server_address).ok()?;
+    Some(queue.as_str().to_owned())
+}
+
+fn server_from_proxy_uri(uri: &str) -> Option<String> {
+    let (_, remainder) = uri.split_once("://")?;
+    let (_, path) = remainder.split_once('/')?;
+    let after_prefix = path.strip_prefix("ipp/print/")?;
+    let (server, _) = after_prefix.split_once('/')?;
+    (!server.is_empty()).then(|| percent_decode(server))
+}
+
+fn printer_from_proxy_uri(uri: &str) -> Option<String> {
+    let (_, remainder) = uri.split_once("://")?;
+    let (_, path) = remainder.split_once('/')?;
+    let after_prefix = path.strip_prefix("ipp/print/")?;
+    let (_, printer) = after_prefix.split_once('/')?;
+    (!printer.is_empty()).then(|| percent_decode(printer))
+}
+
+fn authority_from_uri(uri: &str) -> Option<String> {
+    let (_, remainder) = uri.split_once("://")?;
+    let (authority, _) = remainder.split_once('/')?;
+    (!authority.is_empty()).then(|| authority.to_owned())
+}
+
+fn printer_from_remote_uri(uri: &str) -> Option<String> {
+    let (_, remainder) = uri.split_once("://")?;
+    let (_, path) = remainder.split_once('/')?;
+    let printer = path.strip_prefix("ipp/print/")?;
+    (!printer.is_empty() && !printer.contains('/')).then(|| percent_decode(printer))
 }
 
 fn same_printer_uri(left: &str, right: &str) -> bool {
@@ -1390,6 +1472,7 @@ mod tests {
         let rewritten =
             rewrite_printer_uri_supported(&bytes, remote_uri, local_uri).expect("rewrites");
         let attributes = decode(&rewritten);
+        let expected_queue_name = "Office Printer (ShaPrint server-8631)";
         assert_eq!(
             text(&attributes, "printer-uri-supported"),
             Some(local_uri.to_owned())
@@ -1399,8 +1482,20 @@ mod tests {
             Some("none".to_owned())
         );
         assert_eq!(
+            text(&attributes, "printer-name"),
+            Some(expected_queue_name.to_owned())
+        );
+        assert_eq!(
+            text(&attributes, "printer-info"),
+            Some(expected_queue_name.to_owned())
+        );
+        assert_eq!(
+            text(&attributes, "printer-make-and-model"),
+            Some(expected_queue_name.to_owned())
+        );
+        assert_eq!(
             text(&attributes, "printer-uuid"),
-            Some(printer_uuid("Office Printer"))
+            Some(printer_uuid(expected_queue_name))
         );
     }
 
