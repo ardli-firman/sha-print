@@ -164,14 +164,15 @@ impl Shell {
         ports: RuntimePorts,
         credential_file: Option<std::path::PathBuf>,
     ) -> Result<Self, AppError> {
+        let proxy_port = ports.proxy_port;
         Self::build_with_adapters(
             data_dir,
             ports,
             credential_file,
-            default_printer_catalog(ports.proxy_port),
+            default_printer_catalog(proxy_port),
             default_print_job_submitter(),
             Arc::new(Setup::new(Arc::new(SystemElevation::new()))),
-            adapters::queue_installation::platform_installer_for_port(ports.proxy_port),
+            adapters::queue_installation::platform_installer_for_port(proxy_port),
         )
     }
 
