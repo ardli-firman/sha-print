@@ -1,0 +1,25 @@
+[Unit]
+Description=ShaPrint machine print-sharing and client-proxy daemon
+Documentation=https://github.com/ardli-firman/sha-print
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shaprint
+Group=shaprint
+UMask=0077
+RuntimeDirectory=shaprint
+RuntimeDirectoryMode=0755
+StateDirectory=shaprint
+StateDirectoryMode=0700
+ConfigurationDirectory=shaprint
+ConfigurationDirectoryMode=0750
+ExecStart=/usr/bin/shaprintd --config-dir /etc/shaprint
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

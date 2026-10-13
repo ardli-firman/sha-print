@@ -23,6 +23,12 @@ use crate::domain::{AppError, ErrorCode, ServiceId};
 use crate::ipc::dto::{AppErrorDto, RuntimeStatusDto};
 use crate::{RuntimePorts, Shell};
 
+/// Default non-secret configuration directory on Linux (ADR 0018).
+pub const DEFAULT_CONFIG_DIR: &str = "/etc/shaprint";
+
+/// Default non-secret configuration file name inside [`DEFAULT_CONFIG_DIR`].
+pub const DEFAULT_CONFIG_FILE: &str = "config.json";
+
 /// Default durable state directory on Linux (ADR 0018).
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/shaprint";
 
@@ -73,20 +79,30 @@ fn current_effective_uid() -> Option<u32> {
 /// Configuration for launching `shaprintd`.
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
+    config_dir: PathBuf,
     state_dir: PathBuf,
     socket_path: PathBuf,
     access_policy: PeerAccessPolicy,
+    forbid_root: bool,
     ports: RuntimePorts,
 }
 
 impl DaemonConfig {
     pub fn new(state_dir: impl Into<PathBuf>, socket_path: impl Into<PathBuf>) -> Self {
         Self {
+            config_dir: PathBuf::from(DEFAULT_CONFIG_DIR),
             state_dir: state_dir.into(),
             socket_path: socket_path.into(),
             access_policy: PeerAccessPolicy::RootOrDaemonOwner,
+            forbid_root: true,
             ports: RuntimePorts::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_config_dir(mut self, config_dir: impl Into<PathBuf>) -> Self {
+        self.config_dir = config_dir.into();
+        self
     }
 
     #[must_use]
@@ -96,9 +112,19 @@ impl DaemonConfig {
     }
 
     #[must_use]
+    pub fn with_forbid_root(mut self, forbid_root: bool) -> Self {
+        self.forbid_root = forbid_root;
+        self
+    }
+
+    #[must_use]
     pub fn with_ports(mut self, ports: RuntimePorts) -> Self {
         self.ports = ports;
         self
+    }
+
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
     }
 
     pub fn state_dir(&self) -> &Path {
@@ -111,6 +137,10 @@ impl DaemonConfig {
 
     pub fn access_policy(&self) -> PeerAccessPolicy {
         self.access_policy
+    }
+
+    pub fn forbid_root(&self) -> bool {
+        self.forbid_root
     }
 
     pub fn ports(&self) -> &RuntimePorts {
@@ -154,12 +184,32 @@ impl DaemonServer {
     /// disturb active listeners, and then restores persisted sharing state and starts autostart
     /// services.
     pub async fn launch(config: DaemonConfig) -> Result<Self, AppError> {
+        Self::launch_with_effective_uid(config, current_effective_uid()).await
+    }
+
+    /// Launches `shaprintd` while checking `effective_uid` against the non-root policy.
+    pub async fn launch_with_effective_uid(
+        config: DaemonConfig,
+        effective_uid: Option<u32>,
+    ) -> Result<Self, AppError> {
+        if config.forbid_root && effective_uid == Some(0) {
+            return Err(AppError::invalid_state(
+                "shaprintd must not run as root; start it under the unprivileged 'shaprint' account",
+            ));
+        }
         std::fs::create_dir_all(&config.state_dir).map_err(|error| {
             AppError::internal(format!(
                 "cannot create daemon state directory '{}': {error}",
                 config.state_dir.display()
             ))
         })?;
+        std::fs::set_permissions(&config.state_dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "cannot set permissions on daemon state directory '{}': {error}",
+                    config.state_dir.display()
+                ))
+            })?;
         let shell = Arc::new(Shell::with_ports(&config.state_dir, config.ports)?);
         let mut server =
             Self::bind_with_policy(&config.socket_path, shell.runtime(), config.access_policy)
@@ -179,6 +229,11 @@ impl DaemonServer {
             );
         }
 
+        log::info!(
+            "shaprintd started socket={} state_dir={}",
+            config.socket_path.display(),
+            config.state_dir.display()
+        );
         server.shell = Some(shell);
         Ok(server)
     }
@@ -202,12 +257,22 @@ impl DaemonServer {
         let socket_path = socket_path.into();
         if let Some(parent) = socket_path.parent() {
             if !parent.as_os_str().is_empty() {
+                let existed = parent.exists();
                 std::fs::create_dir_all(parent).map_err(|error| {
                     AppError::internal(format!(
                         "cannot create socket directory '{}': {error}",
                         parent.display()
                     ))
                 })?;
+                if !existed {
+                    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755))
+                        .map_err(|error| {
+                            AppError::internal(format!(
+                                "cannot set permissions on socket directory '{}': {error}",
+                                parent.display()
+                            ))
+                        })?;
+                }
             }
         }
         cleanup_stale_socket(&socket_path).await?;
@@ -312,6 +377,7 @@ impl DaemonServer {
         let _ = self.accept_task.await;
         let result = self.runtime.shutdown().await;
         let _ = std::fs::remove_file(&self.socket_path);
+        log::info!("shaprintd stopped socket={}", self.socket_path.display());
         result
     }
 }
@@ -555,46 +621,96 @@ pub struct CliOptions {
     pub command: CliCommand,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NonSecretDaemonConfigFile {
+    #[serde(default)]
+    state_dir: Option<PathBuf>,
+    #[serde(default)]
+    socket_path: Option<PathBuf>,
+    #[serde(default)]
+    proxy_port: Option<u16>,
+    #[serde(default)]
+    server_port: Option<u16>,
+    #[serde(default)]
+    discovery_ports: Option<Vec<u16>>,
+    #[serde(default)]
+    require_root: Option<bool>,
+    #[serde(default)]
+    forbid_root: Option<bool>,
+}
+
+fn load_non_secret_config_file(config_dir: &Path) -> Result<NonSecretDaemonConfigFile, AppError> {
+    let config_file = config_dir.join(DEFAULT_CONFIG_FILE);
+    let bytes = match std::fs::read(&config_file) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(NonSecretDaemonConfigFile::default())
+        }
+        Err(error) => {
+            return Err(AppError::internal(format!(
+                "cannot read daemon configuration '{}': {error}",
+                config_file.display()
+            )))
+        }
+    };
+    serde_json::from_slice::<NonSecretDaemonConfigFile>(&bytes).map_err(|error| {
+        AppError::invalid_input(format!(
+            "invalid non-secret daemon configuration '{}': {error}",
+            config_file.display()
+        ))
+    })
+}
+
 /// Parses command-line arguments for `shaprintd`.
 pub fn parse_daemon_args<S: AsRef<str>>(arguments: &[S]) -> Result<DaemonConfig, AppError> {
     let mut config = DaemonConfig::default();
-    let mut ports = RuntimePorts::default();
+    let mut cli = NonSecretDaemonConfigFile::default();
 
     let mut iter = arguments.iter().skip(1).map(AsRef::as_ref);
     while let Some(arg) = iter.next() {
         match arg {
+            "--config-dir" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| AppError::invalid_input("missing value for '--config-dir'"))?;
+                config.config_dir = PathBuf::from(value);
+            }
             "--state-dir" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| AppError::invalid_input("missing value for '--state-dir'"))?;
-                config.state_dir = PathBuf::from(value);
+                cli.state_dir = Some(PathBuf::from(value));
             }
             "--socket" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| AppError::invalid_input("missing value for '--socket'"))?;
-                config.socket_path = PathBuf::from(value);
+                cli.socket_path = Some(PathBuf::from(value));
             }
             "--proxy-port" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| AppError::invalid_input("missing value for '--proxy-port'"))?;
-                ports.proxy_port = parse_port(value, "--proxy-port")?;
+                cli.proxy_port = Some(parse_port(value, "--proxy-port")?);
             }
             "--server-port" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| AppError::invalid_input("missing value for '--server-port'"))?;
-                ports.server_port = parse_port(value, "--server-port")?;
+                cli.server_port = Some(parse_port(value, "--server-port")?);
             }
             "--discovery-port" => {
                 let value = iter.next().ok_or_else(|| {
                     AppError::invalid_input("missing value for '--discovery-port'")
                 })?;
-                ports.discovery_ports = vec![parse_port(value, "--discovery-port")?];
+                cli.discovery_ports = Some(vec![parse_port(value, "--discovery-port")?]);
             }
             "--require-root" => {
-                config.access_policy = PeerAccessPolicy::RootOnly;
+                cli.require_root = Some(true);
+            }
+            "--forbid-root" => {
+                cli.forbid_root = Some(true);
             }
             other => {
                 return Err(AppError::invalid_input(format!(
@@ -602,6 +718,35 @@ pub fn parse_daemon_args<S: AsRef<str>>(arguments: &[S]) -> Result<DaemonConfig,
                 )));
             }
         }
+    }
+
+    let file_config = load_non_secret_config_file(&config.config_dir)?;
+    if let Some(state_dir) = cli.state_dir.or(file_config.state_dir) {
+        config.state_dir = state_dir;
+    }
+    if let Some(socket_path) = cli.socket_path.or(file_config.socket_path) {
+        config.socket_path = socket_path;
+    }
+
+    let mut ports = RuntimePorts::default();
+    if let Some(port) = cli.proxy_port.or(file_config.proxy_port) {
+        ports.proxy_port = port;
+    }
+    if let Some(port) = cli.server_port.or(file_config.server_port) {
+        ports.server_port = port;
+    }
+    if let Some(discovery_ports) = cli.discovery_ports.or(file_config.discovery_ports) {
+        ports.discovery_ports = discovery_ports;
+    }
+    if cli
+        .require_root
+        .or(file_config.require_root)
+        .unwrap_or(false)
+    {
+        config.access_policy = PeerAccessPolicy::RootOnly;
+    }
+    if let Some(forbid_root) = cli.forbid_root.or(file_config.forbid_root) {
+        config.forbid_root = forbid_root;
     }
 
     Ok(config.with_ports(ports))
@@ -691,11 +836,16 @@ mod tests {
 
     #[test]
     fn daemon_args_default_to_standard_linux_paths_and_ports() {
-        let config = parse_daemon_args(&["shaprintd"]).expect("parses default args");
-        assert_eq!(config.state_dir(), Path::new(DEFAULT_STATE_DIR));
-        assert_eq!(config.socket_path(), Path::new(DEFAULT_SOCKET_PATH));
-        assert_eq!(config.access_policy(), PeerAccessPolicy::RootOrDaemonOwner);
-        assert_eq!(config.ports(), &RuntimePorts::default());
+        let defaults = DaemonConfig::default();
+        assert_eq!(defaults.config_dir(), Path::new(DEFAULT_CONFIG_DIR));
+        assert_eq!(defaults.state_dir(), Path::new(DEFAULT_STATE_DIR));
+        assert_eq!(defaults.socket_path(), Path::new(DEFAULT_SOCKET_PATH));
+        assert_eq!(
+            defaults.access_policy(),
+            PeerAccessPolicy::RootOrDaemonOwner
+        );
+        assert!(defaults.forbid_root());
+        assert_eq!(defaults.ports(), &RuntimePorts::default());
     }
 
     #[test]
