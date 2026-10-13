@@ -2,15 +2,18 @@ import { RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import type { ControlMode } from "@/api/types";
 import type { RuntimeStatusController } from "../hooks/useRuntimeStatus";
 import { ServiceStatusCard } from "./ServiceStatusCard";
 
 export interface RuntimeStatusPanelProps {
   runtime: RuntimeStatusController;
+  /** Control plane the shell administers; `machine` means the services belong to the daemon. */
+  controlMode?: ControlMode;
 }
 
 /** Live status of the client and server print paths, with lifecycle controls. */
-export function RuntimeStatusPanel({ runtime }: RuntimeStatusPanelProps) {
+export function RuntimeStatusPanel({ runtime, controlMode = "local" }: RuntimeStatusPanelProps) {
   const { status, error, busy, unreachable, dismissError } = runtime;
 
   return (
@@ -46,8 +49,9 @@ export function RuntimeStatusPanel({ runtime }: RuntimeStatusPanelProps) {
 
       {unreachable ? (
         <p className="runtime-unreachable" role="alert">
-          The ShaPrint runtime is not reachable from this window. Reopen the desktop app to see and
-          control its services.
+          {controlMode === "machine"
+            ? "The machine daemon is not reachable, so its print services are stopped. Start the system service (sudo systemctl start shaprintd), then refresh."
+            : "The ShaPrint runtime is not reachable from this window. Reopen the desktop app to see and control its services."}
         </p>
       ) : null}
 

@@ -24,7 +24,7 @@ use crate::application::RuntimeCoordinator;
 use crate::domain::{AppError, ErrorCode, PrinterName, ServiceId};
 use crate::ipc::dto::{
     AppErrorDto, ClientQueueDto, LocalPrinterDto, LocalPrintersDto, RecognisedClientQueueDto,
-    RuntimeStatusDto,
+    RuntimeStatusDto, ServerIdentityDto,
 };
 use crate::{RuntimePorts, Shell};
 
@@ -268,6 +268,7 @@ pub type InstalledClientQueueDto = RecognisedClientQueueDto;
 #[serde(tag = "op", rename_all = "kebab-case")]
 enum ControlRequest {
     Status,
+    ServerIdentity,
     StartService {
         id: String,
     },
@@ -313,6 +314,9 @@ enum ControlRequest {
 enum ControlResponse {
     Ok {
         status: RuntimeStatusDto,
+    },
+    ServerIdentity {
+        identity: ServerIdentityDto,
     },
     NetworkChannel {
         network_channel: NetworkChannelStatusDto,
@@ -662,6 +666,15 @@ async fn process_stream(
             ControlRequest::Status => Ok(ControlResponse::Ok {
                 status: runtime_status_dto(&runtime, &shell),
             }),
+            ControlRequest::ServerIdentity => {
+                let shell = require_shell(&shell)?;
+                Ok(ControlResponse::ServerIdentity {
+                    identity: ServerIdentityDto {
+                        fingerprint: shell.endpoint().fingerprint().to_string(),
+                        port: shell.endpoint().port(),
+                    },
+                })
+            }
             ControlRequest::StartService { id } => {
                 policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
                 let service = ServiceId::parse(&id)?;
@@ -907,6 +920,14 @@ impl DaemonClient {
     pub async fn status(&self) -> Result<RuntimeStatusDto, AppError> {
         match self.send(&ControlRequest::Status).await? {
             ControlResponse::Ok { status } => Ok(status),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Queries the Server certificate fingerprint and port clients approve (never a secret).
+    pub async fn server_identity(&self) -> Result<ServerIdentityDto, AppError> {
+        match self.send(&ControlRequest::ServerIdentity).await? {
+            ControlResponse::ServerIdentity { identity } => Ok(identity),
             other => Err(unexpected_response(&other)),
         }
     }

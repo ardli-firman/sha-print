@@ -15,25 +15,13 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::adapters::IppsServer;
-use crate::application::{
-    LegacyImport, PrintFailures, PrintJobTracker, QueueInstallation, RuntimeCoordinator, Sharing,
-    Startup,
-};
+use crate::application::{LegacyImport, PrintFailures, PrintJobTracker, Startup};
 use crate::domain::{AppError, PrinterName, ServiceId};
+use crate::ipc::control::{ControlMode, ControlPlane, SharedControl};
 use crate::ipc::dto::{
     AppErrorDto, ClientQueueDto, LegacyImportReportDto, LocalPrintersDto, PrintFailureDto,
     RuntimeStatusDto, ServerIdentityDto, StartupStatusDto,
 };
-
-/// Runtime state shared by every command.
-pub type SharedRuntime = Arc<RuntimeCoordinator>;
-
-/// Printer sharing configuration.
-pub type SharedSharing = Arc<Sharing>;
-
-/// The IPPS endpoint clients connect to.
-pub type SharedEndpoint = Arc<IppsServer>;
 
 /// The latest failed print attempt, as the window reports it.
 pub type SharedPrintFailures = Arc<PrintFailures>;
@@ -43,9 +31,6 @@ pub type SharedStartup = Arc<Startup>;
 
 /// Moving supported settings from the previous .NET ShaPrint application.
 pub type SharedLegacyImport = Arc<LegacyImport>;
-
-/// Native client queue installation.
-pub type SharedQueueInstallation = Arc<QueueInstallation>;
 
 /// In-flight print job tracker and drain guard.
 pub type SharedPrintJobTracker = Arc<PrintJobTracker>;
@@ -72,12 +57,22 @@ pub async fn get_drain_status(
 }
 
 /// Returns the current status of every supervised service.
+///
+/// On Linux this is the machine daemon's status, read over its local socket; on Windows it is
+/// the in-process runtime this window owns.
 #[tauri::command]
 pub async fn get_runtime_status(
-    runtime: State<'_, SharedRuntime>,
+    control: State<'_, SharedControl>,
 ) -> Result<RuntimeStatusDto, AppErrorDto> {
     log::info!("command=get_runtime_status");
-    Ok(RuntimeStatusDto::from(&runtime.status()))
+    control.status().await.map_err(|error| {
+        log::warn!(
+            "command=get_runtime_status code={} message={}",
+            error.code_str(),
+            error
+        );
+        AppErrorDto::from(&error)
+    })
 }
 
 /// Returns the latest print failure, or `null` when none is outstanding.
@@ -100,12 +95,15 @@ pub async fn dismiss_print_failure(
 }
 
 /// Starts one service and returns the resulting status.
+///
+/// In machine mode this asks the daemon over its socket's elevated CLI helper, so the polkit
+/// decision is made by the same rules `shaprintctl start` runs under.
 #[tauri::command]
 pub async fn start_service(
     id: String,
-    runtime: State<'_, SharedRuntime>,
+    control: State<'_, SharedControl>,
 ) -> Result<RuntimeStatusDto, AppErrorDto> {
-    apply(&runtime, &id, Action::Start)
+    apply(&control, &id, Action::Start)
         .await
         .map_err(|error| AppErrorDto::from(&error))
 }
@@ -114,9 +112,9 @@ pub async fn start_service(
 #[tauri::command]
 pub async fn stop_service(
     id: String,
-    runtime: State<'_, SharedRuntime>,
+    control: State<'_, SharedControl>,
 ) -> Result<RuntimeStatusDto, AppErrorDto> {
-    apply(&runtime, &id, Action::Stop)
+    apply(&control, &id, Action::Stop)
         .await
         .map_err(|error| AppErrorDto::from(&error))
 }
@@ -177,27 +175,27 @@ pub async fn import_legacy_settings(
 /// Lists the local printer queues and which of them the server shares.
 #[tauri::command]
 pub async fn list_local_printers(
-    sharing: State<'_, SharedSharing>,
+    control: State<'_, SharedControl>,
 ) -> Result<LocalPrintersDto, AppErrorDto> {
     log::info!("command=list_local_printers");
-    match sharing.local_printers().await {
-        Ok(printers) => Ok(LocalPrintersDto::from(printers.as_slice())),
-        Err(error) => {
-            log::warn!(
-                "command=list_local_printers code={} message={}",
-                error.code_str(),
-                error
-            );
-            Err(AppErrorDto::from(&error))
-        }
-    }
+    control.local_printers().await.map_err(|error| {
+        log::warn!(
+            "command=list_local_printers code={} message={}",
+            error.code_str(),
+            error
+        );
+        AppErrorDto::from(&error)
+    })
 }
 
 /// Replaces the shared printer selection and returns the local queues with their new state.
+///
+/// In machine mode the selection change runs through the elevated CLI helper under the
+/// `org.shaprint.control.sharing` polkit action; declining it leaves the selection untouched.
 #[tauri::command]
 pub async fn set_shared_printers(
     printers: Vec<String>,
-    sharing: State<'_, SharedSharing>,
+    control: State<'_, SharedControl>,
 ) -> Result<LocalPrintersDto, AppErrorDto> {
     let names = parse_names(&printers).map_err(|error| {
         log::warn!(
@@ -209,10 +207,10 @@ pub async fn set_shared_printers(
     })?;
 
     let count = names.len();
-    match sharing.set_shared(names).await {
+    match control.set_shared_printers(names).await {
         Ok(local) => {
             log::info!("command=set_shared_printers shared={count} code=ok");
-            Ok(LocalPrintersDto::from(local.as_slice()))
+            Ok(local)
         }
         Err(error) => {
             log::warn!(
@@ -226,14 +224,21 @@ pub async fn set_shared_printers(
 }
 
 /// Returns the certificate fingerprint clients approve and the port they connect to.
+///
+/// In machine mode this is the *daemon's* Server identity, because that is the endpoint remote
+/// clients actually reach — never this window's local certificate.
 #[tauri::command]
 pub async fn get_server_identity(
-    endpoint: State<'_, SharedEndpoint>,
+    control: State<'_, SharedControl>,
 ) -> Result<ServerIdentityDto, AppErrorDto> {
     log::info!("command=get_server_identity");
-    Ok(ServerIdentityDto {
-        fingerprint: endpoint.fingerprint().to_string(),
-        port: endpoint.port(),
+    control.server_identity().await.map_err(|error| {
+        log::warn!(
+            "command=get_server_identity code={} message={}",
+            error.code_str(),
+            error
+        );
+        AppErrorDto::from(&error)
     })
 }
 
@@ -291,26 +296,27 @@ pub async fn set_startup_enabled(
     }
 }
 
-/// Installs the native Windows queue for a printer a trusted server shares.
+/// Installs the native queue for a printer a trusted server shares.
 ///
 /// The use case checks every precondition — an approved server that currently shares the printer,
-/// and a running local proxy — before the one UAC prompt this needs.
+/// and a running local proxy — before the one elevation this needs (UAC on Windows, the
+/// `org.shaprint.control.queue` polkit action in machine mode).
 #[tauri::command]
 pub async fn install_printer_queue(
     server_address: String,
     printer_name: String,
-    queues: State<'_, SharedQueueInstallation>,
+    control: State<'_, SharedControl>,
 ) -> Result<ClientQueueDto, AppErrorDto> {
-    // The prompt and the helper run for as long as the user takes to decide, so the use case is
-    // called through its own handle rather than borrowing the managed state across the await.
-    let installation = Arc::clone(queues.inner());
-    match installation.install(&server_address, &printer_name).await {
+    match control
+        .install_client_queue(&server_address, &printer_name)
+        .await
+    {
         Ok(queue) => {
             log::info!(
                 "command=install_printer_queue queue={} code=ok",
-                queue.name()
+                queue.queue_name
             );
-            Ok(ClientQueueDto::from(&queue))
+            Ok(queue)
         }
         Err(error) => {
             log::warn!(
@@ -323,21 +329,23 @@ pub async fn install_printer_queue(
     }
 }
 
-/// Recreates an existing native Windows queue so it reloads the Server's IPP capabilities.
+/// Recreates an existing native queue so it reloads the Server's IPP capabilities.
 #[tauri::command]
 pub async fn repair_printer_queue(
     server_address: String,
     printer_name: String,
-    queues: State<'_, SharedQueueInstallation>,
+    control: State<'_, SharedControl>,
 ) -> Result<ClientQueueDto, AppErrorDto> {
-    let installation = Arc::clone(queues.inner());
-    match installation.repair(&server_address, &printer_name).await {
+    match control
+        .repair_client_queue(&server_address, &printer_name)
+        .await
+    {
         Ok(queue) => {
             log::info!(
                 "command=repair_printer_queue queue={} code=ok",
-                queue.name()
+                queue.queue_name
             );
-            Ok(ClientQueueDto::from(&queue))
+            Ok(queue)
         }
         Err(error) => {
             log::warn!(
@@ -348,6 +356,36 @@ pub async fn repair_printer_queue(
             Err(AppErrorDto::from(&error))
         }
     }
+}
+
+/// Reports which control plane this window administers: `local` (the in-process runtimes owned
+/// by this process) or `machine` (the `shaprintd` system daemon over its local socket).
+#[tauri::command]
+pub async fn get_control_mode(
+    control: State<'_, SharedControl>,
+) -> Result<ControlMode, AppErrorDto> {
+    let mode = control.mode();
+    log::info!("command=get_control_mode mode={}", mode.as_str());
+    Ok(mode)
+}
+
+/// Stops every machine service and the daemon itself; machine control plane only.
+///
+/// Runs through the elevated CLI helper under the `org.shaprint.control.stop` polkit action, the
+/// same rule `shaprintctl stop` authorizes under. Declining it leaves the daemon running.
+#[tauri::command]
+pub async fn shutdown_daemon(
+    control: State<'_, SharedControl>,
+) -> Result<RuntimeStatusDto, AppErrorDto> {
+    log::info!("command=shutdown_daemon");
+    control.shutdown_daemon().await.map_err(|error| {
+        log::warn!(
+            "command=shutdown_daemon code={} message={}",
+            error.code_str(),
+            error
+        );
+        AppErrorDto::from(&error)
+    })
 }
 
 /// Opens Windows Printers & scanners settings or control panel through a constrained desktop action.
@@ -413,21 +451,21 @@ impl Action {
 }
 
 async fn apply(
-    runtime: &RuntimeCoordinator,
+    control: &ControlPlane,
     id: &str,
     action: Action,
 ) -> Result<RuntimeStatusDto, AppError> {
     let outcome = async {
         let service = ServiceId::parse(id)?;
         match action {
-            Action::Start => runtime.start(service).await,
-            Action::Stop => runtime.stop(service).await,
+            Action::Start => control.start_service(service).await,
+            Action::Stop => control.stop_service(service).await,
         }
     }
     .await;
 
     match &outcome {
-        Ok(()) => log::info!("command={} service_id={} code=ok", action.as_str(), id),
+        Ok(_) => log::info!("command={} service_id={} code=ok", action.as_str(), id),
         Err(error) => log::warn!(
             "command={} service_id={} code={}",
             action.as_str(),
@@ -436,8 +474,7 @@ async fn apply(
         ),
     }
 
-    outcome?;
-    Ok(RuntimeStatusDto::from(&runtime.status()))
+    outcome
 }
 
 #[cfg(test)]

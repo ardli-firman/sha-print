@@ -1,9 +1,15 @@
 import { Power } from "lucide-react";
 
+import type { ControlMode } from "@/api/types";
 import type { StartupController } from "../hooks/useStartup";
 
 export interface StartupPanelProps {
   startup: StartupController;
+  /**
+   * Control plane the shell administers. In `machine` mode login startup belongs to the system
+   * daemon package, so the panel reports that instead of a per-user Windows registration.
+   */
+  controlMode?: ControlMode;
 }
 
 /**
@@ -11,8 +17,9 @@ export interface StartupPanelProps {
  * user's session so installed queues keep reaching the client proxy, and its window closes into the
  * tray rather than ending that.
  */
-export function StartupPanel({ startup }: StartupPanelProps) {
+export function StartupPanel({ startup, controlMode = "local" }: StartupPanelProps) {
   const { status, error, busy, setEnabled } = startup;
+  const isMachine = controlMode === "machine";
 
   return (
     <section className="panel feature-panel startup-panel" aria-labelledby="startup-heading">
@@ -26,7 +33,9 @@ export function StartupPanel({ startup }: StartupPanelProps) {
               Startup
             </h2>
             <p className="hint text-xs mt-1 text-muted-foreground">
-              Start ShaPrint when you sign in to Windows.
+              {isMachine
+                ? "The ShaPrint system service starts with this machine."
+                : "Start ShaPrint when you sign in to Windows."}
             </p>
           </div>
         </div>
@@ -47,8 +56,9 @@ export function StartupPanel({ startup }: StartupPanelProps) {
 
       {status && !status.supported ? (
         <p className="hint text-xs text-muted-foreground">
-          Starting ShaPrint at login is available on Windows. Closing the window ends the app on this
-          platform.
+          {isMachine
+            ? "The ShaPrint system service owns startup on this machine, so this window registers no login entry. Closing the window only closes the GUI — the Client proxy and Server keep printing."
+            : "Starting ShaPrint at login is available on Windows. Closing the window ends the app on this platform."}
         </p>
       ) : null}
 

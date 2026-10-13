@@ -1,7 +1,16 @@
-import { RefreshCw, Server } from "lucide-react";
+import { useState } from "react";
+import { Power, RefreshCw, Server } from "lucide-react";
 
 import { printRecovery } from "@/api/availability";
-import type { ServiceId, ServiceState, ServiceStatus } from "@/api/types";
+import { shutdownDaemon } from "@/api/ipc";
+import {
+  toAppError,
+  type AppError,
+  type ControlMode,
+  type ServiceId,
+  type ServiceState,
+  type ServiceStatus,
+} from "@/api/types";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -56,14 +65,37 @@ export interface SystemDiagnosticsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   runtime: RuntimeStatusController;
+  /**
+   * Control plane the shell administers. In `machine` mode the services belong to the system
+   * daemon, so the dialog also offers stopping the daemon itself and explains its recovery.
+   */
+  controlMode?: ControlMode;
 }
 
 export function SystemDiagnosticsDialog({
   open,
   onOpenChange,
   runtime,
+  controlMode = "local",
 }: SystemDiagnosticsDialogProps) {
   const { status, error, busy, unreachable, refresh, start, stop, dismissError } = runtime;
+  const [daemonBusy, setDaemonBusy] = useState(false);
+  const [daemonError, setDaemonError] = useState<AppError | null>(null);
+  const isMachine = controlMode === "machine";
+
+  const stopDaemon = async () => {
+    setDaemonBusy(true);
+    setDaemonError(null);
+    try {
+      await shutdownDaemon();
+      // The status stream reports the stopped daemon on its next poll.
+    } catch (cause) {
+      // A declined polkit prompt lands here with `not-authorized`; state was not touched.
+      setDaemonError(toAppError(cause));
+    } finally {
+      setDaemonBusy(false);
+    }
+  };
 
   return (
     <Dialog
@@ -93,11 +125,25 @@ export function SystemDiagnosticsDialog({
           </div>
         ) : null}
 
+        {daemonError ? (
+          <div className="diagnostic-error" role="alert">
+            <div>
+              <span className="font-mono font-bold text-destructive mr-2">{daemonError.code}</span>
+              <span>{daemonError.message}</span>
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => setDaemonError(null)}>
+              Dismiss
+            </Button>
+          </div>
+        ) : null}
+
         {unreachable ? (
           <div className="runtime-unreachable" role="alert">
-            <strong>Runtime unavailable</strong>
+            <strong>{isMachine ? "Machine daemon unavailable" : "Runtime unavailable"}</strong>
             <p className="text-xs text-muted-foreground mt-1">
-              The ShaPrint runtime is not responding. Reopen the desktop app to reconnect.
+              {isMachine
+                ? "The machine daemon is not responding, so its print services are stopped. Start the system service (sudo systemctl start shaprintd), then choose Refresh All."
+                : "The ShaPrint runtime is not responding. Reopen the desktop app to reconnect."}
             </p>
           </div>
         ) : null}
@@ -177,6 +223,48 @@ export function SystemDiagnosticsDialog({
               );
             })}
           </div>
+        ) : null}
+
+        {isMachine ? (
+          <section
+            className="diagnostic-service service"
+            data-service="machine-daemon"
+            aria-labelledby="diagnostic-daemon"
+          >
+            <header className="service-header">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Power size={15} className="text-muted-foreground" aria-hidden="true" />
+                  <h4 id="diagnostic-daemon" className="font-semibold text-sm">
+                    Machine daemon
+                  </h4>
+                </div>
+                <p className="service-description">
+                  Runs the Client proxy and Server sharing for this whole machine (shaprintd).
+                </p>
+              </div>
+              <Badge variant="muted" role="status">
+                System service
+              </Badge>
+            </header>
+
+            <p className="service-detail">
+              Stopping the daemon stops printing for every user on this machine. Start it again
+              with <strong>sudo systemctl start shaprintd</strong>.
+            </p>
+
+            <div className="service-actions">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs px-3"
+                disabled={daemonBusy}
+                onClick={() => void stopDaemon()}
+              >
+                {daemonBusy ? "Stopping…" : "Stop ShaPrint daemon"}
+              </Button>
+            </div>
+          </section>
         ) : null}
       </div>
 

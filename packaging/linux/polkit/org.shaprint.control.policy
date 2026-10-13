@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<!--
+  Narrow polkit actions for ShaPrint desktop machine mutations (ADR 0018).
+
+  The desktop GUI runs `pkexec /usr/bin/shaprintctl <command> …`; pkexec selects exactly one of
+  these actions because `org.freedesktop.policykit.exec.path` pins the program and the `argv1`
+  annotation pins the command word. Each administrative area therefore authorizes under its own
+  rule instead of a blanket "run anything as root". The secret Network Channel value is passed on
+  the helper's standard input, never as an argument.
+-->
+<policyconfig>
+  <vendor>ShaPrint</vendor>
+  <vendor_url>https://github.com/ardli-firman/sha-print</vendor_url>
+
+  <action id="org.shaprint.control.start">
+    <description>start ShaPrint print services</description>
+    <message>Authentication is required to start ShaPrint print services</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/shaprintctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">start</annotate>
+  </action>
+
+  <action id="org.shaprint.control.stop">
+    <description>stop ShaPrint print services and the machine daemon</description>
+    <message>Authentication is required to stop ShaPrint print services</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/shaprintctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">stop</annotate>
+  </action>
+
+  <!-- The Network Channel is a credential: every change re-authenticates. -->
+  <action id="org.shaprint.control.network-channel">
+    <description>change the Network Channel</description>
+    <message>Authentication is required to change the ShaPrint Network Channel</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/shaprintctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">network-channel</annotate>
+  </action>
+
+  <action id="org.shaprint.control.trust">
+    <description>change Trusted Servers</description>
+    <message>Authentication is required to change ShaPrint Trusted Servers</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/shaprintctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">trust</annotate>
+  </action>
+
+  <action id="org.shaprint.control.queue">
+    <description>install or repair a Client queue</description>
+    <message>Authentication is required to install or repair a ShaPrint Client queue</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/shaprintctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">queue</annotate>
+  </action>
+
+  <action id="org.shaprint.control.sharing">
+    <description>change the shared printers</description>
+    <message>Authentication is required to change the shared printers</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/shaprintctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">sharing</annotate>
+  </action>
+</policyconfig>
