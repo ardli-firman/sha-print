@@ -8,12 +8,16 @@
 //! cannot (ADR 0001 keeps Linux a later phase), and the URI builder stays shared so the tests can
 //! check that an installed queue points exactly where the proxy listens.
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+pub mod cups;
+#[cfg(not(any(windows, unix)))]
 mod unsupported;
 #[cfg(any(windows, test))]
 mod windows;
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+pub use cups::CupsQueueInstaller;
+#[cfg(not(any(windows, unix)))]
 pub use unsupported::UnsupportedQueueInstaller;
 #[cfg(any(windows, test))]
 pub use windows::WindowsQueueInstaller;
@@ -36,9 +40,52 @@ pub fn platform_installer() -> Arc<dyn QueueInstaller> {
     Arc::new(WindowsQueueInstaller::new())
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+pub fn platform_installer() -> Arc<dyn QueueInstaller> {
+    Arc::new(CupsQueueInstaller::new())
+}
+
+#[cfg(not(any(windows, unix)))]
 pub fn platform_installer() -> Arc<dyn QueueInstaller> {
     Arc::new(UnsupportedQueueInstaller::new())
+}
+
+/// Builds the platform queue installer targeting `proxy_port` (or the default proxy port when `0`
+/// is passed before binding).
+#[cfg(unix)]
+pub fn platform_installer_for_port(proxy_port: u16) -> Arc<dyn QueueInstaller> {
+    let port = if proxy_port == 0 {
+        CLIENT_PROXY_DEFAULT_PORT
+    } else {
+        proxy_port
+    };
+    Arc::new(CupsQueueInstaller::with_proxy_authority(format!(
+        "127.0.0.1:{port}"
+    )))
+}
+
+#[cfg(unix)]
+pub fn platform_installer_with_endpoint(
+    proxy_port: u16,
+    cups_endpoint: Option<crate::adapters::printers::cups::CupsServerEndpoint>,
+) -> Arc<dyn QueueInstaller> {
+    let port = if proxy_port == 0 {
+        CLIENT_PROXY_DEFAULT_PORT
+    } else {
+        proxy_port
+    };
+    let authority = format!("127.0.0.1:{port}");
+    match cups_endpoint {
+        Some(ep) => Arc::new(CupsQueueInstaller::with_endpoint_and_authority(
+            ep, authority,
+        )),
+        None => Arc::new(CupsQueueInstaller::with_proxy_authority(authority)),
+    }
+}
+
+#[cfg(not(unix))]
+pub fn platform_installer_for_port(_proxy_port: u16) -> Arc<dyn QueueInstaller> {
+    platform_installer()
 }
 
 /// The authority installed queues send IPP requests to: the local client proxy on loopback.

@@ -1,12 +1,12 @@
 //! The media sizes ShaPrint advertises and maps into Windows printer settings.
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, unix, test))]
 const DIMENSION_TOLERANCE_TENTHS_MM: i16 = 5;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, unix, test))]
 const CUSTOM_MIN_TENTHS_MM: i16 = 500;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, unix, test))]
 const CUSTOM_MAX_SHORT_TENTHS_MM: i16 = 3302;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, unix, test))]
 const CUSTOM_MAX_LONG_TENTHS_MM: i16 = 4500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,7 +58,7 @@ const fn media(
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, unix, test))]
 pub(crate) fn media_spec(value: &str) -> Option<MediaSpec> {
     let canonical = match value {
         "f4" | "F4" | "folio" | "Folio" => "om_folio_210x330mm",
@@ -83,7 +83,7 @@ pub(crate) fn media_spec(value: &str) -> Option<MediaSpec> {
     })
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, unix, test))]
 pub(crate) fn media_for_dimensions(short: i16, long: i16) -> Option<MediaSpec> {
     MEDIA_CATALOG.iter().find_map(|spec| {
         ((short - spec.short_tenths_mm).abs() <= DIMENSION_TOLERANCE_TENTHS_MM
@@ -92,7 +92,7 @@ pub(crate) fn media_for_dimensions(short: i16, long: i16) -> Option<MediaSpec> {
     })
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, unix, test))]
 pub(crate) fn custom_dimensions_are_supported(short: i16, long: i16) -> bool {
     short >= CUSTOM_MIN_TENTHS_MM
         && long >= CUSTOM_MIN_TENTHS_MM
@@ -100,7 +100,7 @@ pub(crate) fn custom_dimensions_are_supported(short: i16, long: i16) -> bool {
         && long <= CUSTOM_MAX_LONG_TENTHS_MM
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, unix, test))]
 fn parse_media_dimensions(value: &str) -> Option<(i16, i16)> {
     let (dimensions, scale) = if let Some(value) = value.strip_suffix("mm") {
         (value.strip_suffix("_100th-").unwrap_or(value), 10.0)

@@ -140,6 +140,71 @@ impl ClientQueueRequest {
     pub fn printer(&self) -> &PrinterName {
         &self.printer
     }
+
+    /// Returns a deterministic CUPS-safe destination identifier (`<= 127` ASCII characters, no
+    /// spaces, `/`, `#`, or control characters) while retaining `queue_name()` as the
+    /// human-readable description.
+    pub fn cups_destination_name(&self) -> String {
+        cups_destination_for(&self.printer, &self.server_address)
+    }
+}
+
+/// Derives a deterministic CUPS-safe destination name for `printer` on `server_address`.
+///
+/// Format: `ShaPrint_<printer_slug>_<address_label>_<8-hex-digest>` (bounded to 127 characters).
+/// The trailing SHA-256 prefix guarantees two distinct `(server_address, printer)` pairs never
+/// collide even when their sanitized slugs match.
+pub fn cups_destination_for(printer: &PrinterName, server_address: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let address = server_address.trim();
+    let mut hasher = Sha256::new();
+    hasher.update(b"shaprint-cups-queue:");
+    hasher.update(address.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(printer.as_str().as_bytes());
+    let digest = hasher.finalize();
+    let short_hash = format!(
+        "{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3]
+    );
+
+    let addr_slug: String = address_label(address).chars().take(40).collect();
+    let addr_slug = addr_slug.trim_matches('-');
+    let addr_slug = if addr_slug.is_empty() {
+        "server"
+    } else {
+        addr_slug
+    };
+
+    let raw_printer_slug = sanitize_cups_token(printer.as_str());
+    let printer_slug: String = raw_printer_slug.chars().take(60).collect();
+    let printer_slug = printer_slug.trim_matches('_');
+    let printer_slug = if printer_slug.is_empty() {
+        "Printer"
+    } else {
+        printer_slug
+    };
+
+    format!("ShaPrint_{printer_slug}_{addr_slug}_{short_hash}")
+}
+
+fn sanitize_cups_token(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut last_underscore = false;
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.') {
+            out.push(ch);
+            last_underscore = false;
+        } else if !last_underscore && !out.is_empty() {
+            out.push('_');
+            last_underscore = true;
+        }
+    }
+    while out.ends_with('_') {
+        out.pop();
+    }
+    out
 }
 
 /// One printer queue reported by the platform spooler, with its queue name and port/destination.
@@ -247,9 +312,11 @@ impl SpoolerRecord {
                         return SpoolerRecordClassification::AmbiguousClientQueue;
                     };
 
+                    let expected_cups_name = cups_destination_for(&printer_name, &server_decoded);
                     let base_name =
                         strip_trailing_copy_suffix(name_trimmed).unwrap_or(name_trimmed);
-                    if expected_queue_name.as_str() == base_name {
+                    if expected_queue_name.as_str() == base_name || expected_cups_name == base_name
+                    {
                         let Ok(actual_queue_name) = ClientQueueName::parse(name_trimmed) else {
                             return SpoolerRecordClassification::AmbiguousClientQueue;
                         };
@@ -844,6 +911,59 @@ mod tests {
         );
         assert_eq!(
             record.classify(authority),
+            SpoolerRecordClassification::AmbiguousClientQueue
+        );
+    }
+
+    #[test]
+    fn cups_destination_name_is_deterministic_cups_safe_and_collision_free() {
+        let req1 =
+            ClientQueueRequest::new("10.0.0.5:48631", printer("Office Printer #1")).expect("valid");
+        let req2 =
+            ClientQueueRequest::new("10.0.0.5:48631", printer("Office Printer #1")).expect("valid");
+        let req_other_printer =
+            ClientQueueRequest::new("10.0.0.5:48631", printer("Office/Printer/1")).expect("valid");
+        let req_other_server =
+            ClientQueueRequest::new("10.0.0.6:48631", printer("Office Printer #1")).expect("valid");
+
+        let dest = req1.cups_destination_name();
+        assert_eq!(dest, req2.cups_destination_name());
+        assert_ne!(dest, req_other_printer.cups_destination_name());
+        assert_ne!(dest, req_other_server.cups_destination_name());
+
+        assert!(dest.starts_with("ShaPrint_Office_Printer_1_10.0.0.5-48631_"));
+        assert!(dest.len() <= 127);
+        assert!(dest
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')));
+    }
+
+    #[test]
+    fn spooler_record_recognises_cups_client_queue_and_rejects_mismatched_cups_destination() {
+        let authority = "127.0.0.1:48632";
+        let req =
+            ClientQueueRequest::new("10.0.0.5:48631", printer("Office Printer")).expect("valid");
+        let cups_dest = req.cups_destination_name();
+
+        let valid_cups = SpoolerRecord::new(
+            &cups_dest,
+            "ipp://127.0.0.1:48632/ipp/print/10.0.0.5%3A48631/Office%20Printer",
+        );
+        match valid_cups.classify(authority) {
+            SpoolerRecordClassification::RecognisedClientQueue(q) => {
+                assert_eq!(q.queue_name().as_str(), cups_dest);
+                assert_eq!(q.server_address(), "10.0.0.5:48631");
+                assert_eq!(q.printer_name().as_str(), "Office Printer");
+            }
+            other => panic!("expected RecognisedClientQueue, got {other:?}"),
+        }
+
+        let tampered_cups = SpoolerRecord::new(
+            "ShaPrint_Office_Printer_10.0.0.5-48631_deadbeef",
+            "ipp://127.0.0.1:48632/ipp/print/10.0.0.5%3A48631/Office%20Printer",
+        );
+        assert_eq!(
+            tampered_cups.classify(authority),
             SpoolerRecordClassification::AmbiguousClientQueue
         );
     }

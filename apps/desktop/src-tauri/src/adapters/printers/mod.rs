@@ -1,7 +1,10 @@
 //! Local printer queue enumeration and job submission.
 //!
-//! Windows adapters use the spooler; other platforms report unsupported in this Windows MVP.
+//! Windows adapters use the spooler; Linux adapters use `libcups`; other platforms report
+//! unsupported.
 
+#[cfg(unix)]
+pub mod cups;
 #[cfg(any(windows, test))]
 mod dev_mode;
 pub(crate) mod media;
@@ -15,6 +18,8 @@ mod unsupported;
 mod windows;
 #[cfg(windows)]
 mod windows_render;
+#[cfg(unix)]
+pub use cups::{CupsPrintJobSubmitter, CupsPrinterCatalog, CupsSpoolerReader};
 #[cfg(not(windows))]
 pub use unsupported::UnsupportedPrintJobSubmitter;
 #[cfg(windows)]

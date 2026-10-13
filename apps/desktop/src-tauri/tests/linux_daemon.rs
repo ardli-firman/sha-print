@@ -244,7 +244,17 @@ async fn daemon_controls_runtimes_through_coordinator_and_shutdown_releases_all_
         .expect("daemon finishes shutdown cleanly");
 
     assert!(!socket_path.exists(), "control socket file is removed");
-    let rebound_proxy = TcpListener::bind(proxy_addr).expect("proxy TCP listener was released");
+    let rebound_proxy = {
+        let mut bound = None;
+        for _ in 0..20 {
+            if let Ok(listener) = TcpListener::bind(proxy_addr) {
+                bound = Some(listener);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        bound.expect("proxy TCP listener was released")
+    };
     let rebound_ipps = TcpListener::bind(ipps_addr).expect("IPPS TCP listener was released");
     let rebound_udp = std::net::UdpSocket::bind(("0.0.0.0", udp_port))
         .expect("discovery UDP listener was released");
@@ -357,7 +367,7 @@ async fn smoke_launches_shaprintd_observes_status_via_shaprintctl_and_stops_clea
         .spawn()
         .expect("spawns shaprintd binary");
 
-    // Wait until `shaprintctl status` succeeds against the live daemon socket.
+    // Wait until `shaprintctl status` succeeds and autostarted `client-proxy` is running.
     let deadline = Instant::now() + Duration::from_secs(10);
     let status_stdout = loop {
         if let Some(exit) = daemon.try_wait().expect("checks daemon process") {
@@ -367,12 +377,13 @@ async fn smoke_launches_shaprintd_observes_status_via_shaprintctl_and_stops_clea
             .args(["--socket", &socket_path.to_string_lossy(), "status"])
             .output()
             .expect("runs shaprintctl status");
-        if output.status.success() {
-            break String::from_utf8_lossy(&output.stdout).into_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        if output.status.success() && stdout.contains("client-proxy: running") {
+            break stdout;
         }
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for shaprintctl status; last stderr: {}",
+            "timed out waiting for shaprintctl status; last stdout: {stdout}; last stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -1251,6 +1262,956 @@ async fn shaprintctl_cli_end_to_end_trust_reapproval_restart_and_zero_leakage() 
         .await
         .expect("stops restricted daemon");
     remote_v2.shutdown().await.expect("stops remote v2");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn almalinux_client_queue_and_server_cups_sharing_roundtrip_across_restart_and_firewalld() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use shaprint_desktop::adapters::identity::{FileIdentityStore, IdentityStore};
+    use shaprint_desktop::application::{
+        DuplexMode, PrintJob, PrintJobSubmitter, PrintOrientation, PrintSettings,
+    };
+    use shaprint_desktop::domain::{ClientQueueRequest, PrinterName};
+
+    if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
+        return;
+    }
+
+    let root = temporary_directory("cups-e2e");
+    std::fs::create_dir_all(&root).expect("creates e2e root");
+
+    // Start an isolated unprivileged `cupsd` instance for both the Server and Client queues.
+    let cups_dir = root.join("cups");
+    let etc_cups = cups_dir.join("etc");
+    let var_spool = cups_dir.join("spool");
+    let var_spool_tmp = var_spool.join("tmp");
+    let var_cache = cups_dir.join("cache");
+    let var_log = cups_dir.join("log");
+    let var_run = cups_dir.join("run");
+    let state_certs = var_run.join("certs");
+    let server_bin = cups_dir.join("serverbin");
+    let backend_dir = server_bin.join("backend");
+    for d in [
+        &etc_cups,
+        &var_spool,
+        &var_spool_tmp,
+        &var_cache,
+        &var_log,
+        &var_run,
+        &state_certs,
+        &backend_dir,
+    ] {
+        std::fs::create_dir_all(d).expect("creates cups dir");
+    }
+    if Path::new("/usr/lib/cups").exists() {
+        for entry in std::fs::read_dir("/usr/lib/cups").expect("reads /usr/lib/cups") {
+            let entry = entry.expect("entry");
+            let name = entry.file_name();
+            if name != "backend" {
+                let _ = std::os::unix::fs::symlink(entry.path(), server_bin.join(&name));
+            }
+        }
+        for b in ["ipp", "usb", "socket", "lpd"] {
+            let src = Path::new("/usr/lib/cups/backend").join(b);
+            if src.exists() {
+                let dst = backend_dir.join(b);
+                std::fs::copy(&src, &dst).expect("copies backend");
+                std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))
+                    .expect("chmod 0755");
+            }
+        }
+        let _ = std::os::unix::fs::symlink("ipp", backend_dir.join("http"));
+        let _ = std::os::unix::fs::symlink("ipp", backend_dir.join("ipps"));
+        let captured_usb_file_for_backend = cups_dir.join("usb-captured.pwg");
+        let usb_backend = backend_dir.join("usbcapture");
+        std::fs::write(
+            &usb_backend,
+            format!(
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -eq 0 ]]; then
+  echo 'direct usbcapture "Unknown" "Controlled USB Capture Backend"'
+  exit 0
+fi
+if [[ -n "${{6:-}}" && -f "${{6}}" ]]; then
+  cat "${{6}}" > "{out}"
+else
+  cat > "{out}"
+fi
+exit 0
+"#,
+                out = captured_usb_file_for_backend.display(),
+            ),
+        )
+        .expect("writes usbcapture backend");
+        std::fs::set_permissions(&usb_backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod 0755 usbcapture");
+    }
+
+    let cups_port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds ephemeral port");
+        listener.local_addr().expect("local addr").port()
+    };
+    let cups_sock = var_run.join("cups.sock");
+    let pid_file = var_run.join("cupsd.pid");
+    std::fs::write(
+        etc_cups.join("cups-files.conf"),
+        format!(
+            "FileDevice Yes\nServerRoot {etc}\nServerBin {bin}\nStateDir {run}\nRequestRoot {spool}\nTempDir {tmp}\nCacheDir {cache}\nAccessLog {log}/access_log\nErrorLog {log}/error_log\nPageLog {log}/page_log\nPidFile {pid}\n",
+            etc = etc_cups.display(),
+            bin = server_bin.display(),
+            run = var_run.display(),
+            spool = var_spool.display(),
+            tmp = var_spool_tmp.display(),
+            cache = var_cache.display(),
+            log = var_log.display(),
+            pid = pid_file.display(),
+        ),
+    )
+    .expect("writes cups-files.conf");
+    std::fs::write(
+        etc_cups.join("cupsd.conf"),
+        format!(
+            "LogLevel info\nListen 127.0.0.1:{port}\nListen {sock}\nDefaultAuthType None\nWebInterface No\nBrowsing Off\nMaxCopies 999\n<Location />\n  Order allow,deny\n  Allow all\n</Location>\n<Location /admin>\n  Order allow,deny\n  Allow all\n</Location>\n<Location /admin/conf>\n  Order allow,deny\n  Allow all\n</Location>\n<Policy default>\n  <Limit All>\n    Order allow,deny\n    Allow all\n  </Limit>\n</Policy>\n",
+            port = cups_port,
+            sock = cups_sock.display(),
+        ),
+    )
+    .expect("writes cupsd.conf");
+
+    let mut cupsd = Command::new("/usr/sbin/cupsd")
+        .arg("-f")
+        .arg("-c")
+        .arg(etc_cups.join("cupsd.conf"))
+        .arg("-s")
+        .arg(etc_cups.join("cups-files.conf"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawns cupsd");
+
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(("127.0.0.1", cups_port)).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let cups_server = format!("127.0.0.1:{cups_port}");
+    let cups_endpoint =
+        shaprint_desktop::adapters::printers::cups::CupsServerEndpoint::parse(&cups_server);
+
+    // Create two real CUPS queues for the AlmaLinux Server:
+    // 1) A driverless IPP queue (`Driverless_Office`) backed by `file:/dev/null`
+    // 2) A local/USB controlled queue (`USB_Receipt_Printer`) backed by a capture file
+    let captured_usb_file = cups_dir.join("usb-captured.pwg");
+    for (name, uri) in [
+        ("Driverless_Office", "file:/dev/null".to_owned()),
+        ("USB_Receipt_Printer", "usbcapture:/receipt".to_owned()),
+    ] {
+        let out = Command::new("/usr/sbin/lpadmin")
+            .env("CUPS_SERVER", &cups_server)
+            .args(["-h", &cups_server, "-p", name, "-E", "-v", &uri])
+            .output()
+            .expect("creates server queue");
+        assert!(
+            out.status.success(),
+            "lpadmin failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    // Create a controlled firewall-cmd script to verify #128 firewall checks and idempotent setup.
+    let fw_state = root.join("fw_ports.txt");
+    let fw_deny_flag = root.join("fw_deny");
+    std::fs::write(&fw_deny_flag, "1").expect("initially deny firewall setup");
+    let fw_script = root.join("firewall-cmd");
+    std::fs::write(
+        &fw_script,
+        format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+STATE="{state}"
+DENY_FILE="{deny}"
+touch "$STATE"
+case "${{1:-}}" in
+  --state)
+    echo "running"
+    exit 0
+    ;;
+  --query-port=*)
+    port="${{1#--query-port=}}"
+    if grep -Fxq "runtime:$port" "$STATE"; then
+      echo "yes"
+      exit 0
+    else
+      echo "no"
+      exit 1
+    fi
+    ;;
+  --add-port=*)
+    if [[ "$(cat "$DENY_FILE")" == "1" ]]; then
+      echo "Authorization failed." >&2
+      exit 114
+    fi
+    port="${{1#--add-port=}}"
+    grep -Fxq "runtime:$port" "$STATE" || echo "runtime:$port" >> "$STATE"
+    echo "success"
+    exit 0
+    ;;
+  --permanent)
+    if [[ "$(cat "$DENY_FILE")" == "1" ]]; then
+      echo "Authorization failed." >&2
+      exit 114
+    fi
+    shift
+    for arg in "$@"; do
+      if [[ "$arg" == --add-port=* ]]; then
+        port="${{arg#--add-port=}}"
+        grep -Fxq "permanent:$port" "$STATE" || echo "permanent:$port" >> "$STATE"
+      fi
+    done
+    echo "success"
+    exit 0
+    ;;
+esac
+"#,
+            state = fw_state.display(),
+            deny = fw_deny_flag.display(),
+        ),
+    )
+    .expect("writes fake firewall-cmd");
+    std::fs::set_permissions(&fw_script, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod +x firewall-cmd");
+
+    // Start a simulated Windows Server (`IppsServer`) that records every forwarded print job and its
+    // PrintSettings so we can test #127 (AlmaLinux Client -> Windows Server) end to end.
+    struct RecordedJob {
+        printer: String,
+        settings: PrintSettings,
+        bytes: Vec<u8>,
+    }
+    struct RecordingWindowsSubmitter {
+        jobs: Arc<Mutex<Vec<RecordedJob>>>,
+    }
+    #[async_trait::async_trait]
+    impl PrintJobSubmitter for RecordingWindowsSubmitter {
+        async fn submit(
+            &self,
+            printer: &PrinterName,
+            job: PrintJob,
+        ) -> Result<u32, shaprint_desktop::domain::AppError> {
+            self.jobs.lock().expect("locks jobs").push(RecordedJob {
+                printer: printer.as_str().to_owned(),
+                settings: job.settings().clone(),
+                bytes: job.document().to_vec(),
+            });
+            Ok(77)
+        }
+    }
+
+    let secret = format!("chan-e2e-{}", std::process::id());
+    let win_jobs = Arc::new(Mutex::new(Vec::<RecordedJob>::new()));
+    let win_identity = Arc::new(
+        FileIdentityStore::new(root.join("win-server-id"))
+            .load_or_create()
+            .expect("generates win server identity"),
+    );
+    let win_fp = win_identity.fingerprint().to_string();
+    let win_catalog: Arc<dyn shaprint_desktop::application::LocalPrinterCatalog> =
+        support::FakeCatalog::new(&["Windows Office Laser"]);
+    let win_sharing = Arc::new(Sharing::new(win_catalog));
+    win_sharing
+        .set_shared(printer_names(&["Windows Office Laser"]))
+        .await
+        .expect("selects shared printer on windows server");
+    let win_channel = Arc::new(NetworkChannel::in_memory());
+    win_channel
+        .configure_sync(&secret)
+        .expect("configures win channel");
+    let win_port = {
+        let l = TcpListener::bind("127.0.0.1:0").expect("binds win port");
+        l.local_addr().expect("addr").port()
+    };
+    let win_endpoint = Arc::new(IppsServer::new(
+        win_port,
+        win_identity,
+        Arc::clone(&win_channel),
+        Arc::new(RecordingWindowsSubmitter {
+            jobs: Arc::clone(&win_jobs),
+        }),
+        Arc::new(PrintFailures::new()),
+        Arc::new(PrintJobTracker::new()),
+    ));
+    let win_service = Arc::new(ServerSharingService::new(
+        win_sharing,
+        win_endpoint,
+        Arc::new(MdnsAdvertiser::on(vec![0])),
+        support::allowed_inbound_setup(),
+        win_channel as Arc<dyn shaprint_desktop::application::ChannelState>,
+    ));
+    let win_runtime = Arc::new(RuntimeCoordinator::new(vec![win_service]));
+    win_runtime
+        .start(shaprint_desktop::domain::ServiceId::ServerSharing)
+        .await
+        .expect("starts win server");
+    let win_address = format!("127.0.0.1:{win_port}");
+
+    // Launch the AlmaLinux `shaprintd` daemon with dedicated ports.
+    let proxy_port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("binds proxy port");
+        l.local_addr().expect("addr").port()
+    };
+    let linux_server_port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("binds server port");
+        l.local_addr().expect("addr").port()
+    };
+    let state_dir = root.join("var-lib-shaprint");
+    let etc_dir = root.join("etc-shaprint");
+    let socket_path = root.join("run/shaprintd.sock");
+    let socket_str = socket_path.to_string_lossy().into_owned();
+    let ctl_bin = env!("CARGO_BIN_EXE_shaprintctl");
+
+    let daemon = DaemonServer::launch(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_config_dir(&etc_dir)
+            .with_cups_endpoint(cups_endpoint.clone())
+            .with_firewall_program(&fw_script)
+            .with_ports(RuntimePorts {
+                proxy_port,
+                server_port: linux_server_port,
+                discovery_ports: vec![0],
+            }),
+    )
+    .await
+    .expect("launches shaprintd");
+
+    // Configure the machine Network Channel via `shaprintctl`.
+    let mut set_nc = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "network-channel", "set", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawns network-channel set");
+    set_nc
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(format!("{secret}\n").as_bytes())
+        .expect("writes secret");
+    assert!(set_nc.wait_with_output().expect("waits").status.success());
+
+    // === PART A: Issue #127 (AlmaLinux Client -> Windows Server) ===
+    // 1. Installing a queue before trusting the server fails with `server-untrusted`.
+    let untrusted_install = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args([
+            "--socket",
+            &socket_str,
+            "queue",
+            "install",
+            &win_address,
+            "Windows Office Laser",
+        ])
+        .output()
+        .expect("runs untrusted queue install");
+    assert!(!untrusted_install.status.success());
+    assert!(
+        String::from_utf8_lossy(&untrusted_install.stderr).contains("code=server-untrusted"),
+        "stderr was: {}",
+        String::from_utf8_lossy(&untrusted_install.stderr)
+    );
+
+    // 2. Inspect and approve the Windows Server fingerprint.
+    let approve = Command::new(ctl_bin)
+        .args([
+            "--socket",
+            &socket_str,
+            "trust",
+            "approve",
+            &win_address,
+            "--fingerprint",
+            &win_fp,
+        ])
+        .output()
+        .expect("approves windows server");
+    assert!(approve.status.success());
+
+    // 3. Create a non-ShaPrint queue with the exact derived CUPS destination name to verify
+    //    collision protection (`existing-queue-conflict`).
+    let expected_req = ClientQueueRequest::new(
+        &win_address,
+        PrinterName::parse("Windows Office Laser").expect("printer"),
+    )
+    .expect("request");
+    let derived_cups_name = expected_req.cups_destination_name();
+    Command::new("/usr/sbin/lpadmin")
+        .env("CUPS_SERVER", &cups_server)
+        .args([
+            "-h",
+            &cups_server,
+            "-p",
+            &derived_cups_name,
+            "-E",
+            "-v",
+            "file:/dev/null",
+        ])
+        .output()
+        .expect("creates conflicting queue");
+
+    let conflict_install = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args([
+            "--socket",
+            &socket_str,
+            "queue",
+            "install",
+            &win_address,
+            "Windows Office Laser",
+        ])
+        .output()
+        .expect("runs conflicting queue install");
+    assert!(!conflict_install.status.success());
+    let conflict_stderr = String::from_utf8_lossy(&conflict_install.stderr);
+    assert!(
+        conflict_stderr.contains("code=invalid-state")
+            && conflict_stderr.contains("already exists"),
+        "stderr was: {conflict_stderr}"
+    );
+
+    // Remove the conflicting queue and install the ShaPrint Client queue idempotently.
+    Command::new("/usr/sbin/lpadmin")
+        .env("CUPS_SERVER", &cups_server)
+        .args(["-h", &cups_server, "-x", &derived_cups_name])
+        .output()
+        .expect("removes conflicting queue");
+
+    let first_install = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args([
+            "--socket",
+            &socket_str,
+            "queue",
+            "install",
+            &win_address,
+            "Windows Office Laser",
+        ])
+        .output()
+        .expect("installs client queue");
+    assert!(
+        first_install.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&first_install.stderr)
+    );
+
+    let second_install = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args([
+            "--socket",
+            &socket_str,
+            "queue",
+            "install",
+            &win_address,
+            "Windows Office Laser",
+        ])
+        .output()
+        .expect("reinstalls client queue idempotently");
+    assert!(second_install.status.success());
+
+    let queue_list_out = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args(["--socket", &socket_str, "queue", "list"])
+        .output()
+        .expect("lists client queues");
+    assert!(queue_list_out.status.success());
+    assert!(
+        String::from_utf8_lossy(&queue_list_out.stdout).contains("Windows Office Laser"),
+        "stdout: {}",
+        String::from_utf8_lossy(&queue_list_out.stdout)
+    );
+
+    // 4. Submit a real print job with media (iso_a4_210x297mm), color, duplex (two-sided-long-edge),
+    //    landscape orientation, copies=2, and a spoofed local `network-channel` attribute through
+    //    the installed CUPS queue URI, and verify the proxy strips the spoofed credential, attaches
+    //    the protected machine credential, and forwards all settings to the Windows Server.
+    let build_pwg_raster = || {
+        let mut raster = b"RaS2".to_vec();
+        let mut header = vec![0u8; 1796];
+        for (offset, value) in [
+            (276usize, 300u32),
+            (280, 300),
+            (372, 1),
+            (376, 1),
+            (384, 8),
+            (388, 8),
+            (392, 1),
+            (400, 18),
+            (420, 1),
+        ] {
+            header[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        raster.extend(header);
+        raster.extend([0u8, 0u8, 255u8]);
+        raster
+    };
+
+    let build_ipp_print_job = |uri: &str, channel: Option<&str>| {
+        let mut body = vec![0x02, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x42, 0x01];
+        let push_attr = |buf: &mut Vec<u8>, tag: u8, name: &str, val: &[u8]| {
+            buf.push(tag);
+            buf.extend_from_slice(&(name.len() as u16).to_be_bytes());
+            buf.extend_from_slice(name.as_bytes());
+            buf.extend_from_slice(&(val.len() as u16).to_be_bytes());
+            buf.extend_from_slice(val);
+        };
+        push_attr(&mut body, 0x47, "attributes-charset", b"utf-8");
+        push_attr(&mut body, 0x48, "attributes-natural-language", b"en");
+        push_attr(&mut body, 0x45, "printer-uri", uri.as_bytes());
+        push_attr(&mut body, 0x42, "job-name", b"Linux Client Report");
+        push_attr(&mut body, 0x49, "document-format", b"image/pwg-raster");
+        if let Some(ch) = channel {
+            push_attr(&mut body, 0x42, "network-channel", ch.as_bytes());
+        }
+        // Job attributes group (0x02): media, print-color-mode, sides, copies, orientation-requested
+        body.push(0x02);
+        push_attr(&mut body, 0x44, "media", b"iso_a4_210x297mm");
+        push_attr(&mut body, 0x44, "print-color-mode", b"color");
+        push_attr(&mut body, 0x44, "sides", b"two-sided-long-edge");
+        push_attr(&mut body, 0x21, "copies", &2i32.to_be_bytes());
+        push_attr(
+            &mut body,
+            0x23,
+            "orientation-requested",
+            &4i32.to_be_bytes(),
+        );
+        body.push(0x03);
+        body.extend_from_slice(&build_pwg_raster());
+        body
+    };
+
+    let post_ipp = |host_port: &str, path: &str, body: Vec<u8>, tls: bool| {
+        let host_port = host_port.to_owned();
+        let path = path.to_owned();
+        async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let req = format!(
+                "POST {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            if !tls {
+                let mut stream = tokio::net::TcpStream::connect(&host_port)
+                    .await
+                    .expect("connects http");
+                stream.write_all(req.as_bytes()).await.expect("writes head");
+                stream.write_all(&body).await.expect("writes body");
+                let mut resp = Vec::new();
+                stream.read_to_end(&mut resp).await.expect("reads resp");
+                let pos = resp.windows(4).position(|w| w == b"\r\n\r\n").expect("hdr") + 4;
+                u16::from_be_bytes([resp[pos + 2], resp[pos + 3]])
+            } else {
+                #[derive(Debug)]
+                struct AcceptAnyServerCert;
+                impl rustls::client::danger::ServerCertVerifier for AcceptAnyServerCert {
+                    fn verify_server_cert(
+                        &self,
+                        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+                        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+                        _server_name: &rustls::pki_types::ServerName<'_>,
+                        _ocsp_response: &[u8],
+                        _now: rustls::pki_types::UnixTime,
+                    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error>
+                    {
+                        Ok(rustls::client::danger::ServerCertVerified::assertion())
+                    }
+                    fn verify_tls12_signature(
+                        &self,
+                        _message: &[u8],
+                        _cert: &rustls::pki_types::CertificateDer<'_>,
+                        _dss: &rustls::DigitallySignedStruct,
+                    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+                    {
+                        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+                    }
+                    fn verify_tls13_signature(
+                        &self,
+                        _message: &[u8],
+                        _cert: &rustls::pki_types::CertificateDer<'_>,
+                        _dss: &rustls::DigitallySignedStruct,
+                    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+                    {
+                        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+                    }
+                    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+                        vec![
+                            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                            rustls::SignatureScheme::RSA_PSS_SHA256,
+                            rustls::SignatureScheme::ED25519,
+                        ]
+                    }
+                }
+                let provider = Arc::new(rustls::crypto::ring::default_provider());
+                let cfg = rustls::ClientConfig::builder_with_provider(provider)
+                    .with_safe_default_protocol_versions()
+                    .expect("tls versions")
+                    .dangerous()
+                    .with_custom_certificate_verifier(Arc::new(AcceptAnyServerCert))
+                    .with_no_client_auth();
+                let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
+                let tcp = tokio::net::TcpStream::connect(&host_port)
+                    .await
+                    .expect("connects tls tcp");
+                let sname = rustls::pki_types::ServerName::try_from("127.0.0.1")
+                    .expect("server name")
+                    .to_owned();
+                let mut stream = connector.connect(sname, tcp).await.expect("tls handshake");
+                stream.write_all(req.as_bytes()).await.expect("writes head");
+                stream.write_all(&body).await.expect("writes body");
+                let mut resp = Vec::new();
+                stream.read_to_end(&mut resp).await.expect("reads resp");
+                let pos = resp.windows(4).position(|w| w == b"\r\n\r\n").expect("hdr") + 4;
+                u16::from_be_bytes([resp[pos + 2], resp[pos + 3]])
+            }
+        }
+    };
+
+    let proxy_path = format!("/ipp/print/{win_address}/Windows%20Office%20Laser");
+    let proxy_uri = format!("ipp://127.0.0.1:{proxy_port}{proxy_path}");
+
+    // Submit a real CUPS job through the installed CUPS Client queue (`derived_cups_name`) before
+    // daemon restart so CUPS's `ipp` backend streams through our local proxy to the Windows Server.
+    let cups_submitter = shaprint_desktop::adapters::printers::CupsPrintJobSubmitter::with_endpoint(
+        cups_endpoint.clone(),
+    );
+    let cups_queue_printer =
+        PrinterName::parse(&derived_cups_name).expect("valid CUPS destination name");
+    let cups_job_id_before = cups_submitter
+        .submit(
+            &cups_queue_printer,
+            PrintJob::from_ipp_body(
+                build_pwg_raster(),
+                0,
+                PrintSettings {
+                    media: Some("iso_a4_210x297mm".to_owned()),
+                    color: Some(true),
+                    duplex: Some(DuplexMode::LongEdge),
+                    copies: Some(2),
+                    orientation: Some(PrintOrientation::Landscape),
+                },
+            ),
+        )
+        .await
+        .expect("submits job to real CUPS Client queue before restart");
+    assert!(cups_job_id_before > 0);
+    for _ in 0..80 {
+        if !win_jobs.lock().expect("locks win jobs").is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Also verify that if a local caller supplies a spoofed `network-channel` IPP attribute to the
+    // loopback proxy, the proxy replaces it with the protected machine credential and forwards all
+    // requested print settings (`media`, `print-color-mode`, `sides`, `copies`, `orientation-requested`).
+    let status_before_restart = post_ipp(
+        &format!("127.0.0.1:{proxy_port}"),
+        &proxy_path,
+        build_ipp_print_job(&proxy_uri, Some("spoofed-local-secret")),
+        false,
+    )
+    .await;
+    assert_eq!(status_before_restart, 0x0000);
+    {
+        let recorded = win_jobs.lock().expect("locks win jobs");
+        assert!(
+            recorded.len() >= 2,
+            "expected both the real CUPS queue job and the spoofed-header proxy job to reach Windows Server, got {}",
+            recorded.len()
+        );
+        let last = recorded.last().expect("last job");
+        assert_eq!(last.printer, "Windows Office Laser");
+        assert_eq!(last.bytes, build_pwg_raster());
+        assert_eq!(
+            last.settings,
+            PrintSettings {
+                media: Some("iso_a4_210x297mm".to_owned()),
+                color: Some(true),
+                duplex: Some(DuplexMode::LongEdge),
+                copies: Some(2),
+                orientation: Some(PrintOrientation::Landscape),
+            }
+        );
+    }
+
+    // 5. Restart the daemon and verify the installed CUPS queue + Client proxy still forward jobs.
+    daemon.shutdown().await.expect("stops daemon");
+    let daemon = DaemonServer::launch(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_config_dir(&etc_dir)
+            .with_cups_endpoint(cups_endpoint.clone())
+            .with_firewall_program(&fw_script)
+            .with_ports(RuntimePorts {
+                proxy_port,
+                server_port: linux_server_port,
+                discovery_ports: vec![0],
+            }),
+    )
+    .await
+    .expect("relaunches daemon");
+
+    let count_before_after_restart = win_jobs.lock().expect("locks win jobs").len();
+    let cups_job_id_after = cups_submitter
+        .submit(
+            &cups_queue_printer,
+            PrintJob::from_ipp_body(build_pwg_raster(), 0, PrintSettings::default()),
+        )
+        .await
+        .expect("submits job to real CUPS Client queue after daemon restart");
+    assert!(cups_job_id_after > cups_job_id_before);
+    for _ in 0..80 {
+        if win_jobs.lock().expect("locks win jobs").len() > count_before_after_restart {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        win_jobs.lock().expect("locks win jobs").len() > count_before_after_restart,
+        "real CUPS Client queue job after daemon restart must reach Windows Server"
+    );
+
+    // === PART B: Issue #128 (Windows Client -> AlmaLinux Server) ===
+    // 1. List local CUPS queues via `shaprintctl sharing printers`: our two Server queues must appear,
+    //    while the installed ShaPrint Client queue (`ShaPrint_Windows_Office_Laser_...`) is excluded!
+    let sharing_list = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args(["--socket", &socket_str, "sharing", "printers"])
+        .output()
+        .expect("lists local printers for sharing");
+    assert!(sharing_list.status.success());
+    let sharing_stdout = String::from_utf8_lossy(&sharing_list.stdout);
+    assert!(sharing_stdout.contains("Driverless_Office: unshared"));
+    assert!(sharing_stdout.contains("USB_Receipt_Printer: unshared"));
+    assert!(
+        !sharing_stdout.contains(&derived_cups_name),
+        "installed ShaPrint Client queue must never be offered for re-sharing: {sharing_stdout}"
+    );
+
+    // 2. Select both Server queues for sharing via `shaprintctl sharing set`.
+    let sharing_set = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args([
+            "--socket",
+            &socket_str,
+            "sharing",
+            "set",
+            "Driverless_Office",
+            "USB_Receipt_Printer",
+        ])
+        .output()
+        .expect("sets shared printers");
+    assert!(sharing_set.status.success());
+
+    // 3. Starting `server-sharing` while firewall authorization is declined must fail and leave
+    //    `server-sharing` stopped.
+    let start_denied = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args(["--socket", &socket_str, "start", "server-sharing"])
+        .output()
+        .expect("attempts to start server-sharing with denied firewall");
+    assert!(!start_denied.status.success());
+    let status_after_deny = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "status"])
+        .output()
+        .expect("checks status after denied firewall");
+    assert!(
+        String::from_utf8_lossy(&status_after_deny.stdout).contains("server-sharing: stopped"),
+        "server-sharing must remain stopped when firewall setup is declined: {}",
+        String::from_utf8_lossy(&status_after_deny.stdout)
+    );
+
+    // 4. Allow firewall setup and start `server-sharing`: verify only 48631/tcp and 48633/udp are
+    //    added, and repeated starts are idempotent.
+    std::fs::write(&fw_deny_flag, "0").expect("allows firewall setup");
+    let start_ok = Command::new(ctl_bin)
+        .env("CUPS_SERVER", &cups_server)
+        .args(["--socket", &socket_str, "start", "server-sharing"])
+        .output()
+        .expect("starts server-sharing");
+    assert!(
+        start_ok.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&start_ok.stderr)
+    );
+    let fw_lines: Vec<String> = std::fs::read_to_string(&fw_state)
+        .expect("reads fw_state")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        fw_lines,
+        vec![
+            "runtime:48631/tcp",
+            "runtime:48633/udp",
+            "permanent:48631/tcp",
+            "permanent:48633/udp",
+        ]
+    );
+
+    // 5. Exercise a Windows Client (`ClientConnections`) manually addressing the AlmaLinux Server,
+    //    inspecting and approving its TLS fingerprint, and listing its shared printers, then submit
+    //    print jobs over IPPS:
+    //    - Wrong Network Channel -> 0x0403 (`client-error-not-authorized`)
+    //    - Unshared queue -> 0x0406 (`client-error-not-found`)
+    //    - Shared `Driverless_Office` and `USB_Receipt_Printer` -> 0x0000 (`successful-ok`) and
+    //      land in real CUPS!
+    let linux_server_addr = format!("127.0.0.1:{linux_server_port}");
+    let win_client_dir = root.join("win-client-state");
+    let win_client_connections =
+        shaprint_desktop::adapters::client_connections::ClientConnections::new(&win_client_dir)
+            .expect("creates Windows ClientConnections");
+    let linux_review = win_client_connections
+        .inspect(&linux_server_addr)
+        .await
+        .expect("Windows Client inspects AlmaLinux Server");
+    assert!(!linux_review.trusted);
+    let linux_approved = win_client_connections
+        .approve(&linux_server_addr, &linux_review.current_fingerprint)
+        .await
+        .expect("Windows Client approves AlmaLinux Server fingerprint");
+    assert!(linux_approved.trusted);
+    let linux_shared = win_client_connections
+        .printers(&linux_server_addr)
+        .await
+        .expect("Windows Client lists shared printers on AlmaLinux Server");
+    assert_eq!(
+        linux_shared.printers,
+        vec![
+            "Driverless_Office".to_owned(),
+            "USB_Receipt_Printer".to_owned()
+        ]
+    );
+    let bad_channel_status = post_ipp(
+        &linux_server_addr,
+        "/ipp/print/Driverless_Office",
+        build_ipp_print_job(
+            &format!("ipps://{linux_server_addr}/ipp/print/Driverless_Office"),
+            Some("wrong-channel"),
+        ),
+        true,
+    )
+    .await;
+    assert_eq!(bad_channel_status, 0x0403);
+
+    let unshared_status = post_ipp(
+        &linux_server_addr,
+        "/ipp/print/Not_Shared_Printer",
+        build_ipp_print_job(
+            &format!("ipps://{linux_server_addr}/ipp/print/Not_Shared_Printer"),
+            Some(&secret),
+        ),
+        true,
+    )
+    .await;
+    assert_eq!(unshared_status, 0x0406);
+
+    for queue in ["Driverless_Office", "USB_Receipt_Printer"] {
+        let path = format!("/ipp/print/{queue}");
+        let uri = format!("ipps://{linux_server_addr}{path}");
+        let status = post_ipp(
+            &linux_server_addr,
+            &path,
+            build_ipp_print_job(&uri, Some(&secret)),
+            true,
+        )
+        .await;
+        assert_eq!(
+            status, 0x0000,
+            "print to {queue} failed with 0x{status:04x}"
+        );
+    }
+
+    // Verify `lpstat -W all` on the isolated `cupsd` shows jobs created for both Server queues.
+    let lpstat = Command::new("/usr/bin/lpstat")
+        .env("CUPS_SERVER", &cups_server)
+        .args(["-h", &cups_server, "-W", "all", "-o"])
+        .output()
+        .expect("runs lpstat");
+    let lpstat_out = String::from_utf8_lossy(&lpstat.stdout);
+    assert!(
+        lpstat_out.contains("Driverless_Office-"),
+        "expected Driverless_Office job in CUPS: {lpstat_out}"
+    );
+    assert!(
+        lpstat_out.contains("USB_Receipt_Printer-"),
+        "expected USB_Receipt_Printer job in CUPS: {lpstat_out}"
+    );
+    for _ in 0..80 {
+        if captured_usb_file
+            .metadata()
+            .is_ok_and(|meta| meta.len() >= 1807)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        std::fs::read(&captured_usb_file).expect("reads captured USB destination output"),
+        build_pwg_raster(),
+        "controlled USB/local CUPS destination must receive the streamed PWG Raster document"
+    );
+
+    // 6. Verify Stop releases the Server listener and rejects new jobs, and Start/Stop persists
+    //    across daemon restart.
+    let stop_sharing = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "stop", "server-sharing"])
+        .output()
+        .expect("stops server-sharing");
+    assert!(stop_sharing.status.success());
+    assert!(
+        tokio::net::TcpStream::connect(&linux_server_addr)
+            .await
+            .is_err(),
+        "stopped server-sharing must release its TCP listener"
+    );
+
+    // Re-enable server-sharing, restart daemon, and verify server-sharing autostarts on boot!
+    Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "start", "server-sharing"])
+        .output()
+        .expect("restarts server-sharing");
+    daemon.shutdown().await.expect("stops daemon");
+
+    let daemon = DaemonServer::launch(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_config_dir(&etc_dir)
+            .with_cups_endpoint(cups_endpoint)
+            .with_firewall_program(&fw_script)
+            .with_ports(RuntimePorts {
+                proxy_port,
+                server_port: linux_server_port,
+                discovery_ports: vec![0],
+            }),
+    )
+    .await
+    .expect("relaunches daemon with persisted server-sharing");
+    let boot_status = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "status"])
+        .output()
+        .expect("queries status after reboot");
+    assert!(
+        String::from_utf8_lossy(&boot_status.stdout).contains("server-sharing: running"),
+        "persisted server-sharing must autostart on daemon restart: {}",
+        String::from_utf8_lossy(&boot_status.stdout)
+    );
+
+    daemon.shutdown().await.expect("stops daemon");
+    win_runtime.shutdown().await.expect("stops win server");
+    let _ = cupsd.kill();
+    let _ = cupsd.wait();
     std::fs::remove_dir_all(&root).ok();
 }
 

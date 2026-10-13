@@ -21,8 +21,11 @@ use tokio::time::timeout;
 use crate::adapters::client_connections::{ConnectionPrinters, ConnectionReview, TrustedServer};
 use crate::adapters::ipps::CLIENT_CREDENTIAL_FILE;
 use crate::application::RuntimeCoordinator;
-use crate::domain::{AppError, ErrorCode, ServiceId};
-use crate::ipc::dto::{AppErrorDto, RuntimeStatusDto};
+use crate::domain::{AppError, ErrorCode, PrinterName, ServiceId};
+use crate::ipc::client_connections::RecognisedClientQueueDto;
+use crate::ipc::dto::{
+    AppErrorDto, ClientQueueDto, LocalPrinterDto, LocalPrintersDto, RuntimeStatusDto,
+};
 use crate::{RuntimePorts, Shell};
 
 /// Default non-secret configuration directory on Linux (ADR 0018).
@@ -91,6 +94,8 @@ pub struct DaemonConfig {
     access_policy: PeerAccessPolicy,
     forbid_root: bool,
     ports: RuntimePorts,
+    cups_endpoint: Option<crate::adapters::printers::cups::CupsServerEndpoint>,
+    firewall_program: Option<PathBuf>,
 }
 
 impl DaemonConfig {
@@ -103,7 +108,24 @@ impl DaemonConfig {
             access_policy: PeerAccessPolicy::RootOrDaemonOwner,
             forbid_root: true,
             ports: RuntimePorts::default(),
+            cups_endpoint: None,
+            firewall_program: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_cups_endpoint(
+        mut self,
+        endpoint: crate::adapters::printers::cups::CupsServerEndpoint,
+    ) -> Self {
+        self.cups_endpoint = Some(endpoint);
+        self
+    }
+
+    #[must_use]
+    pub fn with_firewall_program(mut self, program: impl Into<PathBuf>) -> Self {
+        self.firewall_program = Some(program.into());
+        self
     }
 
     #[must_use]
@@ -239,6 +261,9 @@ impl From<ConnectionPrinters> for TrustedServerPrintersDto {
     }
 }
 
+/// Recognised ShaPrint Client queue installed in the local CUPS spooler.
+pub type InstalledClientQueueDto = RecognisedClientQueueDto;
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 enum ControlRequest {
@@ -268,6 +293,19 @@ enum ControlRequest {
     ListServerPrinters {
         address: String,
     },
+    InstallClientQueue {
+        address: String,
+        printer: String,
+    },
+    RepairClientQueue {
+        address: String,
+        printer: String,
+    },
+    ListClientQueues,
+    ListLocalPrinters,
+    SetSharedPrinters {
+        printers: Vec<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -290,6 +328,15 @@ enum ControlResponse {
     },
     Forgotten {
         address: String,
+    },
+    ClientQueue {
+        queue: ClientQueueDto,
+    },
+    ClientQueues {
+        queues: Vec<InstalledClientQueueDto>,
+    },
+    LocalPrinters {
+        printers: Vec<LocalPrinterDto>,
     },
     Err {
         error: AppErrorDto,
@@ -337,10 +384,12 @@ impl DaemonServer {
                 ))
             })?;
         let credential_file = config.credential_dir().join(CLIENT_CREDENTIAL_FILE);
-        let shell = Arc::new(Shell::with_ports_and_credential_file(
+        let shell = Arc::new(Shell::with_linux_options(
             &config.state_dir,
             config.ports,
             Some(credential_file),
+            config.cups_endpoint,
+            config.firewall_program,
         )?);
         let server = Self::bind_internal(
             &config.socket_path,
@@ -716,6 +765,73 @@ async fn process_stream(
                     printers: TrustedServerPrintersDto::from(printers),
                 })
             }
+            ControlRequest::InstallClientQueue { address, printer } => {
+                policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
+                let shell = require_shell(&shell)?;
+                let queue = shell
+                    .queue_installation()
+                    .install(&address, &printer)
+                    .await?;
+                log::info!(
+                    "installed client queue name={} server={} printer={}",
+                    queue.name(),
+                    queue.request().server_address(),
+                    queue.request().printer()
+                );
+                Ok(ControlResponse::ClientQueue {
+                    queue: ClientQueueDto::from(&queue),
+                })
+            }
+            ControlRequest::RepairClientQueue { address, printer } => {
+                policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
+                let shell = require_shell(&shell)?;
+                let queue = shell
+                    .queue_installation()
+                    .repair(&address, &printer)
+                    .await?;
+                log::info!(
+                    "repaired client queue name={} server={} printer={}",
+                    queue.name(),
+                    queue.request().server_address(),
+                    queue.request().printer()
+                );
+                Ok(ControlResponse::ClientQueue {
+                    queue: ClientQueueDto::from(&queue),
+                })
+            }
+            ControlRequest::ListClientQueues => {
+                let shell = require_shell(&shell)?;
+                let queues = shell
+                    .printer_catalog()
+                    .recognised_client_queues()
+                    .await?
+                    .into_iter()
+                    .map(InstalledClientQueueDto::from)
+                    .collect();
+                Ok(ControlResponse::ClientQueues { queues })
+            }
+            ControlRequest::ListLocalPrinters => {
+                let shell = require_shell(&shell)?;
+                let printers = shell.sharing().local_printers().await?;
+                let dto = LocalPrintersDto::from(printers.as_slice());
+                Ok(ControlResponse::LocalPrinters {
+                    printers: dto.printers,
+                })
+            }
+            ControlRequest::SetSharedPrinters { printers } => {
+                policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
+                let shell = require_shell(&shell)?;
+                let parsed: Vec<PrinterName> = printers
+                    .iter()
+                    .map(|name| PrinterName::parse(name))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let updated = shell.sharing().set_shared(parsed).await?;
+                log::info!("updated shared printers count={}", updated.len());
+                let dto = LocalPrintersDto::from(updated.as_slice());
+                Ok(ControlResponse::LocalPrinters {
+                    printers: dto.printers,
+                })
+            }
         }
     }
     .await;
@@ -917,6 +1033,74 @@ impl DaemonClient {
         }
     }
 
+    /// Installs (or updates) a machine-wide Client queue for a Trusted Server's shared printer.
+    pub async fn install_client_queue(
+        &self,
+        address: &str,
+        printer: &str,
+    ) -> Result<ClientQueueDto, AppError> {
+        match self
+            .send(&ControlRequest::InstallClientQueue {
+                address: address.to_owned(),
+                printer: printer.to_owned(),
+            })
+            .await?
+        {
+            ControlResponse::ClientQueue { queue } => Ok(queue),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Repairs (recreates) an existing machine-wide Client queue.
+    pub async fn repair_client_queue(
+        &self,
+        address: &str,
+        printer: &str,
+    ) -> Result<ClientQueueDto, AppError> {
+        match self
+            .send(&ControlRequest::RepairClientQueue {
+                address: address.to_owned(),
+                printer: printer.to_owned(),
+            })
+            .await?
+        {
+            ControlResponse::ClientQueue { queue } => Ok(queue),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Lists all recognised ShaPrint Client queues installed in the local spooler.
+    pub async fn list_client_queues(&self) -> Result<Vec<InstalledClientQueueDto>, AppError> {
+        match self.send(&ControlRequest::ListClientQueues).await? {
+            ControlResponse::ClientQueues { queues } => Ok(queues),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Lists all eligible local printer queues and whether each is currently shared by the Server.
+    pub async fn list_local_printers(&self) -> Result<Vec<LocalPrinterDto>, AppError> {
+        match self.send(&ControlRequest::ListLocalPrinters).await? {
+            ControlResponse::LocalPrinters { printers } => Ok(printers),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Persists the Server's selected shared printers and returns the updated local printer list.
+    pub async fn set_shared_printers(
+        &self,
+        printers: &[String],
+    ) -> Result<Vec<LocalPrinterDto>, AppError> {
+        match self
+            .send(&ControlRequest::SetSharedPrinters {
+                printers: printers.to_vec(),
+            })
+            .await?
+        {
+            ControlResponse::LocalPrinters { printers } => Ok(printers),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
     async fn send(&self, request: &ControlRequest) -> Result<ControlResponse, AppError> {
         let mut stream = timeout(IO_TIMEOUT, UnixStream::connect(&self.socket_path))
             .await
@@ -1005,6 +1189,19 @@ pub enum CliCommand {
     ListTrustedServers,
     ListServerPrinters {
         address: String,
+    },
+    InstallClientQueue {
+        address: String,
+        printer: String,
+    },
+    RepairClientQueue {
+        address: String,
+        printer: String,
+    },
+    ListClientQueues,
+    ListLocalPrinters,
+    SetSharedPrinters {
+        printers: Vec<String>,
     },
 }
 
@@ -1311,9 +1508,34 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
         ["trust", "printers", address] | ["printers", address] => CliCommand::ListServerPrinters {
             address: (*address).to_owned(),
         },
+        ["queue", "install", address, printer] => CliCommand::InstallClientQueue {
+            address: (*address).to_owned(),
+            printer: (*printer).to_owned(),
+        },
+        ["queue", "repair", address, printer] => CliCommand::RepairClientQueue {
+            address: (*address).to_owned(),
+            printer: (*printer).to_owned(),
+        },
+        ["queue", "list"] | ["queues"] => CliCommand::ListClientQueues,
+        ["sharing"] | ["sharing", "printers"] | ["sharing", "list"] => {
+            CliCommand::ListLocalPrinters
+        }
+        ["sharing", "clear"] => CliCommand::SetSharedPrinters {
+            printers: Vec::new(),
+        },
+        ["sharing", "set", rest @ ..] => {
+            if rest.is_empty() {
+                return Err(AppError::invalid_input(
+                    "specify at least one local printer name for 'sharing set' (or use 'sharing clear')",
+                ));
+            }
+            CliCommand::SetSharedPrinters {
+                printers: rest.iter().map(|s| (*s).to_owned()).collect(),
+            }
+        }
         [] => {
             return Err(AppError::invalid_input(
-                "missing command (expected: status, start <service>, stop [service], shutdown, network-channel, trust, or printers)",
+                "missing command (expected: status, start <service>, stop [service], shutdown, network-channel, trust, printers, queue, or sharing)",
             ))
         }
         other => {
@@ -1481,6 +1703,15 @@ pub async fn execute_cli_command(options: &CliOptions) -> Result<String, AppErro
             format_runtime_status(&status, options.json)
         }
         CliCommand::StartService(id) => {
+            if *id == ServiceId::ServerSharing
+                && options.socket_path == Path::new(DEFAULT_SOCKET_PATH)
+                && current_effective_uid() == Some(0)
+            {
+                let fw = crate::adapters::elevation::linux::FirewalldClient::new();
+                if matches!(fw.inbound_sharing_allowed(), Ok(false)) {
+                    let _ = fw.allow_inbound_sharing();
+                }
+            }
             let status = client.start_service(id.as_str()).await?;
             format_runtime_status(&status, options.json)
         }
@@ -1583,10 +1814,71 @@ pub async fn execute_cli_command(options: &CliOptions) -> Result<String, AppErro
                 Ok(out)
             }
         }
+        CliCommand::InstallClientQueue { address, printer } => {
+            let queue = client.install_client_queue(address, printer).await?;
+            format_client_queue(&queue, options.json)
+        }
+        CliCommand::RepairClientQueue { address, printer } => {
+            let queue = client.repair_client_queue(address, printer).await?;
+            format_client_queue(&queue, options.json)
+        }
+        CliCommand::ListClientQueues => {
+            let queues = client.list_client_queues().await?;
+            if options.json {
+                format_json_line(&queues, "client queues")
+            } else {
+                let mut out = String::new();
+                for q in &queues {
+                    out.push_str(&format!(
+                        "{} -> {} ({})\n",
+                        q.queue_name, q.printer_name, q.server_address
+                    ));
+                }
+                Ok(out)
+            }
+        }
+        CliCommand::ListLocalPrinters => {
+            let printers = client.list_local_printers().await?;
+            format_local_printers(&printers, options.json)
+        }
+        CliCommand::SetSharedPrinters { printers } => {
+            let updated = client.set_shared_printers(printers).await?;
+            format_local_printers(&updated, options.json)
+        }
     }
 }
 
-fn format_json_line<T: Serialize>(value: &T, label: &str) -> Result<String, AppError> {
+fn format_client_queue(queue: &ClientQueueDto, json: bool) -> Result<String, AppError> {
+    if json {
+        format_json_line(queue, "client queue")
+    } else {
+        let cups_destination = crate::domain::PrinterName::parse(&queue.printer_name)
+            .and_then(|printer| {
+                crate::domain::ClientQueueRequest::new(&queue.server_address, printer)
+            })
+            .map(|req| req.cups_destination_name())
+            .unwrap_or_else(|_| queue.queue_name.clone());
+        Ok(format!(
+            "cups_destination: {cups_destination}\nqueue_name: {}\nserver_address: {}\nprinter_name: {}\nuri: {}\n",
+            queue.queue_name, queue.server_address, queue.printer_name, queue.uri
+        ))
+    }
+}
+
+fn format_local_printers(printers: &[LocalPrinterDto], json: bool) -> Result<String, AppError> {
+    if json {
+        format_json_line(printers, "local printers")
+    } else {
+        let mut out = String::new();
+        for printer in printers {
+            let status = if printer.shared { "shared" } else { "unshared" };
+            out.push_str(&format!("{}: {status}\n", printer.name));
+        }
+        Ok(out)
+    }
+}
+
+fn format_json_line<T: Serialize + ?Sized>(value: &T, label: &str) -> Result<String, AppError> {
     let mut payload = serde_json::to_string(value)
         .map_err(|error| AppError::internal(format!("cannot format {label} JSON: {error}")))?;
     payload.push('\n');
@@ -1843,5 +2135,71 @@ mod tests {
         let empty_err =
             read_secret_from_reader(Cursor::new(b"\n")).expect_err("rejects empty secret");
         assert_eq!(empty_err.code(), ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn cli_args_parse_queue_and_sharing_commands() {
+        let install = parse_cli_args(&[
+            "shaprintctl",
+            "queue",
+            "install",
+            "10.0.0.5:48631",
+            "Office Printer",
+        ])
+        .expect("queue install");
+        assert_eq!(
+            install.command,
+            CliCommand::InstallClientQueue {
+                address: "10.0.0.5:48631".to_owned(),
+                printer: "Office Printer".to_owned(),
+            }
+        );
+
+        let repair = parse_cli_args(&[
+            "shaprintctl",
+            "queue",
+            "repair",
+            "10.0.0.5:48631",
+            "Office Printer",
+        ])
+        .expect("queue repair");
+        assert_eq!(
+            repair.command,
+            CliCommand::RepairClientQueue {
+                address: "10.0.0.5:48631".to_owned(),
+                printer: "Office Printer".to_owned(),
+            }
+        );
+
+        let queue_list = parse_cli_args(&["shaprintctl", "queue", "list"]).expect("queue list");
+        assert_eq!(queue_list.command, CliCommand::ListClientQueues);
+
+        let sharing_printers =
+            parse_cli_args(&["shaprintctl", "sharing", "printers"]).expect("sharing printers");
+        assert_eq!(sharing_printers.command, CliCommand::ListLocalPrinters);
+
+        let sharing_set = parse_cli_args(&[
+            "shaprintctl",
+            "sharing",
+            "set",
+            "Driverless_IPP",
+            "USB_LaserJet",
+        ])
+        .expect("sharing set");
+        assert_eq!(
+            sharing_set.command,
+            CliCommand::SetSharedPrinters {
+                printers: vec!["Driverless_IPP".to_owned(), "USB_LaserJet".to_owned()],
+            }
+        );
+
+        let sharing_clear =
+            parse_cli_args(&["shaprintctl", "sharing", "clear"]).expect("sharing clear");
+        assert_eq!(
+            sharing_clear.command,
+            CliCommand::SetSharedPrinters {
+                printers: Vec::new(),
+            }
+        );
     }
 }
