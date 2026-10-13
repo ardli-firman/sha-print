@@ -6,13 +6,13 @@ use crate::{
     },
     ipc::dto::AppErrorDto,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 pub type SharedClientConnections = std::sync::Arc<ClientConnections>;
 pub type SharedPrinterCatalog = std::sync::Arc<dyn crate::application::LocalPrinterCatalog>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecognisedClientQueueDto {
     pub queue_name: String,
     pub server_address: String,

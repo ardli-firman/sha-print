@@ -103,8 +103,88 @@ impl Shell {
         ports: RuntimePorts,
         credential_file: Option<std::path::PathBuf>,
     ) -> Result<Self, AppError> {
+        #[cfg(unix)]
+        return Self::with_linux_options(data_dir, ports, credential_file, None, None);
+        #[cfg(not(unix))]
+        Self::build_internal(data_dir, ports, credential_file)
+    }
+
+    #[cfg(unix)]
+    pub fn with_linux_options(
+        data_dir: &Path,
+        ports: RuntimePorts,
+        credential_file: Option<std::path::PathBuf>,
+        cups_endpoint: Option<adapters::printers::cups::CupsServerEndpoint>,
+        firewall_program: Option<std::path::PathBuf>,
+    ) -> Result<Self, AppError> {
+        let port = if ports.proxy_port == 0 {
+            adapters::CLIENT_PROXY_DEFAULT_PORT
+        } else {
+            ports.proxy_port
+        };
+        let authority = format!("127.0.0.1:{port}");
+        let printer_catalog: Arc<dyn application::LocalPrinterCatalog> = match &cups_endpoint {
+            Some(ep) => Arc::new(adapters::printers::CupsPrinterCatalog::with_endpoint(
+                ep.clone(),
+                authority,
+            )),
+            None => Arc::new(adapters::printers::CupsPrinterCatalog::with_authority(
+                authority,
+            )),
+        };
+        let submitter: Arc<dyn PrintJobSubmitter> = match &cups_endpoint {
+            Some(ep) => Arc::new(adapters::printers::CupsPrintJobSubmitter::with_endpoint(
+                ep.clone(),
+            )),
+            None => default_print_job_submitter(),
+        };
+        let setup = Arc::new(Setup::new(Arc::new(SystemElevation::with_linux_overrides(
+            firewall_program,
+            cups_endpoint.clone(),
+            ports.proxy_port,
+        ))));
+        let installer = adapters::queue_installation::platform_installer_with_endpoint(
+            ports.proxy_port,
+            cups_endpoint,
+        );
+        Self::build_with_adapters(
+            data_dir,
+            ports,
+            credential_file,
+            printer_catalog,
+            submitter,
+            setup,
+            installer,
+        )
+    }
+
+    #[cfg(not(unix))]
+    fn build_internal(
+        data_dir: &Path,
+        ports: RuntimePorts,
+        credential_file: Option<std::path::PathBuf>,
+    ) -> Result<Self, AppError> {
+        Self::build_with_adapters(
+            data_dir,
+            ports,
+            credential_file,
+            default_printer_catalog(ports.proxy_port),
+            default_print_job_submitter(),
+            Arc::new(Setup::new(Arc::new(SystemElevation::new()))),
+            adapters::queue_installation::platform_installer_for_port(ports.proxy_port),
+        )
+    }
+
+    fn build_with_adapters(
+        data_dir: &Path,
+        ports: RuntimePorts,
+        credential_file: Option<std::path::PathBuf>,
+        printer_catalog: Arc<dyn application::LocalPrinterCatalog>,
+        submitter: Arc<dyn PrintJobSubmitter>,
+        setup: Arc<Setup>,
+        installer: Arc<dyn application::QueueInstaller>,
+    ) -> Result<Self, AppError> {
         let identity = Arc::new(FileIdentityStore::new(data_dir).load_or_create()?);
-        let printer_catalog = default_printer_catalog();
         let sharing = Arc::new(Sharing::with_persistence(
             Arc::clone(&printer_catalog),
             Some(data_dir),
@@ -122,11 +202,10 @@ impl Shell {
             ports.server_port,
             identity,
             Arc::clone(&network_channel),
-            default_print_job_submitter(),
+            submitter,
             Arc::clone(&print_failures),
             Arc::clone(&job_tracker),
         ));
-        let setup = Arc::new(Setup::new(Arc::new(SystemElevation::new())));
         let startup = Arc::new(Startup::new(default_startup_registration(), Some(data_dir)));
         // Moving from the previous .NET application takes the Network Channel and nothing else;
         // printer queues are always selected again (#41).
@@ -169,7 +248,7 @@ impl Shell {
         let queue_installation = Arc::new(QueueInstallation::new(
             Arc::clone(&setup),
             Arc::clone(&client_connections) as Arc<dyn TrustedServerPrinters>,
-            adapters::queue_installation::platform_installer(),
+            installer,
             Arc::clone(&runtime) as Arc<dyn ClientProxyState>,
             Arc::clone(&network_channel) as Arc<dyn application::ChannelState>,
         ));
@@ -246,12 +325,12 @@ impl Shell {
 
 /// The printer catalog for the platform this build targets.
 #[cfg(windows)]
-fn default_printer_catalog() -> Arc<dyn application::LocalPrinterCatalog> {
+fn default_printer_catalog(_proxy_port: u16) -> Arc<dyn application::LocalPrinterCatalog> {
     Arc::new(adapters::printers::WindowsPrinterCatalog::new())
 }
 
-#[cfg(not(windows))]
-fn default_printer_catalog() -> Arc<dyn application::LocalPrinterCatalog> {
+#[cfg(not(any(windows, unix)))]
+fn default_printer_catalog(_proxy_port: u16) -> Arc<dyn application::LocalPrinterCatalog> {
     Arc::new(adapters::printers::UnsupportedPrinterCatalog::new())
 }
 
@@ -260,7 +339,12 @@ fn default_print_job_submitter() -> Arc<dyn PrintJobSubmitter> {
     Arc::new(adapters::printers::WindowsPrintJobSubmitter)
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn default_print_job_submitter() -> Arc<dyn PrintJobSubmitter> {
+    Arc::new(adapters::printers::CupsPrintJobSubmitter::new())
+}
+
+#[cfg(not(any(windows, unix)))]
 fn default_print_job_submitter() -> Arc<dyn PrintJobSubmitter> {
     Arc::new(adapters::printers::UnsupportedPrintJobSubmitter)
 }

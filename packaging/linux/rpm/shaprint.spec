@@ -11,6 +11,7 @@ ExclusiveArch:  x86_64
 
 Requires(pre):  shadow-utils
 Requires:       systemd
+Requires:       cups
 
 %description
 ShaPrint shares printers over LAN and cross-VLAN using standard IPPS and

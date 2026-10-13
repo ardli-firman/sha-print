@@ -166,12 +166,50 @@ fn quote_argument(value: &str) -> String {
 }
 
 /// Requests administrator permission and runs the action elevated.
-#[derive(Debug, Default)]
-pub struct SystemElevation;
+#[derive(Debug)]
+pub struct SystemElevation {
+    #[cfg(unix)]
+    firewall_program: Option<std::path::PathBuf>,
+    #[cfg(unix)]
+    cups_endpoint: Option<crate::adapters::printers::cups::CupsServerEndpoint>,
+    #[cfg(unix)]
+    proxy_port: u16,
+}
+
+impl Default for SystemElevation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl SystemElevation {
     pub fn new() -> Self {
-        Self
+        Self {
+            #[cfg(unix)]
+            firewall_program: None,
+            #[cfg(unix)]
+            cups_endpoint: None,
+            #[cfg(unix)]
+            proxy_port: crate::adapters::CLIENT_PROXY_DEFAULT_PORT,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn with_linux_overrides(
+        firewall_program: Option<std::path::PathBuf>,
+        cups_endpoint: Option<crate::adapters::printers::cups::CupsServerEndpoint>,
+        proxy_port: u16,
+    ) -> Self {
+        let port = if proxy_port == 0 {
+            crate::adapters::CLIENT_PROXY_DEFAULT_PORT
+        } else {
+            proxy_port
+        };
+        Self {
+            firewall_program,
+            cups_endpoint,
+            proxy_port: port,
+        }
     }
 }
 
@@ -181,11 +219,19 @@ impl ElevationBroker for SystemElevation {
         {
             windows::inbound_sharing_allowed()
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
+        {
+            let client = match &self.firewall_program {
+                Some(program) => linux::FirewalldClient::with_program(program),
+                None => linux::FirewalldClient::new(),
+            };
+            client.inbound_sharing_allowed()
+        }
+        #[cfg(not(any(windows, unix)))]
         {
             Err(SetupFailure::new(
                 SetupFailureKind::Unsupported,
-                "inbound firewall access is only supported on Windows",
+                "inbound firewall access is only supported on Windows and Linux",
             ))
         }
     }
@@ -212,14 +258,40 @@ impl ElevationBroker for SystemElevation {
                 ),
             ));
         }
+        #[cfg(unix)]
+        if action == SetupAction::AllowInboundSharing {
+            let client = match &self.firewall_program {
+                Some(program) => linux::FirewalldClient::with_program(program),
+                None => linux::FirewalldClient::new(),
+            };
+            return client.allow_inbound_sharing();
+        }
         start_helper(&HelperRequest::Action(action))
     }
 
     fn install_queue(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+        #[cfg(unix)]
+        {
+            crate::adapters::queue_installation::platform_installer_with_endpoint(
+                self.proxy_port,
+                self.cups_endpoint.clone(),
+            )
+            .install(request)
+        }
+        #[cfg(not(unix))]
         start_helper(&HelperRequest::InstallClientQueue(request.clone()))
     }
 
     fn repair_queue(&self, request: &ClientQueueRequest) -> Result<(), SetupFailure> {
+        #[cfg(unix)]
+        {
+            crate::adapters::queue_installation::platform_installer_with_endpoint(
+                self.proxy_port,
+                self.cups_endpoint.clone(),
+            )
+            .repair(request)
+        }
+        #[cfg(not(unix))]
         start_helper(&HelperRequest::RepairClientQueue(request.clone()))
     }
 }
@@ -251,24 +323,33 @@ fn run_action(action: SetupAction) -> Result<(), SetupFailure> {
     {
         windows::perform(action)
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    {
+        linux::perform(action)
+    }
+    #[cfg(not(any(windows, unix)))]
     {
         Err(SetupFailure::new(
             SetupFailureKind::Unsupported,
             format!(
-                "{} needs administrator permission, which is only supported on Windows",
+                "{} needs administrator permission, which is only supported on Windows and Linux",
                 action.as_str()
             ),
         ))
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn start_helper(request: &HelperRequest) -> Result<(), SetupFailure> {
+    linux::start_helper(request)
+}
+
+#[cfg(not(any(windows, unix)))]
 fn start_helper(request: &HelperRequest) -> Result<(), SetupFailure> {
     Err(SetupFailure::new(
         SetupFailureKind::Unsupported,
         format!(
-            "{} needs administrator permission, which is only supported on Windows",
+            "{} needs administrator permission, which is only supported on Windows and Linux",
             helper_parameters(request)
         ),
     ))
@@ -321,6 +402,227 @@ pub(super) fn netsh_add_rule_args(rule: &InboundRule) -> Vec<String> {
 #[cfg(windows)]
 fn start_helper(request: &HelperRequest) -> Result<(), SetupFailure> {
     windows::start_helper(request)
+}
+
+#[cfg(unix)]
+pub mod linux {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    use super::{inbound_rules, run_elevated, HelperRequest};
+    use crate::domain::{SetupAction, SetupFailure, SetupFailureKind};
+
+    const FIREWALL_CMD_CANDIDATES: [&str; 3] =
+        ["/usr/bin/firewall-cmd", "/bin/firewall-cmd", "firewall-cmd"];
+
+    /// Environment variable allowing tests or package smoke scripts to point at a controlled
+    /// `firewall-cmd` binary.
+    pub const FIREWALL_CMD_ENV: &str = "SHAPRINT_FIREWALL_CMD";
+
+    /// Returns the exact firewalld port specifications (`48631/tcp`, `48633/udp`) ShaPrint Server
+    /// sharing requires.
+    pub fn firewalld_port_specs() -> Vec<String> {
+        inbound_rules()
+            .into_iter()
+            .map(|rule| format!("{}/{}", rule.port, rule.protocol.to_ascii_lowercase()))
+            .collect()
+    }
+
+    fn locate_firewall_cmd() -> PathBuf {
+        if let Ok(custom) = std::env::var(FIREWALL_CMD_ENV) {
+            let trimmed = custom.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed);
+            }
+        }
+        for candidate in FIREWALL_CMD_CANDIDATES {
+            if candidate.starts_with('/') && Path::new(candidate).exists() {
+                return PathBuf::from(candidate);
+            }
+        }
+        PathBuf::from("firewall-cmd")
+    }
+
+    /// Interacts with `firewalld` via `firewall-cmd` to verify and open ShaPrint's exact Server
+    /// sharing ports (`48631/tcp` and `48633/udp`).
+    #[derive(Debug, Clone)]
+    pub struct FirewalldClient {
+        program: PathBuf,
+    }
+
+    impl Default for FirewalldClient {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl FirewalldClient {
+        pub fn new() -> Self {
+            Self {
+                program: locate_firewall_cmd(),
+            }
+        }
+
+        pub fn with_program(program: impl Into<PathBuf>) -> Self {
+            Self {
+                program: program.into(),
+            }
+        }
+
+        /// Checks whether `firewalld` allows inbound TCP `48631` and UDP `48633`.
+        ///
+        /// If `firewall-cmd` is not installed or `firewalld` is not running (exit code `252`),
+        /// returns `Ok(true)` because `firewalld` is not blocking inbound traffic on this host.
+        pub fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+            let state_output = match Command::new(&self.program).arg("--state").output() {
+                Ok(output) => output,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+                Err(error) => {
+                    return Err(SetupFailure::new(
+                        SetupFailureKind::Other,
+                        format!("cannot run firewall-cmd --state: {error}"),
+                    ))
+                }
+            };
+
+            if !state_output.status.success() {
+                let code = state_output.status.code().unwrap_or(1);
+                let combined = format!(
+                    "{} {}",
+                    String::from_utf8_lossy(&state_output.stdout),
+                    String::from_utf8_lossy(&state_output.stderr)
+                )
+                .to_ascii_lowercase();
+                if code == 252 || combined.contains("not running") {
+                    return Ok(true);
+                }
+                if combined.contains("not authorized")
+                    || combined.contains("authorization failed")
+                    || combined.contains("permission denied")
+                {
+                    return Err(SetupFailure::new(
+                        SetupFailureKind::PermissionDenied,
+                        "firewall-cmd requires root or polkit authorization to inspect firewall state",
+                    ));
+                }
+                return Err(SetupFailure::new(
+                    SetupFailureKind::Other,
+                    format!("firewall-cmd --state failed with code {code}"),
+                ));
+            }
+
+            for spec in firewalld_port_specs() {
+                let query = Command::new(&self.program)
+                    .arg(format!("--query-port={spec}"))
+                    .output()
+                    .map_err(|error| {
+                        SetupFailure::new(
+                            SetupFailureKind::Other,
+                            format!("cannot query firewalld port {spec}: {error}"),
+                        )
+                    })?;
+                if !query.status.success() {
+                    let stderr = String::from_utf8_lossy(&query.stderr).to_ascii_lowercase();
+                    if stderr.contains("not authorized")
+                        || stderr.contains("authorization failed")
+                        || stderr.contains("permission denied")
+                    {
+                        return Ok(false);
+                    }
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+
+        /// Opens `48631/tcp` and `48633/udp` in both the active runtime zone and permanent
+        /// configuration idempotently.
+        pub fn allow_inbound_sharing(&self) -> Result<(), SetupFailure> {
+            let specs = firewalld_port_specs();
+            for spec in &specs {
+                let query = Command::new(&self.program)
+                    .arg(format!("--query-port={spec}"))
+                    .output()
+                    .map_err(|error| {
+                        SetupFailure::new(
+                            SetupFailureKind::Other,
+                            format!("cannot query firewalld port {spec}: {error}"),
+                        )
+                    })?;
+                if !query.status.success() {
+                    let add = Command::new(&self.program)
+                        .arg(format!("--add-port={spec}"))
+                        .output()
+                        .map_err(|error| {
+                            SetupFailure::new(
+                                SetupFailureKind::Other,
+                                format!("cannot add runtime firewalld port {spec}: {error}"),
+                            )
+                        })?;
+                    if !add.status.success() {
+                        return Err(classify_firewalld_failure(&add));
+                    }
+                }
+            }
+
+            let mut perm_cmd = Command::new(&self.program);
+            perm_cmd.arg("--permanent");
+            for spec in &specs {
+                perm_cmd.arg(format!("--add-port={spec}"));
+            }
+            let perm_out = perm_cmd.output().map_err(|error| {
+                SetupFailure::new(
+                    SetupFailureKind::Other,
+                    format!("cannot persist firewalld ports: {error}"),
+                )
+            })?;
+            if !perm_out.status.success() {
+                return Err(classify_firewalld_failure(&perm_out));
+            }
+            Ok(())
+        }
+    }
+
+    fn classify_firewalld_failure(output: &std::process::Output) -> SetupFailure {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let combined = format!("{} {}", stdout.trim(), stderr.trim());
+        let lower = combined.to_ascii_lowercase();
+        let kind = if lower.contains("not authorized")
+            || lower.contains("authorization failed")
+            || lower.contains("permission denied")
+            || lower.contains("polkit")
+            || output.status.code() == Some(114)
+        {
+            SetupFailureKind::PermissionDenied
+        } else {
+            SetupFailureKind::Other
+        };
+        SetupFailure::new(kind, format!("firewall-cmd failed: {}", combined.trim()))
+    }
+
+    pub fn inbound_sharing_allowed() -> Result<bool, SetupFailure> {
+        FirewalldClient::new().inbound_sharing_allowed()
+    }
+
+    pub fn perform(action: SetupAction) -> Result<(), SetupFailure> {
+        match action {
+            SetupAction::AllowInboundSharing => FirewalldClient::new().allow_inbound_sharing(),
+            other => Err(SetupFailure::new(
+                SetupFailureKind::InvalidRequest,
+                format!(
+                    "{} has no parameterless helper implementation",
+                    other.as_str()
+                ),
+            )),
+        }
+    }
+
+    pub fn start_helper(request: &HelperRequest) -> Result<(), SetupFailure> {
+        // On Linux, `shaprintd` / `shaprintctl` or `firewall-cmd` (via polkit/DBus) executes the
+        // narrow action directly without spawning a Windows ShellExecuteExW helper.
+        run_elevated(request.clone())
+    }
 }
 
 #[cfg(windows)]
@@ -1006,7 +1308,7 @@ mod tests {
         assert!(failure.detail().contains("queue installation"));
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, unix)))]
     #[test]
     fn a_platform_that_cannot_elevate_reports_unsupported() {
         let failure = SystemElevation::new()
@@ -1064,5 +1366,143 @@ mod tests {
     #[cfg(windows)]
     fn is_elevated_runs_without_panicking() {
         let _ = windows::is_elevated();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn linux_firewalld_rules_target_exact_shaprint_ports_and_verify_access_before_and_after_setup()
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = crate::test_support::temporary_directory("firewalld-test");
+        std::fs::create_dir_all(&dir).expect("creates temp dir");
+        let state_file = dir.join("ports.txt");
+        let log_file = dir.join("invocations.log");
+        let fake_firewall_cmd = dir.join("firewall-cmd");
+
+        let script = format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+STATE="{state}"
+LOG="{log}"
+echo "$*" >> "$LOG"
+touch "$STATE"
+
+case "${{1:-}}" in
+  --state)
+    if [[ "${{FAKE_FIREWALLD_STATE:-running}}" == "not_running" ]]; then
+      echo "not running" >&2
+      exit 252
+    fi
+    echo "running"
+    exit 0
+    ;;
+  --query-port=*)
+    port="${{1#--query-port=}}"
+    if grep -Fxq "runtime:$port" "$STATE"; then
+      echo "yes"
+      exit 0
+    else
+      echo "no"
+      exit 1
+    fi
+    ;;
+  --add-port=*)
+    if [[ "${{FAKE_FIREWALLD_DENY:-0}}" == "1" ]]; then
+      echo "Authorization failed." >&2
+      exit 114
+    fi
+    port="${{1#--add-port=}}"
+    grep -Fxq "runtime:$port" "$STATE" || echo "runtime:$port" >> "$STATE"
+    echo "success"
+    exit 0
+    ;;
+  --permanent)
+    if [[ "${{FAKE_FIREWALLD_DENY:-0}}" == "1" ]]; then
+      echo "Authorization failed." >&2
+      exit 114
+    fi
+    shift
+    for arg in "$@"; do
+      if [[ "$arg" == --add-port=* ]]; then
+        port="${{arg#--add-port=}}"
+        grep -Fxq "permanent:$port" "$STATE" || echo "permanent:$port" >> "$STATE"
+      fi
+    done
+    echo "success"
+    exit 0
+    ;;
+  *)
+    echo "unexpected args: $*" >&2
+    exit 2
+    ;;
+esac
+"#,
+            state = state_file.display(),
+            log = log_file.display()
+        );
+        std::fs::write(&fake_firewall_cmd, script).expect("writes fake firewall-cmd");
+        std::fs::set_permissions(&fake_firewall_cmd, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod +x");
+
+        let firewall = linux::FirewalldClient::with_program(&fake_firewall_cmd);
+        assert_eq!(
+            linux::firewalld_port_specs(),
+            vec!["48631/tcp".to_owned(), "48633/udp".to_owned()]
+        );
+
+        // 1. Before rules exist, inbound_sharing_allowed returns false.
+        assert!(
+            !firewall
+                .inbound_sharing_allowed()
+                .expect("queries firewalld"),
+            "missing ports must report false"
+        );
+
+        // 2. Applying rules adds only 48631/tcp and 48633/udp (both runtime and permanent) and is idempotent.
+        firewall
+            .allow_inbound_sharing()
+            .expect("applies firewalld rules");
+        assert!(
+            firewall
+                .inbound_sharing_allowed()
+                .expect("queries after setup"),
+            "both ports are now allowed"
+        );
+        firewall
+            .allow_inbound_sharing()
+            .expect("second apply is idempotent");
+
+        let recorded_state = std::fs::read_to_string(&state_file).expect("reads state");
+        let lines: Vec<&str> = recorded_state.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                "runtime:48631/tcp",
+                "runtime:48633/udp",
+                "permanent:48631/tcp",
+                "permanent:48633/udp",
+            ]
+        );
+
+        // 3. When authorization is declined, allow_inbound_sharing reports PermissionDenied.
+        let denied_script = dir.join("firewall-cmd-deny");
+        std::fs::write(
+            &denied_script,
+            "#!/usr/bin/env bash\nif [[ \"${1:-}\" == \"--state\" ]]; then echo running; exit 0; fi\nif [[ \"${1:-}\" == --query-port=* ]]; then echo no; exit 1; fi\necho 'Authorization failed.' >&2\nexit 114\n",
+        )
+        .expect("writes deny script");
+        std::fs::set_permissions(&denied_script, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod +x");
+        let denied_firewall = linux::FirewalldClient::with_program(&denied_script);
+        assert!(!denied_firewall
+            .inbound_sharing_allowed()
+            .expect("queries state"));
+        let err = denied_firewall
+            .allow_inbound_sharing()
+            .expect_err("declined authorization must fail");
+        assert_eq!(err.kind(), SetupFailureKind::PermissionDenied);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

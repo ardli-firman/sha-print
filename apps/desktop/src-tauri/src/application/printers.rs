@@ -43,11 +43,7 @@ pub struct PrintJob {
 impl PrintJob {
     /// Takes ownership of the IPP body after the endpoint validates its PWG Raster document
     /// format, retaining the document as a slice to avoid a second large allocation or copy.
-    pub(crate) fn from_ipp_body(
-        body: Vec<u8>,
-        document_start: usize,
-        settings: PrintSettings,
-    ) -> Self {
+    pub fn from_ipp_body(body: Vec<u8>, document_start: usize, settings: PrintSettings) -> Self {
         Self {
             body,
             document_start,
