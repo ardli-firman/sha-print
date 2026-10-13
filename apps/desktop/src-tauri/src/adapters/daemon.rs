@@ -1745,9 +1745,32 @@ mod tests {
             ][..],
             &["shaprintctl", "--network-channel", "inline-secret"][..],
             &["shaprintctl", "--network-channel=inline-secret"][..],
+            &[
+                "shaprintctl",
+                "network-channel",
+                "set",
+                "--channel=inline-secret",
+            ][..],
+            &[
+                "shaprintctl",
+                "network-channel",
+                "set",
+                "--secret=inline-secret",
+            ][..],
+            &[
+                "shaprintctl",
+                "network-channel",
+                "set",
+                "--unknown-flag=inline-secret",
+            ][..],
         ] {
             let err = parse_cli_args(forbidden).expect_err("must reject inline secret on CLI");
             assert_eq!(err.code(), ErrorCode::InvalidInput);
+            assert!(
+                !err.message().contains("inline-secret"),
+                "error message must never echo an inline secret value: {}",
+                err.message()
+            );
         }
 
         let inspect = parse_cli_args(&["shaprintctl", "trust", "inspect", "10.0.0.5:48631"])
