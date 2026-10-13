@@ -17,6 +17,13 @@
 //!   become `not-authorized` errors that name the required action and state that no change was
 //!   made, so the UI can show how to retry; any other unparseable exit becomes `internal` and
 //!   makes no claim about whether the mutation happened.
+//!
+//! Troubleshooting — a polkit *authentication agent* must be running in the desktop session for
+//! the authorization dialog to appear at all. Full GNOME and KDE sessions ship one; minimal
+//! window-manager sessions do not, and there `pkexec` fails fast with exit `127` (the GUI then
+//! reports `not-authorized` naming the action, with no state changed). On such sessions install
+//! and start an agent, e.g. `polkit-gnome-authentication-agent-1` (package `polkit-gnome`) or
+//! `lxpolkit`, and retry.
 
 use std::path::{Path, PathBuf};
 
