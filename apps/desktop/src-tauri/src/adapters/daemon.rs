@@ -1214,6 +1214,8 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
             other
                 if other == "--network-channel"
                     || other.starts_with("--network-channel=")
+                    || other == "--channel"
+                    || other.starts_with("--channel=")
                     || other == "--value"
                     || other.starts_with("--value=")
                     || other == "--secret"
@@ -1224,8 +1226,9 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
                 ));
             }
             other if other.starts_with('-') => {
+                let option_name = other.split('=').next().unwrap_or(other);
                 return Err(AppError::invalid_input(format!(
-                    "unrecognized shaprintctl option '{other}'"
+                    "unrecognized shaprintctl option '{option_name}'"
                 )));
             }
             other => positional.push(other),
@@ -1408,10 +1411,16 @@ fn read_secret_from_tty_hidden_prompt(prompt: &str) -> Result<String, AppError> 
 
     let tty_in_for_stty = std::fs::File::open("/dev/tty")
         .map_err(|error| AppError::internal(format!("cannot open /dev/tty: {error}")))?;
-    let _ = Command::new("stty")
+    let stty_status = Command::new("stty")
         .arg("-echo")
         .stdin(Stdio::from(tty_in_for_stty))
-        .status();
+        .status()
+        .map_err(|error| AppError::internal(format!("cannot disable terminal echo: {error}")))?;
+    if !stty_status.success() {
+        return Err(AppError::internal(
+            "cannot disable terminal echo for hidden prompt",
+        ));
+    }
 
     struct RestoreEcho;
     impl Drop for RestoreEcho {
@@ -1490,18 +1499,40 @@ pub async fn execute_cli_command(options: &CliOptions) -> Result<String, AppErro
         CliCommand::SetNetworkChannel(source) => {
             let secret = read_secret_input(source)?;
             // When `shaprintctl` runs as root on the default machine socket, persist the Client
-            // credential directly into `/etc/credstore/shaprint/network-channel` (`0640
+            // credential directly into `/etc/shaprint-credentials/network-channel` (`0640
             // root:shaprint` or `0600`) so it lives in root-owned machine credential storage that
             // the unprivileged `shaprint` daemon can read while `/etc/shaprint` remains
-            // strictly non-secret (ADR 0018).
-            if options.socket_path == Path::new(DEFAULT_SOCKET_PATH)
+            // strictly non-secret (ADR 0018). If the subsequent IPC call fails, restore the
+            // previous credential file state so Client and Server never diverge.
+            let root_cred = if options.socket_path == Path::new(DEFAULT_SOCKET_PATH)
                 && current_effective_uid() == Some(0)
             {
                 let cred_path = Path::new(DEFAULT_CREDENTIAL_DIR).join(CLIENT_CREDENTIAL_FILE);
+                let previous = std::fs::read_to_string(&cred_path).ok();
                 crate::adapters::ipps::persist_root_machine_credential(&cred_path, &secret)?;
+                Some((cred_path, previous))
+            } else {
+                None
+            };
+            match client.configure_network_channel(&secret).await {
+                Ok(nc) => format_network_channel_status(&nc, options.json),
+                Err(error) => {
+                    if let Some((cred_path, previous)) = root_cred {
+                        match previous {
+                            Some(prev) => {
+                                let _ = crate::adapters::ipps::persist_root_machine_credential(
+                                    &cred_path,
+                                    prev.trim_end_matches(['\r', '\n']),
+                                );
+                            }
+                            None => {
+                                let _ = std::fs::remove_file(&cred_path);
+                            }
+                        }
+                    }
+                    Err(error)
+                }
             }
-            let nc = client.configure_network_channel(&secret).await?;
-            format_network_channel_status(&nc, options.json)
         }
         CliCommand::InspectServer { address } => {
             let review = client.inspect_server(address).await?;

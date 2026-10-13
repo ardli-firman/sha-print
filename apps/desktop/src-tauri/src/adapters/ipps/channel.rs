@@ -105,7 +105,6 @@ impl NetworkChannel {
         let credential_copy = channel.to_owned();
         if let Some(path) = self.path.clone() {
             tokio::task::spawn_blocking(move || {
-                persist(&path, verifier, client_secret_protected)?;
                 if let Some(cred_path) = credential_file {
                     match persist_machine_credential(&cred_path, &credential_copy) {
                         Ok(()) => {}
@@ -119,6 +118,7 @@ impl NetworkChannel {
                         Err(error) => return Err(error),
                     }
                 }
+                persist(&path, verifier, client_secret_protected)?;
                 Ok::<(), AppError>(())
             })
             .await
@@ -302,6 +302,7 @@ pub fn persist_machine_credential(path: &Path, channel: &str) -> Result<(), AppE
     let parent = path
         .parent()
         .ok_or_else(|| AppError::internal("cannot locate machine credential directory"))?;
+    #[cfg(unix)]
     let existed = parent.exists();
     fs::create_dir_all(parent)
         .map_err(|_| AppError::internal("cannot create machine credential directory"))?;
@@ -438,12 +439,11 @@ impl crate::application::ChannelState for NetworkChannel {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::test_support::temporary_directory;
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn linux_machine_channel_persists_only_salted_server_verifier_and_stores_client_credential_in_protected_credential_store(
     ) {
