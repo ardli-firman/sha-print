@@ -88,6 +88,12 @@ type CupsStartDocumentFn = unsafe extern "C" fn(
 type CupsWriteRequestDataFn =
     unsafe extern "C" fn(http: *mut c_void, buffer: *const c_char, length: usize) -> c_int;
 type CupsFinishDocumentFn = unsafe extern "C" fn(http: *mut c_void, name: *const c_char) -> c_int;
+type CupsCancelJob2Fn = unsafe extern "C" fn(
+    http: *mut c_void,
+    name: *const c_char,
+    job_id: c_int,
+    purge: c_int,
+) -> c_int;
 type CupsLastErrorFn = unsafe extern "C" fn() -> c_int;
 type CupsLastErrorStringFn = unsafe extern "C" fn() -> *const c_char;
 
@@ -103,6 +109,7 @@ struct LibCups {
     cups_start_document: CupsStartDocumentFn,
     cups_write_request_data: CupsWriteRequestDataFn,
     cups_finish_document: CupsFinishDocumentFn,
+    cups_cancel_job2: CupsCancelJob2Fn,
     cups_last_error: CupsLastErrorFn,
     cups_last_error_string: CupsLastErrorStringFn,
 }
@@ -163,6 +170,7 @@ fn load_libcups() -> Result<LibCups, String> {
             cups_start_document: sym(handle, b"cupsStartDocument\0")?,
             cups_write_request_data: sym(handle, b"cupsWriteRequestData\0")?,
             cups_finish_document: sym(handle, b"cupsFinishDocument\0")?,
+            cups_cancel_job2: sym(handle, b"cupsCancelJob2\0")?,
             cups_last_error: sym(handle, b"cupsLastError\0")?,
             cups_last_error_string: sym(handle, b"cupsLastErrorString\0")?,
         })
@@ -377,6 +385,7 @@ fn last_cups_error_message(lib: &LibCups) -> String {
 #[derive(Debug, Clone)]
 pub struct CupsSpoolerReader {
     endpoint: Option<CupsServerEndpoint>,
+    proxy_authority: String,
 }
 
 impl Default for CupsSpoolerReader {
@@ -387,12 +396,33 @@ impl Default for CupsSpoolerReader {
 
 impl CupsSpoolerReader {
     pub fn new() -> Self {
-        Self { endpoint: None }
+        Self {
+            endpoint: None,
+            proxy_authority: crate::adapters::queue_installation::proxy_authority(),
+        }
+    }
+
+    pub fn with_authority(proxy_authority: impl Into<String>) -> Self {
+        Self {
+            endpoint: None,
+            proxy_authority: proxy_authority.into(),
+        }
     }
 
     pub fn with_endpoint(endpoint: CupsServerEndpoint) -> Self {
         Self {
             endpoint: Some(endpoint),
+            proxy_authority: crate::adapters::queue_installation::proxy_authority(),
+        }
+    }
+
+    pub fn with_endpoint_and_authority(
+        endpoint: CupsServerEndpoint,
+        proxy_authority: impl Into<String>,
+    ) -> Self {
+        Self {
+            endpoint: Some(endpoint),
+            proxy_authority: proxy_authority.into(),
         }
     }
 
@@ -405,19 +435,21 @@ impl CupsSpoolerReader {
 impl SpoolerReader for CupsSpoolerReader {
     async fn read_spooler_records(&self) -> Result<Vec<SpoolerRecord>, AppError> {
         let endpoint = self.resolve_endpoint();
+        let proxy_authority = self.proxy_authority.clone();
         tokio::task::spawn_blocking(move || {
             let dests = query_cups_destinations(&endpoint)?;
             let mut records = Vec::with_capacity(dests.len());
             for dest in dests {
                 // Stopped queues (`printer-state == 5`) or queues rejecting jobs are not working
-                // local destinations unless they are ShaPrint client queues being classified.
+                // local destinations unless they are ShaPrint Client queues being classified.
                 let is_working = dest.accepting_jobs && dest.state != Some(IPP_PSTATE_STOPPED);
-                let is_loopback_or_shaprint = dest.device_uri.contains("127.0.0.1")
-                    || dest.device_uri.contains("localhost")
-                    || dest.device_uri.contains("/ipp/print/")
-                    || dest.name.starts_with("ShaPrint_");
-                if is_working || is_loopback_or_shaprint {
-                    records.push(SpoolerRecord::new(dest.name, dest.device_uri));
+                let record = SpoolerRecord::new(dest.name, dest.device_uri);
+                let is_recognised_client_queue = matches!(
+                    record.classify(&proxy_authority),
+                    crate::domain::SpoolerRecordClassification::RecognisedClientQueue(_)
+                );
+                if is_working || is_recognised_client_queue {
+                    records.push(record);
                 }
             }
             Ok(records)
@@ -448,7 +480,7 @@ impl CupsPrinterCatalog {
     pub fn with_authority(proxy_authority: String) -> Self {
         Self {
             inner: DestinationAwarePrinterCatalog::with_authority(
-                Arc::new(CupsSpoolerReader::new()),
+                Arc::new(CupsSpoolerReader::with_authority(proxy_authority.clone())),
                 proxy_authority,
             ),
         }
@@ -457,7 +489,10 @@ impl CupsPrinterCatalog {
     pub fn with_endpoint(endpoint: CupsServerEndpoint, proxy_authority: String) -> Self {
         Self {
             inner: DestinationAwarePrinterCatalog::with_authority(
-                Arc::new(CupsSpoolerReader::with_endpoint(endpoint)),
+                Arc::new(CupsSpoolerReader::with_endpoint_and_authority(
+                    endpoint,
+                    proxy_authority.clone(),
+                )),
                 proxy_authority,
             ),
         }
@@ -684,9 +719,13 @@ fn submit_cups_job(
         )
     };
     if start_status != HTTP_STATUS_CONTINUE {
+        let message = last_cups_error_message(conn.lib);
+        // Safety: `conn.http` and `dest_c` are valid; purges the incomplete `job_id`.
+        unsafe {
+            let _ = (conn.lib.cups_cancel_job2)(conn.http, dest_c.as_ptr(), job_id, 1);
+        }
         return Err(AppError::queue_unavailable(format!(
-            "CUPS refused to start PWG Raster document for '{printer_name}': {}",
-            last_cups_error_message(conn.lib)
+            "CUPS refused to start PWG Raster document for '{printer_name}': {message}"
         )));
     }
 
@@ -700,9 +739,13 @@ fn submit_cups_job(
             )
         };
         if write_status != HTTP_STATUS_CONTINUE {
+            let message = last_cups_error_message(conn.lib);
+            // Safety: `conn.http` and `dest_c` are valid; purges the incomplete `job_id`.
+            unsafe {
+                let _ = (conn.lib.cups_cancel_job2)(conn.http, dest_c.as_ptr(), job_id, 1);
+            }
             return Err(AppError::queue_unavailable(format!(
-                "CUPS interrupted PWG Raster stream for '{printer_name}': {}",
-                last_cups_error_message(conn.lib)
+                "CUPS interrupted PWG Raster stream for '{printer_name}': {message}"
             )));
         }
     }
@@ -713,9 +756,13 @@ fn submit_cups_job(
         finish_status,
         IPP_STATUS_OK | IPP_STATUS_OK_SUBST | IPP_STATUS_OK_CONFLICT
     ) {
+        let message = last_cups_error_message(conn.lib);
+        // Safety: `conn.http` and `dest_c` are valid; purges the failed `job_id`.
+        unsafe {
+            let _ = (conn.lib.cups_cancel_job2)(conn.http, dest_c.as_ptr(), job_id, 1);
+        }
         return Err(AppError::queue_unavailable(format!(
-            "CUPS rejected PWG Raster document for '{printer_name}': {}",
-            last_cups_error_message(conn.lib)
+            "CUPS rejected PWG Raster document for '{printer_name}': {message}"
         )));
     }
 
@@ -792,6 +839,10 @@ mod tests {
     async fn cups_catalog_and_submitter_work_against_real_cupsd_and_exclude_shaprint_queues() {
         use std::process::{Child, Command};
         use std::time::{Duration, Instant};
+
+        if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
+            return;
+        }
 
         struct IsolatedCupsd {
             dir: std::path::PathBuf,
@@ -1002,7 +1053,7 @@ mod tests {
 
         let submitter = CupsPrintJobSubmitter::with_endpoint(cupsd.endpoint.clone());
         let job = PrintJob::from_ipp_body(
-            pwg_doc,
+            pwg_doc.clone(),
             0,
             PrintSettings {
                 media: Some("iso_a4_210x297mm".to_owned()),
@@ -1018,16 +1069,27 @@ mod tests {
             .expect("submits PWG Raster job to CUPS");
         assert!(job_id >= 1);
 
-        // Submitting to a non-existent CUPS queue returns QueueUnavailable.
-        let missing_job =
+        // Submitting a truncated PWG Raster payload returns InvalidInput.
+        let truncated_job =
             PrintJob::from_ipp_body(vec![b'R', b'a', b'S', b'2'], 0, PrintSettings::default());
         let bad_format_err = submitter
             .submit(
                 &PrinterName::parse("USB_LaserJet").expect("valid"),
-                missing_job,
+                truncated_job,
             )
             .await
             .expect_err("rejects truncated PWG Raster");
         assert_eq!(bad_format_err.code(), ErrorCode::InvalidInput);
+
+        // Submitting a valid PWG Raster job to a non-existent CUPS queue returns QueueUnavailable.
+        let missing_queue_job = PrintJob::from_ipp_body(pwg_doc, 0, PrintSettings::default());
+        let missing_err = submitter
+            .submit(
+                &PrinterName::parse("NonExistentQueue").expect("valid"),
+                missing_queue_job,
+            )
+            .await
+            .expect_err("non-existent CUPS queue must return QueueUnavailable");
+        assert_eq!(missing_err.code(), ErrorCode::QueueUnavailable);
     }
 }

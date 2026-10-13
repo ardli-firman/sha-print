@@ -522,13 +522,6 @@ pub mod linux {
                         )
                     })?;
                 if !query.status.success() {
-                    let stderr = String::from_utf8_lossy(&query.stderr).to_ascii_lowercase();
-                    if stderr.contains("not authorized")
-                        || stderr.contains("authorization failed")
-                        || stderr.contains("permission denied")
-                    {
-                        return Ok(false);
-                    }
                     return Ok(false);
                 }
             }

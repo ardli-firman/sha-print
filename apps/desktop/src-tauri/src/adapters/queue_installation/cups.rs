@@ -244,6 +244,10 @@ mod tests {
         use std::process::{Child, Command};
         use std::time::{Duration, Instant};
 
+        if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
+            return;
+        }
+
         struct IsolatedCupsd {
             dir: std::path::PathBuf,
             endpoint: CupsServerEndpoint,
