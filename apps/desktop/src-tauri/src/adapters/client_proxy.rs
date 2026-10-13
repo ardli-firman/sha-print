@@ -115,6 +115,11 @@ impl ClientProxyService {
     pub fn bound_address(&self) -> Option<SocketAddr> {
         self.bound.try_lock().ok().and_then(|bound| *bound)
     }
+
+    /// Access the underlying PrintJobTracker.
+    pub fn tracker(&self) -> &Arc<PrintJobTracker> {
+        &self.tracker
+    }
 }
 
 /// Builds the IPP URI a manually configured native queue uses to route through this proxy. The
@@ -157,9 +162,15 @@ impl RuntimeService for ClientProxyService {
 
         let mut shutdown = context.shutdown();
         let mut connections = JoinSet::new();
+        let pending_cleaner = Arc::clone(&self.pending_jobs);
+        let mut cleanup_interval = tokio::time::interval(Duration::from_secs(5));
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
+                _ = cleanup_interval.tick() => {
+                    let mut pending = pending_cleaner.lock().await;
+                    pending.retain(|_, job| job.created_at.elapsed() < Duration::from_secs(120));
+                }
                 Some(_) = connections.join_next(), if !connections.is_empty() => {}
                 accepted = listener.accept() => if let Ok((stream, _)) = accepted {
                     let client_connections = Arc::clone(&self.connections);

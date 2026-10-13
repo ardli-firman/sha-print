@@ -202,9 +202,20 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
     # Verify shaprintctl drain succeeds while daemon is running.
     shaprintctl drain --timeout 10 | grep -q '^drained: true$'
 
-    # Perform real RPM upgrade from release 1 to release 2
+    # Simulate an active in-flight request while performing real RPM upgrade from release 1 to release 2
+    (
+        exec 3<>/dev/tcp/127.0.0.1/48632 2>/dev/null || true
+        if [ -e /dev/fd/3 ]; then
+            printf 'POST /ipp/print HTTP/1.1\r\nHost: 127.0.0.1:48632\r\nContent-Type: application/ipp\r\nContent-Length: 100\r\n\r\n' >&3 2>/dev/null || true
+            sleep 1
+            exec 3>&- || true
+        fi
+    ) &
+    IN_FLIGHT_PID=\$!
+
     rpm -Uvh --nodeps \"/root/${RPM_UPGRADE_FILENAME}\"
     rpm -V --nodeps shaprint
+    wait \$IN_FLIGHT_PID || true
     wait_for_shaprintd
 
     UPGRADE_STATUS=\$(shaprintctl status)
