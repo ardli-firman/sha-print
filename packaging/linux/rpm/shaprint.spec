@@ -40,7 +40,8 @@ getent passwd shaprint >/dev/null 2>&1 || \
     -c "ShaPrint system daemon" shaprint
 if [ "$1" -ge 2 ]; then
     if [ -x %{_bindir}/shaprintctl ] && [ -S /run/shaprint/shaprintd.sock ]; then
-        %{_bindir}/shaprintctl drain --timeout 30 || exit 1
+        # Try graceful drain if supported by installed version; do not block upgrade if older binary lacks drain
+        %{_bindir}/shaprintctl drain --timeout 30 >/dev/null 2>&1 || :
     fi
 fi
 exit 0

@@ -184,6 +184,10 @@ impl PrintJobTracker {
         self.begin_drain();
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
+            let notified = self.inner.drain_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
             let (jobs, requests) = match self.inner.state.read() {
                 Ok(state) => (state.active_jobs, state.active_requests),
                 Err(_) => {
@@ -198,7 +202,7 @@ impl PrintJobTracker {
             }
 
             tokio::select! {
-                _ = self.inner.drain_notify.notified() => {}
+                _ = &mut notified => {}
                 _ = tokio::time::sleep_until(deadline) => {
                     self.cancel_drain();
                     return Err(crate::domain::AppError::timeout(
