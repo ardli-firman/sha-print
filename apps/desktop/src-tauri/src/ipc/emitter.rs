@@ -86,6 +86,15 @@ fn daemon_unreachable_status() -> RuntimeStatusDto {
             })
             .collect(),
         network_channel_configured: None,
+        readiness: Some("unreachable".to_owned()),
+        shared_printers: None,
+        client_queues: None,
+        failure_code: Some(
+            crate::domain::ErrorCode::ServerUnavailable
+                .as_str()
+                .to_owned(),
+        ),
+        recent_failure: None,
     }
 }
 

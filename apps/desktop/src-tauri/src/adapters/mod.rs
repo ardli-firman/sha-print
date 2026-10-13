@@ -9,6 +9,8 @@ pub mod client_connections;
 mod client_proxy;
 #[cfg(unix)]
 pub mod daemon;
+#[cfg(unix)]
+pub mod diagnostics;
 pub mod discovery;
 #[cfg(unix)]
 pub mod elevated_ctl;

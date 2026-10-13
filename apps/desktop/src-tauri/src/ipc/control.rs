@@ -16,7 +16,8 @@ use crate::ipc::client_connections::{
     ServerConnectionPrintersDto, ServerConnectionReviewDto, TrustedServerDto, TrustedServerProbeDto,
 };
 use crate::ipc::dto::{
-    ClientQueueDto, LocalPrintersDto, RecognisedClientQueueDto, RuntimeStatusDto, ServerIdentityDto,
+    ClientQueueDto, DiagnosticsReportDto, LocalPrintersDto, RecognisedClientQueueDto,
+    RuntimeStatusDto, ServerIdentityDto,
 };
 use crate::Shell;
 
@@ -247,6 +248,57 @@ impl ControlPlane {
             Self::Machine(machine) => Ok(LocalPrintersDto {
                 printers: machine.client.list_local_printers().await?,
             }),
+        }
+    }
+
+    /// Evaluates system diagnostics across daemon, ports, CUPS, trust, credential, and firewall.
+    pub async fn diagnostics(&self) -> Result<DiagnosticsReportDto, AppError> {
+        match self {
+            Self::Local(shell) => {
+                #[cfg(unix)]
+                {
+                    Ok(crate::adapters::diagnostics::diagnose_daemon_environment(
+                        Some(shell),
+                        std::path::Path::new(crate::adapters::daemon::DEFAULT_SOCKET_PATH),
+                        &crate::RuntimePorts::default(),
+                        None,
+                        None,
+                    )
+                    .await)
+                }
+                #[cfg(not(unix))]
+                {
+                    Ok(DiagnosticsReportDto {
+                        checks: vec![crate::ipc::dto::DiagnosticCheckDto {
+                            check: "daemon".to_owned(),
+                            status: "ok".to_owned(),
+                            code: None,
+                            detail: "in-process desktop runtime".to_owned(),
+                            recovery: None,
+                        }],
+                        healthy: true,
+                        recent_failure: shell
+                            .print_failures()
+                            .latest()
+                            .as_ref()
+                            .map(crate::ipc::dto::PrintFailureDto::from),
+                    })
+                }
+            }
+            #[cfg(unix)]
+            Self::Machine(machine) => match machine.client.diagnostics().await {
+                Ok(report) => Ok(report),
+                Err(err) if err.code() == crate::domain::ErrorCode::ServerUnavailable => {
+                    Ok(crate::adapters::diagnostics::diagnose_host(
+                        machine.client.socket_path(),
+                        None,
+                        None,
+                        None,
+                    )
+                    .await)
+                }
+                Err(err) => Err(err),
+            },
         }
     }
 

@@ -23,8 +23,8 @@ use crate::adapters::ipps::CLIENT_CREDENTIAL_FILE;
 use crate::application::RuntimeCoordinator;
 use crate::domain::{AppError, ErrorCode, PrinterName, ServiceId};
 use crate::ipc::dto::{
-    AppErrorDto, ClientQueueDto, LocalPrinterDto, LocalPrintersDto, RecognisedClientQueueDto,
-    RuntimeStatusDto, ServerIdentityDto,
+    AppErrorDto, ClientQueueDto, DiagnosticsReportDto, LocalPrinterDto, LocalPrintersDto,
+    PrintFailureDto, RecognisedClientQueueDto, RuntimeStatusDto, ServerIdentityDto,
 };
 use crate::{RuntimePorts, Shell};
 
@@ -307,6 +307,7 @@ enum ControlRequest {
     SetSharedPrinters {
         printers: Vec<String>,
     },
+    Diagnostics,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -314,6 +315,9 @@ enum ControlRequest {
 enum ControlResponse {
     Ok {
         status: RuntimeStatusDto,
+    },
+    Diagnostics {
+        report: DiagnosticsReportDto,
     },
     ServerIdentity {
         identity: ServerIdentityDto,
@@ -356,6 +360,13 @@ pub struct DaemonServer {
     accept_task: JoinHandle<()>,
 }
 
+struct DaemonControlContext {
+    socket_path: PathBuf,
+    ports: RuntimePorts,
+    cups_endpoint: Option<crate::adapters::printers::cups::CupsServerEndpoint>,
+    firewall_program: Option<PathBuf>,
+}
+
 impl DaemonServer {
     /// Builds `Shell`, binds the local Unix domain socket first so a duplicate instance cannot
     /// disturb active listeners, and then restores persisted sharing state and starts autostart
@@ -390,16 +401,19 @@ impl DaemonServer {
         let credential_file = config.credential_dir().join(CLIENT_CREDENTIAL_FILE);
         let shell = Arc::new(Shell::with_linux_options(
             &config.state_dir,
-            config.ports,
+            config.ports.clone(),
             Some(credential_file),
-            config.cups_endpoint,
-            config.firewall_program,
+            config.cups_endpoint.clone(),
+            config.firewall_program.clone(),
         )?);
         let server = Self::bind_internal(
             &config.socket_path,
             shell.runtime(),
             Some(Arc::clone(&shell)),
             config.access_policy,
+            config.ports,
+            config.cups_endpoint,
+            config.firewall_program,
         )
         .await?;
         if let Err(error) = shell.restore().await {
@@ -441,7 +455,16 @@ impl DaemonServer {
         runtime: Arc<RuntimeCoordinator>,
         policy: PeerAccessPolicy,
     ) -> Result<Self, AppError> {
-        Self::bind_internal(socket_path, runtime, None, policy).await
+        Self::bind_internal(
+            socket_path,
+            runtime,
+            None,
+            policy,
+            RuntimePorts::default(),
+            None,
+            None,
+        )
+        .await
     }
 
     async fn bind_internal(
@@ -449,6 +472,9 @@ impl DaemonServer {
         runtime: Arc<RuntimeCoordinator>,
         shell: Option<Arc<Shell>>,
         policy: PeerAccessPolicy,
+        ports: RuntimePorts,
+        cups_endpoint: Option<crate::adapters::printers::cups::CupsServerEndpoint>,
+        firewall_program: Option<PathBuf>,
     ) -> Result<Self, AppError> {
         let socket_path = socket_path.into();
         if let Some(parent) = socket_path.parent() {
@@ -494,6 +520,12 @@ impl DaemonServer {
         let loop_runtime = Arc::clone(&runtime);
         let loop_shell = shell.clone();
         let loop_cancel = cancel_tx.clone();
+        let loop_ctx = Arc::new(DaemonControlContext {
+            socket_path: socket_path.clone(),
+            ports,
+            cups_endpoint,
+            firewall_program,
+        });
         let accept_task = tokio::spawn(async move {
             let mut connections = JoinSet::new();
             loop {
@@ -510,6 +542,7 @@ impl DaemonServer {
                                 let conn_runtime = Arc::clone(&loop_runtime);
                                 let conn_shell = loop_shell.clone();
                                 let conn_cancel = loop_cancel.clone();
+                                let conn_ctx = Arc::clone(&loop_ctx);
                                 connections.spawn(async move {
                                     handle_connection(
                                         stream,
@@ -518,6 +551,7 @@ impl DaemonServer {
                                         conn_cancel,
                                         policy,
                                         daemon_uid,
+                                        conn_ctx,
                                     )
                                     .await;
                                 });
@@ -622,10 +656,11 @@ async fn handle_connection(
     cancel_tx: watch::Sender<bool>,
     policy: PeerAccessPolicy,
     daemon_uid: Option<u32>,
+    ctx: Arc<DaemonControlContext>,
 ) {
     let _ = timeout(
         IO_TIMEOUT,
-        process_stream(stream, runtime, shell, cancel_tx, policy, daemon_uid),
+        process_stream(stream, runtime, shell, cancel_tx, policy, daemon_uid, ctx),
     )
     .await;
 }
@@ -638,13 +673,53 @@ fn require_shell(shell: &Option<Arc<Shell>>) -> Result<&Arc<Shell>, AppError> {
     })
 }
 
-fn runtime_status_dto(
+async fn runtime_status_dto(
     runtime: &RuntimeCoordinator,
     shell: &Option<Arc<Shell>>,
 ) -> RuntimeStatusDto {
     let mut dto = RuntimeStatusDto::from(&runtime.status());
     if let Some(shell) = shell {
         dto.network_channel_configured = Some(shell.network_channel().is_configured());
+
+        use crate::application::SharedPrinterSource;
+        let shared: Vec<String> = shell
+            .sharing()
+            .shared_printers()
+            .into_iter()
+            .map(|p| p.as_str().to_owned())
+            .collect();
+        dto.shared_printers = Some(shared);
+
+        let queues: Vec<String> = shell
+            .printer_catalog()
+            .recognised_client_queues()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|q| q.queue_name().to_string())
+            .collect();
+        dto.client_queues = Some(queues);
+
+        if let Some(failure) = shell.print_failures().latest() {
+            dto.failure_code = Some(failure.code().as_str().to_owned());
+            dto.recent_failure = Some(PrintFailureDto::from(&failure));
+        }
+
+        let any_failed = runtime
+            .status()
+            .services()
+            .iter()
+            .any(|s| s.state() == crate::domain::ServiceState::Failed);
+        if any_failed && dto.failure_code.is_none() {
+            dto.failure_code = Some(crate::domain::ErrorCode::InvalidState.as_str().to_owned());
+        }
+
+        let readiness = if any_failed || !shell.network_channel().is_configured() {
+            "not-ready"
+        } else {
+            "ready"
+        };
+        dto.readiness = Some(readiness.to_owned());
     }
     dto
 }
@@ -656,16 +731,29 @@ async fn process_stream(
     cancel_tx: watch::Sender<bool>,
     policy: PeerAccessPolicy,
     daemon_uid: Option<u32>,
+    ctx: Arc<DaemonControlContext>,
 ) -> Result<(), AppError> {
     let mut stop_daemon = false;
     let outcome: Result<ControlResponse, AppError> = async {
         let peer_cred = stream
             .peer_cred()
             .map_err(|_| AppError::not_authorized("cannot verify local peer credentials"))?;
-        match read_json_line::<ControlRequest>(&mut stream, "control request").await? {
+        let req = read_json_line::<ControlRequest>(&mut stream, "control request").await?;
+        match req {
             ControlRequest::Status => Ok(ControlResponse::Ok {
-                status: runtime_status_dto(&runtime, &shell),
+                status: runtime_status_dto(&runtime, &shell).await,
             }),
+            ControlRequest::Diagnostics => {
+                let report = crate::adapters::diagnostics::diagnose_daemon_environment(
+                    shell.as_ref(),
+                    &ctx.socket_path,
+                    &ctx.ports,
+                    ctx.cups_endpoint.as_ref(),
+                    ctx.firewall_program.as_deref(),
+                )
+                .await;
+                Ok(ControlResponse::Diagnostics { report })
+            }
             ControlRequest::ServerIdentity => {
                 let shell = require_shell(&shell)?;
                 Ok(ControlResponse::ServerIdentity {
@@ -680,7 +768,7 @@ async fn process_stream(
                 let service = ServiceId::parse(&id)?;
                 runtime.start(service).await?;
                 Ok(ControlResponse::Ok {
-                    status: runtime_status_dto(&runtime, &shell),
+                    status: runtime_status_dto(&runtime, &shell).await,
                 })
             }
             ControlRequest::StopService { id } => {
@@ -688,7 +776,7 @@ async fn process_stream(
                 let service = ServiceId::parse(&id)?;
                 runtime.stop(service).await?;
                 Ok(ControlResponse::Ok {
-                    status: runtime_status_dto(&runtime, &shell),
+                    status: runtime_status_dto(&runtime, &shell).await,
                 })
             }
             ControlRequest::Shutdown => {
@@ -696,7 +784,7 @@ async fn process_stream(
                 runtime.shutdown().await?;
                 stop_daemon = true;
                 Ok(ControlResponse::Ok {
-                    status: runtime_status_dto(&runtime, &shell),
+                    status: runtime_status_dto(&runtime, &shell).await,
                 })
             }
             ControlRequest::NetworkChannelStatus => {
@@ -920,6 +1008,14 @@ impl DaemonClient {
     pub async fn status(&self) -> Result<RuntimeStatusDto, AppError> {
         match self.send(&ControlRequest::Status).await? {
             ControlResponse::Ok { status } => Ok(status),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    /// Runs a comprehensive diagnostic check across daemon, ports, CUPS, trust, credential, and firewall.
+    pub async fn diagnostics(&self) -> Result<DiagnosticsReportDto, AppError> {
+        match self.send(&ControlRequest::Diagnostics).await? {
+            ControlResponse::Diagnostics { report } => Ok(report),
             other => Err(unexpected_response(&other)),
         }
     }
@@ -1192,6 +1288,7 @@ pub enum SecretInputSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
     Status,
+    Diagnostics,
     StartService(ServiceId),
     StopService(ServiceId),
     Shutdown,
@@ -1476,6 +1573,7 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
 
     let command = match positional.as_slice() {
         ["status"] => CliCommand::Status,
+        ["diagnostics"] | ["diag"] => CliCommand::Diagnostics,
         ["start", service] => CliCommand::StartService(ServiceId::parse(service)?),
         ["stop"] | ["stop", "daemon"] | ["shutdown"] => CliCommand::Shutdown,
         ["stop", service] => CliCommand::StopService(ServiceId::parse(service)?),
@@ -1712,6 +1810,28 @@ pub fn format_runtime_status(status: &RuntimeStatusDto, json: bool) -> Result<St
         };
         output.push_str(&format!("network-channel: {state}\n"));
     }
+    if let Some(ref readiness) = status.readiness {
+        output.push_str(&format!("readiness: {readiness}\n"));
+    }
+    if let Some(ref shared) = status.shared_printers {
+        let val = if shared.is_empty() {
+            "none".to_string()
+        } else {
+            shared.join(", ")
+        };
+        output.push_str(&format!("shared-printers: {val}\n"));
+    }
+    if let Some(ref queues) = status.client_queues {
+        let val = if queues.is_empty() {
+            "none".to_string()
+        } else {
+            queues.join(", ")
+        };
+        output.push_str(&format!("client-queues: {val}\n"));
+    }
+    if let Some(ref code) = status.failure_code {
+        output.push_str(&format!("failure-code: {code}\n"));
+    }
     Ok(output)
 }
 
@@ -1722,6 +1842,22 @@ pub async fn execute_cli_command(options: &CliOptions) -> Result<String, AppErro
         CliCommand::Status => {
             let status = client.status().await?;
             format_runtime_status(&status, options.json)
+        }
+        CliCommand::Diagnostics => {
+            let report = match client.diagnostics().await {
+                Ok(report) => report,
+                Err(err) if err.code() == ErrorCode::ServerUnavailable => {
+                    crate::adapters::diagnostics::diagnose_host(
+                        &options.socket_path,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                }
+                Err(err) => return Err(err),
+            };
+            crate::adapters::diagnostics::format_diagnostics_report(&report, options.json)
         }
         CliCommand::StartService(id) => {
             if *id == ServiceId::ServerSharing
@@ -1993,6 +2129,11 @@ mod tests {
                 },
             ],
             network_channel_configured: None,
+            readiness: None,
+            shared_printers: None,
+            client_queues: None,
+            failure_code: None,
+            recent_failure: None,
         };
 
         let text = format_runtime_status(&dto, false).expect("formats text");
@@ -2001,6 +2142,32 @@ mod tests {
         let json = format_runtime_status(&dto, true).expect("formats json");
         let parsed: RuntimeStatusDto = serde_json::from_str(&json).expect("valid json");
         assert_eq!(parsed, dto);
+
+        // With destinations, readiness, and failure code
+        let full_dto = RuntimeStatusDto {
+            services: dto.services.clone(),
+            network_channel_configured: Some(true),
+            readiness: Some("ready".to_owned()),
+            shared_printers: Some(vec!["Office_HP".to_owned()]),
+            client_queues: Some(vec!["Client_Queue_1".to_owned()]),
+            failure_code: Some("none".to_owned()),
+            recent_failure: None,
+        };
+        let full_text = format_runtime_status(&full_dto, false).expect("formats full text");
+        assert!(full_text.contains("network-channel: configured\n"));
+        assert!(full_text.contains("readiness: ready\n"));
+        assert!(full_text.contains("shared-printers: Office_HP\n"));
+        assert!(full_text.contains("client-queues: Client_Queue_1\n"));
+        assert!(full_text.contains("failure-code: none\n"));
+    }
+
+    #[test]
+    fn cli_args_parse_diagnostics_command() {
+        let diag = parse_cli_args(&["shaprintctl", "diagnostics"]).expect("diagnostics");
+        assert_eq!(diag.command, CliCommand::Diagnostics);
+
+        let diag_short = parse_cli_args(&["shaprintctl", "diag"]).expect("diag short");
+        assert_eq!(diag_short.command, CliCommand::Diagnostics);
     }
 
     #[test]
