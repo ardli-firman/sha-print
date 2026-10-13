@@ -29,8 +29,8 @@ print jobs, whether originally found as a nearby server or entered by address ac
 _Avoid_: approved server, saved server, known server
 
 **Client queue**:
-A native Windows print queue installed on a client computer that routes print jobs through ShaPrint's
-local client proxy to a server's shared printer.
+A native print queue installed on a client computer that routes print jobs through ShaPrint's local
+client proxy to a server's shared printer.
 
 **Loaded media**:
 The physical paper size loaded in a shared printer's tray and configured on the server's printer queue.

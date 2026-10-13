@@ -6,6 +6,8 @@ status: accepted
 
 ShaPrint will replace the WPF application with a Tauri shell and Rust services. The MVP targets Windows 10 and later and supports Windows clients printing to Windows servers through native print queues, a local Rust client proxy, and a Rust IPPS server that forwards jobs to existing Windows printer queues. The proxy attaches the Network Channel credentials, while IPPS uses explicit certificate fingerprint approval on first use; printing must preserve visual output and common settings such as media, color, duplex, and copies, but does not promise byte-identical rendered data. A later phase will add Linux clients and servers, initially targeting AlmaLinux and using CUPS for IPP sharing.
 
+ADR 0018 retains the Linux phase but supersedes its AlmaLinux-first rollout, direct-CUPS authentication, and lifecycle details with an Ubuntu/Debian/AlmaLinux matrix, a machine-wide ShaPrint daemon, and CUPS platform adapters.
+
 ## Consequences
 
 - Windows clients and servers discover printers through mDNS or a manually entered server address. Linux will use CUPS sharing in the later phase.

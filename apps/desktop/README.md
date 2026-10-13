@@ -60,8 +60,8 @@ application as the product path and lives beside the .NET projects while the tra
 - Least-privilege capabilities: the main window may call the shell's commands and listen for status
   events, and nothing else (no shell, filesystem, dialog, or remote content access).
 
-Remaining client work: none from the Windows MVP. Linux client and server support is a later phase
-(ADR 0001).
+Remaining client work: none from the Windows MVP. Linux Client and Server support for Ubuntu,
+Debian, and AlmaLinux is designed but not implemented (ADR 0018).
 
 ## Development
 
@@ -170,8 +170,8 @@ ADR 0013 records inbound access on Server Sharing start. ADR 0004 and ADR 0014 r
 cross-VLAN reachability; ADR 0005 and ADR 0017 record how a native client queue is named, created, and repaired;
 ADR 0006 and ADR 0012 the desktop lifecycle, auto-updater, and persistent sharing; ADR 0007 the
 migration from the .NET app; ADR 0008 how print failures reach the window; ADR 0009 the intent-driven UI flow;
-ADR 0010 and ADR 0017 server driver rendering and fixed media catalog; ADR 0015 nightly releases; and ADR 0016
-mobile client architecture. Command handlers only validate, translate, and
+ADR 0010 and ADR 0017 server driver rendering and fixed media catalog; ADR 0015 nightly releases; ADR 0016
+mobile client architecture; and ADR 0018 Linux CUPS and system-daemon architecture. Command handlers only validate, translate, and
 delegate; domain rules stay independent of Tauri and the operating system; secrets and print job
 content never reach logs, status payloads, or the UI.
 
