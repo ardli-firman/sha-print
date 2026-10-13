@@ -658,6 +658,603 @@ async fn daemon_rejects_secret_fields_in_etc_config_refuses_root_when_forbidden_
 }
 
 #[tokio::test]
+async fn daemon_configures_network_channel_and_machine_trust_over_unix_socket_with_peer_authorization(
+) {
+    let root = temporary_directory("linux-daemon-trust-and-channel");
+    let etc_dir = root.join("etc/shaprint");
+    let state_dir = root.join("var/lib/shaprint");
+    let socket_path = root.join("run/shaprint/shaprintd.sock");
+    std::fs::create_dir_all(&etc_dir).expect("creates config dir");
+
+    // Start a real remote ShaPrint Server to inspect, approve, and query.
+    let (remote_sharing, remote_endpoint) = sharing_runtime(&["Office LaserJet"]);
+    remote_sharing
+        .set_shared(printer_names(&["Office LaserJet"]))
+        .await
+        .expect("selects remote shared printer");
+    let remote_runtime = Arc::new(RuntimeCoordinator::new(vec![Arc::new(
+        support::sharing_service(remote_sharing, Arc::clone(&remote_endpoint)),
+    )]));
+    remote_runtime
+        .start(shaprint_desktop::domain::ServiceId::ServerSharing)
+        .await
+        .expect("starts remote server sharing");
+    let remote_addr = remote_endpoint
+        .bound_address()
+        .expect("remote server bound");
+    let remote_address_str = format!("127.0.0.1:{}", remote_addr.port());
+    let expected_fp = remote_endpoint.fingerprint().to_string();
+
+    let daemon = DaemonServer::launch(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_config_dir(&etc_dir)
+            .with_ports(RuntimePorts {
+                proxy_port: 0,
+                server_port: 0,
+                discovery_ports: vec![0],
+            }),
+    )
+    .await
+    .expect("launches daemon");
+
+    let client = DaemonClient::new(&socket_path);
+
+    // 1. Initially, Network Channel is unconfigured and Trusted Server list is empty.
+    let initial_nc = client
+        .network_channel_status()
+        .await
+        .expect("queries initial network channel status");
+    assert!(!initial_nc.configured);
+    assert!(client
+        .list_trusted_servers()
+        .await
+        .expect("lists initial trusted servers")
+        .is_empty());
+
+    // 2. Configure Network Channel over Unix socket; status reports configured=true without secret.
+    let secret = format!("chan-{}", std::process::id());
+    let updated_nc = client
+        .configure_network_channel(&secret)
+        .await
+        .expect("configures Network Channel");
+    assert!(updated_nc.configured);
+    let nc_json = serde_json::to_string(&updated_nc).expect("serializes nc status");
+    assert!(!nc_json.contains(&secret));
+
+    // 3. Querying printers before approval is rejected with `server-untrusted`.
+    let untrusted_err = client
+        .list_server_printers(&remote_address_str)
+        .await
+        .expect_err("must reject untrusted server printer query");
+    assert_eq!(untrusted_err.code(), ErrorCode::ServerNotTrusted);
+
+    // 4. Inspect presents the Server certificate fingerprint without trusting it yet.
+    let review = client
+        .inspect_server(&remote_address_str)
+        .await
+        .expect("inspects remote server");
+    assert_eq!(review.current_fingerprint, expected_fp);
+    assert_eq!(review.previous_fingerprint, None);
+    assert!(!review.trusted);
+
+    // 5. Approve pins the fingerprint as a machine-wide Trusted Server.
+    let approved = client
+        .approve_server(&remote_address_str, &review.current_fingerprint)
+        .await
+        .expect("approves remote server");
+    assert!(approved.trusted);
+    assert_eq!(approved.current_fingerprint, expected_fp);
+
+    let trusted_list = client
+        .list_trusted_servers()
+        .await
+        .expect("lists trusted servers");
+    assert_eq!(trusted_list.len(), 1);
+    assert_eq!(trusted_list[0].address, remote_address_str);
+    assert_eq!(trusted_list[0].fingerprint, expected_fp);
+
+    // 6. Listing shared printers on the Trusted Server now succeeds.
+    let printers = client
+        .list_server_printers(&remote_address_str)
+        .await
+        .expect("lists shared printers on trusted server");
+    assert_eq!(printers.printers, vec!["Office LaserJet"]);
+
+    // 7. Forget removes machine trust; subsequent printer query is blocked again.
+    client
+        .forget_server(&remote_address_str)
+        .await
+        .expect("forgets trusted server");
+    assert!(client
+        .list_trusted_servers()
+        .await
+        .expect("lists after forget")
+        .is_empty());
+    let after_forget_err = client
+        .list_server_printers(&remote_address_str)
+        .await
+        .expect_err("must block printer query after forgetting server");
+    assert_eq!(after_forget_err.code(), ErrorCode::ServerNotTrusted);
+
+    daemon.shutdown().await.expect("stops daemon");
+    remote_runtime
+        .shutdown()
+        .await
+        .expect("stops remote server");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shaprintctl_cli_end_to_end_trust_reapproval_restart_and_zero_leakage() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let root = temporary_directory("linux-daemon-e2e-trust-restart");
+    let etc_dir = root.join("etc/shaprint");
+    let state_dir = root.join("var/lib/shaprint");
+    let socket_path = root.join("run/shaprint/shaprintd.sock");
+    std::fs::create_dir_all(&etc_dir).expect("creates config dir");
+
+    let secret = format!(
+        "nc-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("unix epoch")
+            .as_nanos()
+    );
+
+    // Build a controllable remote ShaPrint Server whose TLS identity can be rotated on the same
+    // port to verify changed-fingerprint blocking and reapproval.
+    let remote_listener = TcpListener::bind("127.0.0.1:0").expect("binds remote port");
+    let remote_port = remote_listener.local_addr().expect("remote addr").port();
+    drop(remote_listener);
+    let remote_address = format!("127.0.0.1:{remote_port}");
+
+    let start_remote_server = |secret_val: String| async move {
+        let identity = Arc::new(
+            shaprint_desktop::adapters::ServerIdentity::generate().expect("generates identity"),
+        );
+        let fingerprint = identity.fingerprint().to_string();
+        let catalog: Arc<dyn shaprint_desktop::application::LocalPrinterCatalog> =
+            support::FakeCatalog::new(&["Warehouse Zebra"]);
+        let sharing = Arc::new(Sharing::new(catalog));
+        sharing
+            .set_shared(printer_names(&["Warehouse Zebra"]))
+            .await
+            .expect("selects shared printer");
+        let channel = Arc::new(NetworkChannel::in_memory());
+        channel
+            .configure_sync(&secret_val)
+            .expect("configures remote server channel");
+        let submitted_jobs = Arc::new(AtomicUsize::new(0));
+        let jobs_counter = Arc::clone(&submitted_jobs);
+
+        struct CountingSubmitter(Arc<AtomicUsize>);
+        #[async_trait::async_trait]
+        impl shaprint_desktop::application::PrintJobSubmitter for CountingSubmitter {
+            async fn submit(
+                &self,
+                _printer: &shaprint_desktop::domain::PrinterName,
+                _job: shaprint_desktop::application::PrintJob,
+            ) -> Result<u32, shaprint_desktop::domain::AppError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(42)
+            }
+        }
+
+        let endpoint = Arc::new(IppsServer::new(
+            remote_port,
+            identity,
+            Arc::clone(&channel),
+            Arc::new(CountingSubmitter(jobs_counter)),
+            Arc::new(PrintFailures::new()),
+            Arc::new(PrintJobTracker::new()),
+        ));
+        let mdns = Arc::new(MdnsAdvertiser::on(vec![0]));
+        let advertiser: Arc<dyn shaprint_desktop::application::ServerAdvertiser> = mdns;
+        let service = Arc::new(ServerSharingService::new(
+            sharing,
+            endpoint,
+            advertiser,
+            support::allowed_inbound_setup(),
+            channel as Arc<dyn shaprint_desktop::application::ChannelState>,
+        ));
+        let runtime = Arc::new(RuntimeCoordinator::new(vec![service]));
+        runtime
+            .start(shaprint_desktop::domain::ServiceId::ServerSharing)
+            .await
+            .expect("starts remote server");
+        (runtime, fingerprint, submitted_jobs)
+    };
+
+    let (remote_v1, fp_v1, jobs_v1) = start_remote_server(secret.clone()).await;
+
+    // Reserve a deterministic loopback proxy port so we can restart the daemon on the same proxy
+    // port and verify print forwarding across daemon restarts.
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").expect("binds proxy port");
+    let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+    drop(proxy_listener);
+
+    let daemon = DaemonServer::launch(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_config_dir(&etc_dir)
+            .with_ports(RuntimePorts {
+                proxy_port,
+                server_port: 0,
+                discovery_ports: vec![0],
+            }),
+    )
+    .await
+    .expect("launches daemon");
+
+    let ctl_bin = env!("CARGO_BIN_EXE_shaprintctl");
+    let socket_str = socket_path.to_string_lossy().into_owned();
+
+    // 1. CLI rejects inline Network Channel arguments with exit code 2.
+    let bad_cli = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "network-channel", "set", &secret])
+        .output()
+        .expect("runs shaprintctl with forbidden inline secret");
+    assert_eq!(bad_cli.status.code(), Some(2));
+    assert!(
+        !String::from_utf8_lossy(&bad_cli.stderr).contains(&secret),
+        "error output must never echo a rejected secret argument"
+    );
+
+    // 2. Configure Network Channel via `shaprintctl network-channel set --stdin`.
+    let mut child = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "network-channel", "set", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawns shaprintctl network-channel set --stdin");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe")
+        .write_all(format!("{secret}\n").as_bytes())
+        .expect("writes secret to stdin");
+    let set_out = child.wait_with_output().expect("waits for shaprintctl");
+    assert!(
+        set_out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&set_out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&set_out.stdout),
+        "network-channel: configured\n"
+    );
+
+    // 3. Configure via `--credential-file` and verify `shaprintctl status --json` includes
+    //    `network_channel_configured: true` without exposing the secret.
+    let temp_cred = root.join("input-cred");
+    std::fs::write(&temp_cred, format!("{secret}\n")).expect("writes temp cred");
+    let set_cred_out = Command::new(ctl_bin)
+        .args([
+            "--socket",
+            &socket_str,
+            "network-channel",
+            "set",
+            "--credential-file",
+            &temp_cred.to_string_lossy(),
+        ])
+        .output()
+        .expect("runs shaprintctl with --credential-file");
+    std::fs::remove_file(&temp_cred).ok();
+    assert!(set_cred_out.status.success());
+
+    // 3b. Configure via `--fd 3` using a shell file-descriptor redirection, proving `shaprintctl`
+    //     accepts open file descriptors without putting the secret in `argv`.
+    let fd_cred = root.join("fd-cred");
+    std::fs::write(&fd_cred, format!("{secret}\n")).expect("writes fd cred");
+    let set_fd_out = Command::new("bash")
+        .args([
+            "-c",
+            "exec 3<\"$1\" && exec \"$0\" --socket \"$2\" network-channel set --fd 3",
+            ctl_bin,
+            &fd_cred.to_string_lossy(),
+            &socket_str,
+        ])
+        .output()
+        .expect("runs shaprintctl with --fd 3");
+    std::fs::remove_file(&fd_cred).ok();
+    assert!(
+        set_fd_out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&set_fd_out.stderr)
+    );
+
+    let status_out = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "--json", "status"])
+        .output()
+        .expect("runs shaprintctl status --json");
+    assert!(status_out.status.success());
+    let status_stdout = String::from_utf8_lossy(&status_out.stdout);
+    assert!(!status_stdout.contains(&secret));
+    let status_json: serde_json::Value =
+        serde_json::from_str(&status_stdout).expect("parses status json");
+    assert_eq!(status_json["network_channel_configured"], true);
+
+    // 4. Inspect server fingerprint via CLI, then approve it.
+    let inspect_out = Command::new(ctl_bin)
+        .args([
+            "--socket",
+            &socket_str,
+            "--json",
+            "trust",
+            "inspect",
+            &remote_address,
+        ])
+        .output()
+        .expect("runs shaprintctl trust inspect");
+    assert!(inspect_out.status.success());
+    let inspect_json: serde_json::Value =
+        serde_json::from_slice(&inspect_out.stdout).expect("parses inspect json");
+    assert_eq!(inspect_json["current_fingerprint"], fp_v1);
+    assert_eq!(inspect_json["trusted"], false);
+
+    let approve_out = Command::new(ctl_bin)
+        .args([
+            "--socket",
+            &socket_str,
+            "trust",
+            "approve",
+            &remote_address,
+            "--fingerprint",
+            &fp_v1,
+        ])
+        .output()
+        .expect("runs shaprintctl trust approve");
+    assert!(approve_out.status.success());
+
+    // 5. Submit a print job through the daemon's Client proxy to the Trusted Server.
+    let send_proxy_print_job = |proxy_port: u16, remote_address: &str| {
+        let remote_addr_owned = remote_address.to_owned();
+        async move {
+            let proxy_authority = format!("127.0.0.1:{proxy_port}");
+            let uri = shaprint_desktop::adapters::client_queue_uri(
+                &proxy_authority,
+                &remote_addr_owned,
+                "Warehouse Zebra",
+            )
+            .expect("builds queue uri");
+            let path = uri
+                .strip_prefix(&format!("ipp://{proxy_authority}"))
+                .expect("strips proxy prefix");
+            let mut ipp = vec![2, 0, 0x00, 0x02, 0, 0, 0, 1, 0x01];
+            for (tag, name, val) in [
+                (0x47u8, "attributes-charset", "utf-8"),
+                (0x48u8, "attributes-natural-language", "en"),
+                (0x45u8, "printer-uri", uri.as_str()),
+                (0x49u8, "document-format", "image/pwg-raster"),
+            ] {
+                ipp.push(tag);
+                ipp.extend((name.len() as u16).to_be_bytes());
+                ipp.extend(name.as_bytes());
+                ipp.extend((val.len() as u16).to_be_bytes());
+                ipp.extend(val.as_bytes());
+            }
+            ipp.push(0x03);
+            ipp.extend_from_slice(b"RaS2-test-pwg-raster-payload");
+            let req = format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{proxy_port}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n",
+                ipp.len()
+            );
+            let mut stream = TcpStream::connect(("127.0.0.1", proxy_port))
+                .await
+                .expect("connects to client proxy");
+            stream.write_all(req.as_bytes()).await.expect("writes head");
+            stream.write_all(&ipp).await.expect("writes body");
+            let mut resp = Vec::new();
+            stream.read_to_end(&mut resp).await.expect("reads response");
+            let body_pos = resp
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|i| i + 4)
+                .expect("http body");
+            u16::from_be_bytes([resp[body_pos + 2], resp[body_pos + 3]])
+        }
+    };
+
+    let ipp_status = send_proxy_print_job(proxy_port, &remote_address).await;
+    assert_eq!(ipp_status, 0x0000, "expected successful-ok from proxy");
+    assert_eq!(jobs_v1.load(Ordering::SeqCst), 1);
+
+    // 6. Restart the daemon and verify that both Network Channel authorization and Trusted Server
+    //    pinning survive the restart without reconfiguration.
+    daemon
+        .shutdown()
+        .await
+        .expect("stops daemon before restart");
+    let daemon = DaemonServer::launch(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_config_dir(&etc_dir)
+            .with_ports(RuntimePorts {
+                proxy_port,
+                server_port: 0,
+                discovery_ports: vec![0],
+            }),
+    )
+    .await
+    .expect("relaunches daemon after restart");
+
+    let ipp_status_after_restart = send_proxy_print_job(proxy_port, &remote_address).await;
+    assert_eq!(ipp_status_after_restart, 0x0000);
+    assert_eq!(jobs_v1.load(Ordering::SeqCst), 2);
+    // And verify the daemon's own Server verifier still authorizes `secret`.
+    assert!(daemon
+        .shell()
+        .expect("has shell")
+        .network_channel()
+        .authorizes(&secret));
+
+    // 7. Rotate the remote Server's TLS certificate on the same address: printer queries and
+    //    print jobs must be blocked with `server-identity-changed` until explicit reapproval.
+    remote_v1.shutdown().await.expect("stops remote v1");
+    let (remote_v2, fp_v2, jobs_v2) = start_remote_server(secret.clone()).await;
+    assert_ne!(fp_v1, fp_v2);
+
+    let printers_changed = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "printers", &remote_address])
+        .output()
+        .expect("runs shaprintctl printers against rotated server");
+    assert!(!printers_changed.status.success());
+    assert!(
+        String::from_utf8_lossy(&printers_changed.stderr).contains("code=server-identity-changed"),
+        "stderr was: {}",
+        String::from_utf8_lossy(&printers_changed.stderr)
+    );
+
+    let ipp_blocked = send_proxy_print_job(proxy_port, &remote_address).await;
+    assert_eq!(
+        ipp_blocked, 0x0403,
+        "changed server identity must block proxy print jobs with client-error-not-authorized"
+    );
+    assert_eq!(jobs_v2.load(Ordering::SeqCst), 0);
+
+    // 8. Reapprove the new fingerprint via `shaprintctl trust approve`, and verify queries and
+    //    print jobs succeed again.
+    let reapprove_out = Command::new(ctl_bin)
+        .args([
+            "--socket",
+            &socket_str,
+            "trust",
+            "approve",
+            &remote_address,
+            "--fingerprint",
+            &fp_v2,
+        ])
+        .output()
+        .expect("reapproves rotated server");
+    assert!(reapprove_out.status.success());
+
+    let printers_ok = Command::new(ctl_bin)
+        .args(["--socket", &socket_str, "printers", &remote_address])
+        .output()
+        .expect("lists printers after reapproval");
+    assert!(printers_ok.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&printers_ok.stdout),
+        "Warehouse Zebra\n"
+    );
+
+    let ipp_after_reapprove = send_proxy_print_job(proxy_port, &remote_address).await;
+    assert_eq!(ipp_after_reapprove, 0x0000);
+    assert_eq!(jobs_v2.load(Ordering::SeqCst), 1);
+
+    // 9. Verify that `/var/lib/shaprint` files, `/etc/shaprint/config.json`, and CLI outputs
+    //    contain no Network Channel value or keyed URI.
+    for state_entry in std::fs::read_dir(&state_dir).expect("reads state_dir") {
+        let path = state_entry.expect("entry").path();
+        if path.is_file() {
+            let bytes = std::fs::read(&path).expect("reads state file");
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(
+                !text.contains(&secret),
+                "state file '{}' must not contain the Network Channel secret",
+                path.display()
+            );
+        }
+    }
+
+    daemon.shutdown().await.expect("stops daemon");
+
+    // 10. Relaunch with `PeerAccessPolicy::AllowUid(u32::MAX - 1)` so any local user connecting
+    //     over the socket is treated as an unprivileged local user: verify all local users
+    //     observe the same machine trust (`trust list`), shared printers (`printers`), and
+    //     configured status (`status`, `network-channel status`) without receiving the secret,
+    //     while unprivileged mutations (`network-channel set`, `trust approve`, `trust forget`)
+    //     are rejected with `not-authorized`.
+    let restricted_daemon = DaemonServer::launch(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_config_dir(&etc_dir)
+            .with_access_policy(PeerAccessPolicy::AllowUid(u32::MAX - 1))
+            .with_ports(RuntimePorts {
+                proxy_port,
+                server_port: 0,
+                discovery_ports: vec![0],
+            }),
+    )
+    .await
+    .expect("launches restricted daemon");
+
+    let unpriv_client = DaemonClient::new(&socket_path);
+    let observed_status = unpriv_client
+        .status()
+        .await
+        .expect("unprivileged user reads status");
+    assert_eq!(observed_status.network_channel_configured, Some(true));
+    assert!(!serde_json::to_string(&observed_status)
+        .expect("json")
+        .contains(&secret));
+
+    let observed_nc = unpriv_client
+        .network_channel_status()
+        .await
+        .expect("unprivileged user reads network-channel status");
+    assert!(observed_nc.configured);
+
+    let observed_trusted = unpriv_client
+        .list_trusted_servers()
+        .await
+        .expect("unprivileged user lists machine trusted servers");
+    assert_eq!(observed_trusted.len(), 1);
+    assert_eq!(observed_trusted[0].address, remote_address);
+    assert_eq!(observed_trusted[0].fingerprint, fp_v2);
+
+    let observed_printers = unpriv_client
+        .list_server_printers(&remote_address)
+        .await
+        .expect("unprivileged user queries printers on machine-trusted server");
+    assert_eq!(observed_printers.printers, vec!["Warehouse Zebra"]);
+
+    let inspected_by_unpriv = unpriv_client
+        .inspect_server(&remote_address)
+        .await
+        .expect("unprivileged user can inspect server certificate fingerprint");
+    assert_eq!(inspected_by_unpriv.current_fingerprint, fp_v2);
+    assert!(inspected_by_unpriv.trusted);
+
+    let unpriv_candidate = format!("unpriv-{}", std::process::id());
+    assert_eq!(
+        unpriv_client
+            .configure_network_channel(&unpriv_candidate)
+            .await
+            .expect_err("unprivileged user cannot set network channel")
+            .code(),
+        ErrorCode::NotAuthorized
+    );
+    assert_eq!(
+        unpriv_client
+            .approve_server(&remote_address, &fp_v2)
+            .await
+            .expect_err("unprivileged user cannot approve server")
+            .code(),
+        ErrorCode::NotAuthorized
+    );
+    assert_eq!(
+        unpriv_client
+            .forget_server(&remote_address)
+            .await
+            .expect_err("unprivileged user cannot forget server")
+            .code(),
+        ErrorCode::NotAuthorized
+    );
+
+    restricted_daemon
+        .shutdown()
+        .await
+        .expect("stops restricted daemon");
+    remote_v2.shutdown().await.expect("stops remote v2");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
 async fn almalinux_10_rpm_package_smoke_installs_boots_queries_restarts_repairs_and_stops_service()
 {
     use std::process::Command;

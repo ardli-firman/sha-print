@@ -26,6 +26,7 @@ install -D -m 0644 "%{_sourcedir}/shaprint.sysusers" "%{buildroot}%{_sysusersdir
 install -D -m 0644 "%{_sourcedir}/shaprint.tmpfiles" "%{buildroot}%{_tmpfilesdir}/shaprint.conf"
 install -D -m 0644 "%{_sourcedir}/90-shaprint.preset" "%{buildroot}%{_presetdir}/90-shaprint.preset"
 install -d -m 0750 "%{buildroot}%{_sysconfdir}/shaprint"
+install -d -m 0750 "%{buildroot}%{_sysconfdir}/shaprint-credentials"
 install -D -m 0640 "%{_sourcedir}/config.json" "%{buildroot}%{_sysconfdir}/shaprint/config.json"
 install -d -m 0700 "%{buildroot}%{_sharedstatedir}/shaprint"
 
@@ -71,6 +72,7 @@ exit 0
 %attr(0644,root,root) %{_tmpfilesdir}/shaprint.conf
 %attr(0644,root,root) %{_presetdir}/90-shaprint.preset
 %dir %attr(0750,root,shaprint) %{_sysconfdir}/shaprint
+%dir %attr(0750,root,shaprint) %{_sysconfdir}/shaprint-credentials
 %config(noreplace) %attr(0640,root,shaprint) %{_sysconfdir}/shaprint/config.json
 %dir %attr(0700,shaprint,shaprint) %{_sharedstatedir}/shaprint
 

@@ -93,6 +93,16 @@ impl Shell {
 
     /// Builds the shell with explicit listener ports for isolated daemon and lifecycle tests.
     pub fn with_ports(data_dir: &Path, ports: RuntimePorts) -> Result<Self, AppError> {
+        Self::with_ports_and_credential_file(data_dir, ports, None)
+    }
+
+    /// Builds the shell with explicit listener ports and an optional protected machine credential
+    /// file path for the Client Network Channel on Linux.
+    pub fn with_ports_and_credential_file(
+        data_dir: &Path,
+        ports: RuntimePorts,
+        credential_file: Option<std::path::PathBuf>,
+    ) -> Result<Self, AppError> {
         let identity = Arc::new(FileIdentityStore::new(data_dir).load_or_create()?);
         let printer_catalog = default_printer_catalog();
         let sharing = Arc::new(Sharing::with_persistence(
@@ -100,7 +110,10 @@ impl Shell {
             Some(data_dir),
         ));
         let client_connections = Arc::new(ClientConnections::new(data_dir)?);
-        let network_channel = Arc::new(NetworkChannel::open(data_dir)?);
+        let network_channel = Arc::new(NetworkChannel::open_with_credential_file(
+            data_dir,
+            credential_file,
+        )?);
         // Both print paths report here, so the window has one place to answer "why did my print
         // not come out?" (#39).
         let print_failures = Arc::new(PrintFailures::new());

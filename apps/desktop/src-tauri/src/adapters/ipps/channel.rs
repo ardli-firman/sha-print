@@ -14,10 +14,14 @@ use crate::application::ChannelStore;
 use crate::domain::AppError;
 
 const VERIFIER_FILE: &str = "network-channel-verifier.json";
+/// Default credential file name inside the Linux machine credential directory (`credentials/network-channel`).
+pub const CLIENT_CREDENTIAL_FILE: &str = "network-channel";
 
-/// Holds a salted one-way server verifier and, on Windows, a DPAPI-protected client credential.
+/// Holds a salted one-way server verifier and, on Windows, a DPAPI-protected client credential,
+/// or on Linux, a protected machine credential file.
 pub struct NetworkChannel {
     path: Option<PathBuf>,
+    credential_file: Option<PathBuf>,
     verifier: RwLock<Option<ChannelVerifier>>,
     client_secret: RwLock<Option<String>>,
     configure_lock: Mutex<()>,
@@ -27,6 +31,7 @@ impl NetworkChannel {
     pub fn in_memory() -> Self {
         Self {
             path: None,
+            credential_file: None,
             verifier: RwLock::new(None),
             client_secret: RwLock::new(None),
             configure_lock: Mutex::new(()),
@@ -35,8 +40,18 @@ impl NetworkChannel {
 
     /// Loads the verifier from app data. Legacy unsalted records are not trusted.
     pub fn open(directory: impl Into<PathBuf>) -> Result<Self, AppError> {
+        Self::open_with_credential_file(directory, None)
+    }
+
+    /// Loads the verifier from `directory` and, when `credential_file` (or systemd
+    /// `CREDENTIALS_DIRECTORY`) is provided, loads the Client credential from protected machine
+    /// credential storage.
+    pub fn open_with_credential_file(
+        directory: impl Into<PathBuf>,
+        credential_file: Option<PathBuf>,
+    ) -> Result<Self, AppError> {
         let path = directory.into().join(VERIFIER_FILE);
-        let (verifier, client_secret) = if path.exists() {
+        let (verifier, mut client_secret) = if path.exists() {
             let bytes = fs::read(&path)
                 .map_err(|_| AppError::internal("cannot read the Network Channel verifier"))?;
             let record: VerifierRecord = serde_json::from_slice(&bytes)
@@ -57,15 +72,21 @@ impl NetworkChannel {
         } else {
             (None, None)
         };
+
+        if client_secret.is_none() {
+            client_secret = load_machine_credential(credential_file.as_deref())?;
+        }
+
         Ok(Self {
             path: Some(path),
+            credential_file,
             verifier: RwLock::new(verifier),
             client_secret: RwLock::new(client_secret),
             configure_lock: Mutex::new(()),
         })
     }
 
-    /// Replaces the server verifier and persists a user-protected copy for client forwarding.
+    /// Replaces the server verifier and persists a protected copy for client forwarding.
     pub async fn configure(&self, channel: &str) -> Result<bool, AppError> {
         if channel.is_empty() {
             return Err(AppError::invalid_input("Network Channel cannot be empty"));
@@ -80,10 +101,28 @@ impl NetworkChannel {
             digest: channel_digest(&salt, channel),
         };
         let client_secret_protected = protect_secret(channel)?;
+        let credential_file = self.credential_file.clone();
+        let credential_copy = channel.to_owned();
         if let Some(path) = self.path.clone() {
-            tokio::task::spawn_blocking(move || persist(&path, verifier, client_secret_protected))
-                .await
-                .map_err(|_| AppError::internal("Network Channel storage worker stopped"))??;
+            tokio::task::spawn_blocking(move || {
+                persist(&path, verifier, client_secret_protected)?;
+                if let Some(cred_path) = credential_file {
+                    match persist_machine_credential(&cred_path, &credential_copy) {
+                        Ok(()) => {}
+                        Err(_)
+                            if read_credential_file(&cred_path).ok().as_deref()
+                                == Some(credential_copy.as_str()) =>
+                        {
+                            // When privileged `shaprintctl` already wrote the matching root-owned
+                            // machine credential (`0640 root:shaprint`), keep it.
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                Ok::<(), AppError>(())
+            })
+            .await
+            .map_err(|_| AppError::internal("Network Channel storage worker stopped"))??;
         }
         let mut current = self
             .verifier
@@ -225,6 +264,107 @@ fn persist(
         .map_err(|_| AppError::internal("cannot persist the Network Channel verifier"))
 }
 
+fn load_machine_credential(credential_file: Option<&Path>) -> Result<Option<String>, AppError> {
+    if let Ok(cred_dir) = std::env::var("CREDENTIALS_DIRECTORY") {
+        let systemd_path = Path::new(&cred_dir).join(CLIENT_CREDENTIAL_FILE);
+        if systemd_path.exists() {
+            return read_credential_file(&systemd_path).map(Some);
+        }
+    }
+    if let Some(path) = credential_file {
+        if path.exists() {
+            return read_credential_file(path).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+fn read_credential_file(path: &Path) -> Result<String, AppError> {
+    let bytes = fs::read(path)
+        .map_err(|_| AppError::internal("cannot read the protected Network Channel credential"))?;
+    let raw = String::from_utf8(bytes)
+        .map_err(|_| AppError::internal("the protected Network Channel credential is invalid"))?;
+    let trimmed = raw.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() {
+        return Err(AppError::internal(
+            "the protected Network Channel credential is empty",
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// Persists the Client Network Channel credential into root/daemon-protected machine credential
+/// storage (`0700` or `0750` parent directory, `0600` or `0640` file).
+pub fn persist_machine_credential(path: &Path, channel: &str) -> Result<(), AppError> {
+    if channel.is_empty() {
+        return Err(AppError::invalid_input("Network Channel cannot be empty"));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::internal("cannot locate machine credential directory"))?;
+    let existed = parent.exists();
+    fs::create_dir_all(parent)
+        .map_err(|_| AppError::internal("cannot create machine credential directory"))?;
+    #[cfg(unix)]
+    if !existed {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).map_err(|_| {
+            AppError::internal("cannot set permissions on machine credential directory")
+        })?;
+    }
+    let temporary = path.with_extension("tmp");
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .map_err(|_| AppError::internal("cannot create machine credential file"))?;
+    file.write_all(channel.as_bytes())
+        .map_err(|_| AppError::internal("cannot write machine credential file"))?;
+    file.sync_all()
+        .map_err(|_| AppError::internal("cannot sync machine credential file"))?;
+    drop(file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let group_applied = Command::new("chgrp")
+            .args(["shaprint", &parent.to_string_lossy()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+            && Command::new("chgrp")
+                .args(["shaprint", &temporary.to_string_lossy()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+        let file_mode = if group_applied {
+            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o750));
+            0o640
+        } else {
+            0o600
+        };
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(file_mode))
+            .map_err(|_| AppError::internal("cannot set permissions on machine credential file"))?;
+    }
+    fs::rename(&temporary, path)
+        .map_err(|_| AppError::internal("cannot persist machine credential file"))
+}
+
+/// Persists the Client Network Channel credential as root into `/etc/credstore/shaprint` and
+/// sets group `shaprint` (`0750` directory, `0640` file) when the `shaprint` account exists so
+/// the unprivileged daemon can read it across restarts while ordinary local users cannot.
+pub fn persist_root_machine_credential(path: &Path, channel: &str) -> Result<(), AppError> {
+    persist_machine_credential(path, channel)
+}
+
 fn protect_secret(value: &str) -> Result<Option<String>, AppError> {
     #[cfg(windows)]
     {
@@ -295,5 +435,112 @@ impl ChannelStore for NetworkChannel {
 impl crate::application::ChannelState for NetworkChannel {
     fn is_configured(&self) -> bool {
         NetworkChannel::is_configured(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::temporary_directory;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn linux_machine_channel_persists_only_salted_server_verifier_and_stores_client_credential_in_protected_credential_store(
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temporary_directory("linux-network-channel-persistence");
+        let state_dir = root.join("var/lib/shaprint");
+        let cred_dir = root.join("etc/credstore/shaprint");
+        let cred_file = cred_dir.join("network-channel");
+        let generated = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("unix epoch")
+            .as_nanos()
+            .to_string();
+        let secret = generated.as_str();
+
+        let channel =
+            NetworkChannel::open_with_credential_file(&state_dir, Some(cred_file.clone()))
+                .expect("opens unconfigured channel");
+        assert!(!channel.is_configured());
+        assert_eq!(channel.client_credential(), None);
+
+        channel
+            .configure(secret)
+            .await
+            .expect("configures Network Channel");
+        assert!(channel.is_configured());
+        assert!(channel.authorizes(secret));
+        assert!(!channel.authorizes("wrong-channel"));
+        assert_eq!(channel.client_credential().as_deref(), Some(secret));
+
+        // 1. Server verifier file in `/var/lib/shaprint` contains ONLY a fresh salt and SHA-256
+        //    digest; it never contains plaintext or `client_secret_protected`.
+        let verifier_path = state_dir.join(VERIFIER_FILE);
+        let verifier_raw =
+            std::fs::read_to_string(&verifier_path).expect("reads persisted verifier");
+        assert!(
+            !verifier_raw.contains(secret),
+            "verifier file must never contain the Network Channel secret"
+        );
+        let parsed_verifier: serde_json::Value =
+            serde_json::from_str(&verifier_raw).expect("valid verifier JSON");
+        let first_salt = parsed_verifier["salt"]
+            .as_str()
+            .expect("has salt")
+            .to_owned();
+        assert_eq!(first_salt.len(), 32);
+        assert!(parsed_verifier.get("client_secret_protected").is_none());
+        let verifier_mode = std::fs::metadata(&verifier_path)
+            .expect("verifier metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(verifier_mode, 0o600);
+
+        // 2. Client credential is stored in the protected machine credential directory with
+        //    restricted permissions (`0700` dir, `0600` file).
+        assert!(cred_file.exists(), "client credential file exists");
+        let cred_dir_mode = std::fs::metadata(&cred_dir)
+            .expect("cred dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(cred_dir_mode, 0o700);
+        let cred_file_mode = std::fs::metadata(&cred_file)
+            .expect("cred file metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(cred_file_mode, 0o600);
+
+        // 3. Reconfiguring the same secret generates a freshly salted verifier.
+        channel
+            .configure(secret)
+            .await
+            .expect("reconfigures Network Channel");
+        let second_raw =
+            std::fs::read_to_string(&verifier_path).expect("reads reconfigured verifier");
+        let second_verifier: serde_json::Value =
+            serde_json::from_str(&second_raw).expect("valid JSON");
+        let second_salt = second_verifier["salt"].as_str().expect("has salt");
+        assert_ne!(
+            first_salt, second_salt,
+            "reconfiguring must generate a fresh random salt"
+        );
+
+        // 4. Reopening (simulating daemon restart) restores both Server verifier authorization
+        //    and the Client proxy credential.
+        drop(channel);
+        let reopened =
+            NetworkChannel::open_with_credential_file(&state_dir, Some(cred_file.clone()))
+                .expect("reopens persisted Network Channel");
+        assert!(reopened.is_configured());
+        assert!(reopened.authorizes(secret));
+        assert!(!reopened.authorizes("wrong-channel"));
+        assert_eq!(reopened.client_credential().as_deref(), Some(secret));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

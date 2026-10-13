@@ -10,7 +10,10 @@ mod endpoint;
 mod http;
 pub mod protocol;
 
-pub use channel::NetworkChannel;
+pub use channel::{
+    persist_machine_credential, persist_root_machine_credential, NetworkChannel,
+    CLIENT_CREDENTIAL_FILE,
+};
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
