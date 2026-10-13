@@ -60,8 +60,12 @@ application as the product path and lives beside the .NET projects while the tra
 - Least-privilege capabilities: the main window may call the shell's commands and listen for status
   events, and nothing else (no shell, filesystem, dialog, or remote content access).
 
-Remaining client work: none from the Windows MVP. Linux Client and Server support for Ubuntu,
-Debian, and AlmaLinux is designed but not implemented (ADR 0018).
+Remaining client work: none from the Windows MVP. On Linux (ADR 0018), `shaprintd` supervises the
+client proxy and server sharing runtimes outside Tauri over the local `/run/shaprint/shaprintd.sock`
+Unix socket, `shaprintctl` queries and controls the daemon from local shells, and an AlmaLinux 10
+RPM package (`packaging/linux/rpm/shaprint.spec`) installs the unprivileged `shaprint` machine
+account, `shaprintd.service` systemd unit, `/etc/shaprint` non-secret configuration, and
+`/var/lib/shaprint` durable identity/state directory (#124, #125).
 
 ## Development
 

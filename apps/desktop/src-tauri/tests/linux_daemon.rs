@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use shaprint_desktop::adapters::client_connections::ClientConnections;
 use shaprint_desktop::adapters::daemon::{
-    DaemonClient, DaemonConfig, DaemonServer, PeerAccessPolicy,
+    parse_daemon_args, DaemonClient, DaemonConfig, DaemonServer, PeerAccessPolicy,
+    DEFAULT_CONFIG_DIR, DEFAULT_SOCKET_PATH, DEFAULT_STATE_DIR,
 };
 use shaprint_desktop::adapters::discovery::MdnsAdvertiser;
 use shaprint_desktop::adapters::ipps::NetworkChannel;
@@ -455,4 +456,254 @@ async fn smoke_launches_shaprintd_observes_status_via_shaprintctl_and_stops_clea
         .expect("proxy port is released after shaprintd stops");
     drop(rebound);
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn daemon_uses_standard_fhs_locations_loads_non_secret_config_and_enforces_least_privilege_modes(
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let defaults = parse_daemon_args(&["shaprintd"]).expect("parses default daemon args");
+    assert_eq!(defaults.config_dir(), Path::new(DEFAULT_CONFIG_DIR));
+    assert_eq!(defaults.state_dir(), Path::new(DEFAULT_STATE_DIR));
+    assert_eq!(defaults.socket_path(), Path::new(DEFAULT_SOCKET_PATH));
+
+    let root = temporary_directory("linux-daemon-fhs");
+    let etc_dir = root.join("etc/shaprint");
+    let state_dir = root.join("var/lib/shaprint");
+    let run_dir = root.join("run/shaprint");
+    let socket_path = run_dir.join("shaprintd.sock");
+    std::fs::create_dir_all(&etc_dir).expect("creates config dir");
+
+    let proxy_port = support::free_port();
+    let server_port = support::free_port();
+    let discovery_port = support::free_udp_port();
+    std::fs::write(
+        etc_dir.join("config.json"),
+        format!(
+            r#"{{
+  "proxy_port": {proxy_port},
+  "server_port": {server_port},
+  "discovery_ports": [{discovery_port}]
+}}"#
+        ),
+    )
+    .expect("writes non-secret config.json");
+
+    let config = parse_daemon_args(&[
+        "shaprintd",
+        "--config-dir",
+        &etc_dir.to_string_lossy(),
+        "--state-dir",
+        &state_dir.to_string_lossy(),
+        "--socket",
+        &socket_path.to_string_lossy(),
+    ])
+    .expect("loads daemon config with --config-dir");
+
+    assert_eq!(config.config_dir(), etc_dir.as_path());
+    assert_eq!(config.ports().proxy_port, proxy_port);
+    assert_eq!(config.ports().server_port, server_port);
+    assert_eq!(config.ports().discovery_ports, vec![discovery_port]);
+
+    let server = DaemonServer::launch(config)
+        .await
+        .expect("launches daemon with FHS directories");
+
+    let state_mode = std::fs::metadata(&state_dir)
+        .expect("state dir exists")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        state_mode, 0o700,
+        "durable state directory must be restricted to 0700"
+    );
+
+    let key_mode = std::fs::metadata(state_dir.join("server-identity.key.der"))
+        .expect("identity key exists in state_dir")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        key_mode, 0o600,
+        "server identity private key must be restricted to 0600"
+    );
+
+    let run_mode = std::fs::metadata(&run_dir)
+        .expect("runtime socket dir exists")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        run_mode, 0o755,
+        "runtime directory must allow local shell traversal (0755)"
+    );
+
+    let sock_mode = std::fs::metadata(&socket_path)
+        .expect("control socket exists")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        sock_mode, 0o666,
+        "control socket must allow local status queries (0666, gated by SO_PEERCRED)"
+    );
+
+    server.shutdown().await.expect("clean shutdown");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn daemon_rejects_secret_fields_in_etc_config_refuses_root_when_forbidden_and_preserves_identity_across_restarts(
+) {
+    let root = temporary_directory("linux-daemon-nonroot-identity");
+    let etc_dir = root.join("etc/shaprint");
+    let state_dir = root.join("var/lib/shaprint");
+    let socket_path = root.join("run/shaprint/shaprintd.sock");
+    std::fs::create_dir_all(&etc_dir).expect("creates config dir");
+
+    // `/etc/shaprint/config.json` is strictly for non-secret configuration; placing a secret field
+    // such as `network_channel` must be rejected with `invalid-input`.
+    std::fs::write(
+        etc_dir.join("config.json"),
+        r#"{"network_channel": "forbidden-secret"}"#,
+    )
+    .expect("writes invalid secret config");
+    let secret_err = parse_daemon_args(&["shaprintd", "--config-dir", &etc_dir.to_string_lossy()])
+        .expect_err("must reject secret fields in /etc/shaprint/config.json");
+    assert_eq!(secret_err.code(), ErrorCode::InvalidInput);
+
+    // Replace with valid non-secret config that forbids running the daemon as root.
+    std::fs::write(
+        etc_dir.join("config.json"),
+        r#"{"forbid_root": true, "require_root": true}"#,
+    )
+    .expect("writes non-secret config");
+    let parsed = parse_daemon_args(&["shaprintd", "--config-dir", &etc_dir.to_string_lossy()])
+        .expect("parses non-secret config");
+    assert!(parsed.forbid_root());
+    assert_eq!(parsed.access_policy(), PeerAccessPolicy::RootOnly);
+
+    // First launch creates the server identity in `/var/lib/shaprint`.
+    let first = DaemonServer::launch(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_config_dir(&etc_dir)
+            .with_ports(RuntimePorts {
+                proxy_port: 0,
+                server_port: 0,
+                discovery_ports: vec![0],
+            }),
+    )
+    .await
+    .expect("launches first daemon");
+    let first_fingerprint = first.shell().expect("has shell").endpoint().fingerprint();
+    let first_cert =
+        std::fs::read(state_dir.join("server-identity.cert.der")).expect("reads generated cert");
+    let first_key =
+        std::fs::read(state_dir.join("server-identity.key.der")).expect("reads generated key");
+    first.shutdown().await.expect("stops first daemon");
+
+    // Repeated launch / service restart reuses the existing server identity without replacing it.
+    let second = DaemonServer::launch(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_config_dir(&etc_dir)
+            .with_ports(RuntimePorts {
+                proxy_port: 0,
+                server_port: 0,
+                discovery_ports: vec![0],
+            }),
+    )
+    .await
+    .expect("launches second daemon");
+    let second_fingerprint = second.shell().expect("has shell").endpoint().fingerprint();
+    assert_eq!(
+        first_fingerprint, second_fingerprint,
+        "restarting or repairing the daemon must preserve the existing server identity"
+    );
+    assert_eq!(
+        first_cert,
+        std::fs::read(state_dir.join("server-identity.cert.der")).expect("cert unchanged")
+    );
+    assert_eq!(
+        first_key,
+        std::fs::read(state_dir.join("server-identity.key.der")).expect("key unchanged")
+    );
+    second.shutdown().await.expect("stops second daemon");
+
+    // When `forbid_root` is active and the daemon runs with effective UID 0, launch is refused.
+    let root_err = match DaemonServer::launch_with_effective_uid(
+        DaemonConfig::new(&state_dir, &socket_path)
+            .with_forbid_root(true)
+            .with_ports(RuntimePorts {
+                proxy_port: 0,
+                server_port: 0,
+                discovery_ports: vec![0],
+            }),
+        Some(0),
+    )
+    .await
+    {
+        Ok(_) => panic!("daemon must refuse to run as root when forbid_root is enabled"),
+        Err(error) => error,
+    };
+    assert_eq!(root_err.code(), ErrorCode::InvalidState);
+    assert!(
+        root_err.message().contains("must not run as root"),
+        "unexpected error message: {}",
+        root_err.message()
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn almalinux_10_rpm_package_smoke_installs_boots_queries_restarts_repairs_and_stops_service()
+{
+    use std::process::Command;
+
+    if std::env::var_os("SHAPRINT_RUN_ALMALINUX10_SMOKE").is_none() {
+        return;
+    }
+
+    let has_rpmbuild = Command::new("rpmbuild")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    let has_podman = Command::new("podman")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    assert!(
+        has_rpmbuild && has_podman,
+        "rpmbuild and podman are required when SHAPRINT_RUN_ALMALINUX10_SMOKE is set"
+    );
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("locates repository root");
+    let smoke_script = repo_root.join("packaging/linux/rpm/smoke-test-almalinux10.sh");
+    assert!(
+        smoke_script.exists(),
+        "missing AlmaLinux 10 RPM smoke script at '{}'",
+        smoke_script.display()
+    );
+
+    let output = Command::new("bash")
+        .arg(&smoke_script)
+        .env("SHAPRINTD_BIN", env!("CARGO_BIN_EXE_shaprintd"))
+        .env("SHAPRINTCTL_BIN", env!("CARGO_BIN_EXE_shaprintctl"))
+        .output()
+        .expect("runs AlmaLinux 10 RPM smoke test script");
+
+    assert!(
+        output.status.success(),
+        "AlmaLinux 10 RPM smoke test failed (status={}):\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

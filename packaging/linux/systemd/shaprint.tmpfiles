@@ -1,0 +1,3 @@
+d /etc/shaprint 0750 root shaprint -
+d /var/lib/shaprint 0700 shaprint shaprint -
+d /run/shaprint 0755 shaprint shaprint -

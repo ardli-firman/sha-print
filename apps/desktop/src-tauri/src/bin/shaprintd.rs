@@ -1,9 +1,39 @@
 //! `shaprintd`: the Linux machine daemon supervising the Client proxy and Server runtime.
 
 #[cfg(unix)]
+struct JournalStderrLogger;
+
+#[cfg(unix)]
+impl log::Log for JournalStderrLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            eprintln!(
+                "shaprintd level={} target={} {}",
+                record.level().as_str().to_ascii_lowercase(),
+                record.target(),
+                record.args()
+            );
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+#[cfg(unix)]
+static LOGGER: JournalStderrLogger = JournalStderrLogger;
+
+#[cfg(unix)]
 #[tokio::main]
 async fn main() {
     use shaprint_desktop::adapters::daemon::{parse_daemon_args, DaemonServer};
+
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
 
     let arguments: Vec<String> = std::env::args().collect();
     let config = match parse_daemon_args(&arguments) {
