@@ -332,7 +332,7 @@ async fn serve_client(
         protocol::OPERATION_SEND_DOCUMENT | protocol::OPERATION_CANCEL_JOB
     );
 
-    let mut _job_lease = if is_new_job_submission {
+    let mut job_lease = if is_new_job_submission {
         if !request_lease.mark_print_job() {
             if is_print_submission(operation) {
                 failures.report(PrintFailure::client(
@@ -422,7 +422,7 @@ async fn serve_client(
             if operation == protocol::OPERATION_CREATE_JOB && status.is_some_and(|s| s <= 0x00ff) {
                 if let Ok(parsed_resp) = protocol::Request::parse(&response) {
                     if let Some(job_id) = parsed_resp.integer("job-id").filter(|id| *id > 0) {
-                        if let Some(lease) = _job_lease.take() {
+                        if let Some(lease) = job_lease.take() {
                             let mut pending = pending_jobs.lock().await;
                             pending.insert(
                                 (server_address.clone(), job_id),

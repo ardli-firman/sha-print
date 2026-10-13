@@ -167,7 +167,7 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
     fi
     su - localoperator -c 'shaprintctl network-channel status' | grep -q '^network-channel: configured$'
     su - localoperator -c 'shaprintctl status' | grep -q '^network-channel: configured$'
-    if journalctl -u shaprintd.service --no-pager | grep -F \"\${SMOKE_SECRET}\"; then
+    if journalctl -u shaprintd.service --no-pager | grep -Fq \"\${SMOKE_SECRET}\"; then
         echo 'error: journal output must never contain Network Channel value' >&2
         exit 1
     fi
