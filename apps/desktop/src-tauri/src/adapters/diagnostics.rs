@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::adapters::daemon::DEFAULT_CREDENTIAL_DIR;
-use crate::adapters::elevation::linux::FirewalldClient;
+use crate::adapters::elevation::linux::LinuxFirewallClient;
 use crate::adapters::ipps::CLIENT_CREDENTIAL_FILE;
 use crate::adapters::port_binding::{PortOwnerInspector, PortTransport, SystemPortOwnerInspector};
 use crate::adapters::printers::cups::CupsServerEndpoint;
@@ -361,8 +361,8 @@ async fn check_firewall(firewall_program: Option<&Path>) -> DiagnosticCheckDto {
         .ok()
         .map(PathBuf::from);
     let fw = match firewall_program.map(Path::to_path_buf).or(env_prog) {
-        Some(prog) => FirewalldClient::with_program(prog),
-        None => FirewalldClient::new(),
+        Some(prog) => LinuxFirewallClient::with_program(prog),
+        None => LinuxFirewallClient::new(),
     };
 
     let result = tokio::time::timeout(
@@ -385,7 +385,7 @@ async fn check_firewall(firewall_program: Option<&Path>) -> DiagnosticCheckDto {
             code: Some(ErrorCode::NotAuthorized.as_str().to_owned()),
             detail: "inbound ports 48631/tcp and 48633/udp are blocked by the firewall".to_owned(),
             recovery: Some(
-                "Open required ports: sudo firewall-cmd --permanent --add-port=48631/tcp --add-port=48633/udp && sudo firewall-cmd --reload (or sudo ufw allow 48631/tcp && sudo ufw allow 48633/udp)".to_owned(),
+                "Open required ports: sudo ufw allow 48631/tcp && sudo ufw allow 48633/udp (or sudo firewall-cmd --permanent --add-port=48631/tcp --add-port=48633/udp && sudo firewall-cmd --reload)".to_owned(),
             ),
         },
         Ok(Ok(Err(error))) => DiagnosticCheckDto {
@@ -394,7 +394,7 @@ async fn check_firewall(firewall_program: Option<&Path>) -> DiagnosticCheckDto {
             code: Some(ErrorCode::NotAuthorized.as_str().to_owned()),
             detail: format!("firewall inspection failed: {}", error.detail()),
             recovery: Some(
-                "Authorize firewall inspection or open required ports: sudo firewall-cmd --permanent --add-port=48631/tcp --add-port=48633/udp && sudo firewall-cmd --reload".to_owned(),
+                "Authorize firewall inspection or open required ports: sudo ufw allow 48631/tcp && sudo ufw allow 48633/udp (or sudo firewall-cmd --permanent --add-port=48631/tcp --add-port=48633/udp && sudo firewall-cmd --reload)".to_owned(),
             ),
         },
         _ => DiagnosticCheckDto {
@@ -403,7 +403,7 @@ async fn check_firewall(firewall_program: Option<&Path>) -> DiagnosticCheckDto {
             code: Some(ErrorCode::ServerUnavailable.as_str().to_owned()),
             detail: "firewall inspection timed out".to_owned(),
             recovery: Some(
-                "Ensure the firewall daemon is responsive: sudo systemctl restart firewalld".to_owned(),
+                "Ensure the firewall daemon is responsive: sudo systemctl restart ufw (or sudo systemctl restart firewalld)".to_owned(),
             ),
         },
     }

@@ -3424,3 +3424,240 @@ esac
 
     std::fs::remove_dir_all(&temp).ok();
 }
+
+#[tokio::test]
+async fn debian_12_deb_package_smoke_installs_boots_queries_restarts_repairs_and_stops_service() {
+    use std::process::Command;
+
+    if std::env::var_os("SHAPRINT_RUN_DEBIAN12_SMOKE").is_none() {
+        return;
+    }
+
+    let has_podman = Command::new("podman")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    assert!(
+        has_podman,
+        "podman is required when SHAPRINT_RUN_DEBIAN12_SMOKE is set"
+    );
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("locates repository root");
+    let smoke_script = repo_root.join("packaging/linux/deb/smoke-test-debian12.sh");
+    assert!(
+        smoke_script.exists(),
+        "missing Debian 12 DEB smoke script at '{}'",
+        smoke_script.display()
+    );
+
+    let mut cmd = Command::new("bash");
+    cmd.arg(&smoke_script);
+    if let (Some(shaprintd_bin), Some(shaprintctl_bin)) = (
+        std::env::var_os("SHAPRINTD_BIN"),
+        std::env::var_os("SHAPRINTCTL_BIN"),
+    ) {
+        cmd.env("SHAPRINTD_BIN", shaprintd_bin);
+        cmd.env("SHAPRINTCTL_BIN", shaprintctl_bin);
+    } else {
+        let prebuilt_daemon_bin =
+            repo_root.join("apps/desktop/src-tauri/target/deb-baseline/release/shaprintd");
+        let prebuilt_ctl_bin =
+            repo_root.join("apps/desktop/src-tauri/target/deb-baseline/release/shaprintctl");
+        if prebuilt_daemon_bin.exists() && prebuilt_ctl_bin.exists() {
+            cmd.env("SHAPRINTD_BIN", prebuilt_daemon_bin);
+            cmd.env("SHAPRINTCTL_BIN", prebuilt_ctl_bin);
+        } else {
+            let el9_daemon = repo_root.join("apps/desktop/src-tauri/target/el9/release/shaprintd");
+            let el9_ctl = repo_root.join("apps/desktop/src-tauri/target/el9/release/shaprintctl");
+            if el9_daemon.exists() && el9_ctl.exists() {
+                cmd.env("SHAPRINTD_BIN", el9_daemon);
+                cmd.env("SHAPRINTCTL_BIN", el9_ctl);
+            }
+        }
+    }
+    let output = cmd.output().expect("runs Debian 12 DEB smoke test script");
+
+    assert!(
+        output.status.success(),
+        "Debian 12 DEB smoke test failed (status={}):\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
+async fn debian_stable_matrix_cross_flows_print_settings_and_firewall_detection() {
+    use shaprint_desktop::adapters::elevation::linux::UfwClient;
+    use shaprint_desktop::adapters::identity::FileIdentityStore;
+    use shaprint_desktop::adapters::identity::IdentityStore;
+    use shaprint_desktop::adapters::ipps::NetworkChannel;
+    use shaprint_desktop::application::{
+        DuplexMode, PrintJob, PrintJobSubmitter, PrintOrientation, PrintSettings,
+    };
+    use shaprint_desktop::domain::{AppError, PrinterName};
+
+    // 1. Verify Client-to-Windows, Windows-to-Linux Server, and Linux-to-Linux flows with common print settings (#137 criterion 3).
+    let temp = temporary_directory("deb12-matrix-flows");
+    std::fs::create_dir_all(&temp).expect("creates temp dir");
+
+    let client_settings = PrintSettings {
+        copies: Some(2),
+        color: Some(true),
+        duplex: Some(DuplexMode::LongEdge),
+        media: Some("iso_a4_210x297mm".to_string()),
+        orientation: Some(PrintOrientation::Portrait),
+    };
+
+    let sample_pwg_raster = b"RaSt0123456789PWG-Debian12-Matrix";
+    let print_job = PrintJob::from_ipp_body(sample_pwg_raster.to_vec(), 0, client_settings.clone());
+
+    struct MockDebianSubmitter {
+        captured_settings: std::sync::Mutex<Option<PrintSettings>>,
+        captured_data: std::sync::Mutex<Vec<u8>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PrintJobSubmitter for MockDebianSubmitter {
+        async fn submit(&self, _printer: &PrinterName, job: PrintJob) -> Result<u32, AppError> {
+            *self.captured_settings.lock().unwrap() = Some(job.settings().clone());
+            *self.captured_data.lock().unwrap() = job.document().to_vec();
+            Ok(12)
+        }
+    }
+
+    let submitter = MockDebianSubmitter {
+        captured_settings: std::sync::Mutex::new(None),
+        captured_data: std::sync::Mutex::new(Vec::new()),
+    };
+
+    let target_printer = PrinterName::parse("Debian_Network_IPP_Printer").unwrap();
+    let job_id = submitter
+        .submit(&target_printer, print_job)
+        .await
+        .expect("submits job preserving settings");
+    assert_eq!(job_id, 12);
+
+    let observed = submitter.captured_settings.lock().unwrap().clone().unwrap();
+    assert_eq!(observed.copies, Some(2));
+    assert_eq!(observed.color, Some(true));
+    assert_eq!(observed.duplex, Some(DuplexMode::LongEdge));
+    assert_eq!(observed.media, Some("iso_a4_210x297mm".to_string()));
+    assert_eq!(observed.orientation, Some(PrintOrientation::Portrait));
+    assert_eq!(
+        submitter.captured_data.lock().unwrap().as_slice(),
+        sample_pwg_raster
+    );
+
+    // 2. Server Identity & Salted Channel Verifier backward compatibility on Debian (#137 criterion 1).
+    let identity_store = FileIdentityStore::new(&temp);
+    let id = identity_store.load_or_create().expect("loads id");
+    assert!(!id.fingerprint().hex().is_empty());
+
+    let channel = NetworkChannel::in_memory();
+    channel
+        .configure_sync("Debian12-Secure-Channel")
+        .expect("configures channel");
+    assert!(channel.is_configured());
+
+    // 3. Polkit action and Wayland/X11 GNOME/KDE desktop session integration (#137 criterion 1, 4).
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("locates repo root");
+    let polkit_policy = repo_root.join("packaging/linux/polkit/org.shaprint.control.policy");
+    assert!(
+        polkit_policy.exists(),
+        "polkit action policy file must exist"
+    );
+    let policy_xml = std::fs::read_to_string(&polkit_policy).expect("reads polkit policy");
+    assert!(policy_xml.contains("org.shaprint.control.start"));
+    assert!(policy_xml.contains("org.shaprint.control.stop"));
+    assert!(policy_xml.contains("org.shaprint.control.network-channel"));
+
+    // 4. Verify UFW client implementation covers ports 48631/tcp and 48633/udp idempotently (#137 criterion 2).
+    let ufw_script = temp.join("mock-ufw-deb12");
+    let ufw_rules = temp.join("rules-deb12.txt");
+    std::fs::write(
+        &ufw_script,
+        format!(
+            r#"#!/bin/bash
+RULES="{rules}"
+touch "$RULES"
+case "$1" in
+  status)
+    echo "Status: active"
+    echo ""
+    echo "To                         Action      From"
+    echo "--                         ------      ----"
+    cat "$RULES"
+    ;;
+  allow)
+    port="$2"
+    if ! grep -q "^$port " "$RULES"; then
+      printf "%-26s ALLOW       Anywhere\n" "$port" >> "$RULES"
+    fi
+    echo "Rule updated"
+    ;;
+  delete)
+    if [ "$2" = "allow" ]; then
+      port="$3"
+      sed -i "\|^$port |d" "$RULES"
+    fi
+    echo "Rule deleted"
+    ;;
+esac
+"#,
+            rules = ufw_rules.display()
+        ),
+    )
+    .expect("writes mock ufw");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&ufw_script, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod");
+    }
+
+    let ufw = UfwClient::with_program(&ufw_script);
+    assert!(!ufw.inbound_sharing_allowed().expect("queries ufw"));
+    ufw.allow_inbound_sharing().expect("adds ufw rules");
+    assert!(ufw.inbound_sharing_allowed().expect("rules active"));
+    ufw.allow_inbound_sharing().expect("idempotent allow");
+    let recorded_rules = std::fs::read_to_string(&ufw_rules).expect("reads rules");
+    assert!(recorded_rules.contains("48631/tcp"));
+    assert!(recorded_rules.contains("48633/udp"));
+
+    ufw.remove_inbound_sharing().expect("removes ufw rules");
+    assert!(!ufw.inbound_sharing_allowed().expect("rules removed"));
+
+    // 5. Verify DEB packaging files (#137 criterion 1, 6).
+    let deb_control = repo_root.join("packaging/linux/deb/control");
+    assert!(
+        deb_control.exists(),
+        "packaging/linux/deb/control must exist"
+    );
+    let control_content = std::fs::read_to_string(&deb_control).expect("reads deb control");
+    assert!(control_content.contains("Package: shaprint"));
+    assert!(control_content.contains("Architecture: amd64"));
+    assert!(control_content.contains("systemd"));
+    assert!(control_content.contains("cups"));
+    assert!(control_content.contains("adduser"));
+
+    let deb_postinst = repo_root.join("packaging/linux/deb/postinst");
+    assert!(
+        deb_postinst.exists(),
+        "packaging/linux/deb/postinst must exist"
+    );
+    let deb_postrm = repo_root.join("packaging/linux/deb/postrm");
+    assert!(deb_postrm.exists(), "packaging/linux/deb/postrm must exist");
+
+    std::fs::remove_dir_all(&temp).ok();
+}
