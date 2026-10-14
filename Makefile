@@ -1,20 +1,25 @@
-.PHONY: help keys release-nightly release-patch release-minor release-major test test-android build-android-debug apk-debug build-rpm smoke-rpm-almalinux9 smoke-rpm-almalinux10 typecheck check lint
+.PHONY: help keys release-nightly release-patch release-minor release-major release-android-patch release-android-minor release-android-major test test-android build-android-debug apk-debug build-android-release build-android-apk build-rpm smoke-rpm-almalinux9 smoke-rpm-almalinux10 typecheck check lint
 
 help:
 	@echo "Available commands in ShaPrint:"
-	@echo "  make keys                - Generate Minisign signing key pair for Tauri updater"
-	@echo "  make release-nightly     - Trigger manual Nightly release from main (optional: SHA=<sha> SETTINGS_RISK=true)"
-	@echo "  make release-patch       - Bump patch version (x.y.Z+1), commit, and create git tag"
-	@echo "  make release-minor       - Bump minor version (x.Y+1.0), commit, and create git tag"
-	@echo "  make release-major       - Bump major version (X+1.0.0), commit, and create git tag"
-	@echo "  make test                - Run all frontend, backend, and nightly script tests"
-	@echo "  make test-android        - Run Android client unit tests"
-	@echo "  make build-android-debug - Build Android client debug APK (alias: make apk-debug)"
-	@echo "  make build-rpm           - Build the AlmaLinux 9/10 headless daemon RPM artifact"
+	@echo "  make keys                  - Generate Minisign signing key pair for Tauri updater"
+	@echo "  make release-nightly       - Trigger manual Nightly release from main (optional: SHA=<sha> SETTINGS_RISK=true)"
+	@echo "  make release-patch         - Bump desktop patch version (x.y.Z+1), commit, and create git tag"
+	@echo "  make release-minor         - Bump desktop minor version (x.Y+1.0), commit, and create git tag"
+	@echo "  make release-major         - Bump desktop major version (X+1.0.0), commit, and create git tag"
+	@echo "  make release-android-patch - Bump Android patch version (x.y.Z+1), increment versionCode, commit, and create git tag"
+	@echo "  make release-android-minor - Bump Android minor version (x.Y+1.0), increment versionCode, commit, and create git tag"
+	@echo "  make release-android-major - Bump Android major version (X+1.0.0), increment versionCode, commit, and create git tag"
+	@echo "  make test                  - Run all frontend, backend, and nightly script tests"
+	@echo "  make test-android          - Run Android client unit tests"
+	@echo "  make build-android-debug   - Build Android client debug APK (alias: make apk-debug)"
+	@echo "  make build-android-release - Build Android client release App Bundle (.aab) for Play Store"
+	@echo "  make build-android-apk     - Build Android client release APK"
+	@echo "  make build-rpm             - Build the AlmaLinux 9/10 headless daemon RPM artifact"
 	@echo "  make smoke-rpm-almalinux9  - Run the AlmaLinux 9 RPM + systemd smoke test"
 	@echo "  make smoke-rpm-almalinux10 - Run the AlmaLinux 10 RPM + systemd smoke test"
-	@echo "  make typecheck           - Run frontend TypeScript typecheck"
-	@echo "  make lint                - Run cargo fmt check and cargo clippy"
+	@echo "  make typecheck             - Run frontend TypeScript typecheck"
+	@echo "  make lint                  - Run cargo fmt check and cargo clippy"
 
 keys:
 	bun run scripts/generate-keys.ts
@@ -31,6 +36,15 @@ release-minor:
 release-major:
 	bun run scripts/release.ts major
 
+release-android-patch:
+	bun run scripts/release-android.ts patch
+
+release-android-minor:
+	bun run scripts/release-android.ts minor
+
+release-android-major:
+	bun run scripts/release-android.ts major
+
 test:
 	bun test scripts/nightly/
 	bun run --filter shaprint-desktop test
@@ -44,6 +58,14 @@ build-android-debug:
 	@echo "Debug APK ready at: apps/android/app/build/outputs/apk/debug/app-debug.apk"
 
 apk-debug: build-android-debug
+
+build-android-release:
+	cd apps/android && ./gradlew bundleRelease
+	@echo "Release App Bundle ready at: apps/android/app/build/outputs/bundle/release/app-release.aab"
+
+build-android-apk:
+	cd apps/android && ./gradlew assembleRelease
+	@echo "Release APK ready at: apps/android/app/build/outputs/apk/release/app-release.apk"
 
 build-rpm:
 	bash packaging/linux/rpm/build-rpm.sh

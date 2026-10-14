@@ -1,0 +1,11 @@
+# ShaPrint Android Release Signing Configuration Example
+# Copy this file to `key.properties` (never commit key.properties to git)
+#
+# To generate a new upload keystore for Google Play:
+# keytool -genkey -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias shaprint -storetype JKS
+#
+# Paths can be relative to apps/android/app or absolute.
+storeFile=../release.jks
+storePassword=your_keystore_password
+keyAlias=shaprint
+keyPassword=your_key_password

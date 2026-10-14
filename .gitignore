@@ -31,4 +31,7 @@ Thumbs.db
 .keys/
 *.key
 *.priv
+*.jks
+*.keystore
+apps/android/key.properties
 

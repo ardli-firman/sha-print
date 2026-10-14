@@ -1,0 +1,97 @@
+name: Release Android
+
+on:
+  push:
+    tags:
+      - 'android-v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Android release tag (e.g. android-v1.0.0)'
+        required: true
+        default: 'android-v1.0.0'
+
+jobs:
+  build-and-release:
+    name: Build & Release Android Bundle & APK
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Validate Android release tag
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name || inputs.tag }}"
+          echo "Validating Android release tag: $TAG"
+          if [[ ! "$TAG" =~ ^android-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' is not a valid Android version tag (expected format: android-vX.Y.Z)."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare Keystore from Secret
+        if: env.HAS_KEYSTORE == 'true'
+        env:
+          HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "${{ github.workspace }}/apps/android/keystore.jks"
+          echo "Keystore successfully decoded to ${{ github.workspace }}/apps/android/keystore.jks"
+
+      - name: Build Android App Bundle and Release APK
+        working-directory: apps/android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/apps/android/keystore.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew bundleRelease assembleRelease
+
+      - name: Package Artifacts
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name || inputs.tag }}"
+          VERSION="${TAG#android-v}"
+          mkdir -p dist-android
+          cp apps/android/app/build/outputs/bundle/release/app-release.aab "dist-android/shaprint-client-${TAG}.aab"
+          cp apps/android/app/build/outputs/apk/release/app-release.apk "dist-android/shaprint-client-${TAG}.apk"
+          echo "Artifacts prepared in dist-android:"
+          ls -la dist-android
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name || inputs.tag }}
+          name: ShaPrint Android ${{ github.ref_name || inputs.tag }}
+          body: |
+            ## ShaPrint Android Client Release
+            - **Google Play Store App Bundle**: `shaprint-client-${{ github.ref_name || inputs.tag }}.aab` (Upload this file to Google Play Console)
+            - **Universal APK**: `shaprint-client-${{ github.ref_name || inputs.tag }}.apk` (For direct sideloading and testing)
+
+            ### Verification
+            - Target SDK: 35 (Android 15)
+            - Min SDK: 26 (Android 8.0)
+            - Package Name: `io.shaprint.client`
+          files: |
+            dist-android/*
+          draft: false
+          prerelease: false
