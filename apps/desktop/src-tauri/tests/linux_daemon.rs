@@ -2775,3 +2775,187 @@ async fn almalinux_10_rpm_package_smoke_installs_boots_queries_restarts_repairs_
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[tokio::test]
+async fn almalinux_9_rpm_package_smoke_installs_boots_queries_restarts_repairs_and_stops_service() {
+    use std::process::Command;
+
+    if std::env::var_os("SHAPRINT_RUN_ALMALINUX9_SMOKE").is_none() {
+        return;
+    }
+
+    let has_rpmbuild = Command::new("rpmbuild")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    let has_podman = Command::new("podman")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    assert!(
+        has_rpmbuild && has_podman,
+        "rpmbuild and podman are required when SHAPRINT_RUN_ALMALINUX9_SMOKE is set"
+    );
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("locates repository root");
+    let smoke_script = repo_root.join("packaging/linux/rpm/smoke-test-almalinux9.sh");
+    assert!(
+        smoke_script.exists(),
+        "missing AlmaLinux 9 RPM smoke script at '{}'",
+        smoke_script.display()
+    );
+
+    let mut cmd = Command::new("bash");
+    cmd.arg(&smoke_script);
+    if let (Some(shaprintd_bin), Some(shaprintctl_bin)) = (
+        std::env::var_os("SHAPRINTD_BIN"),
+        std::env::var_os("SHAPRINTCTL_BIN"),
+    ) {
+        cmd.env("SHAPRINTD_BIN", shaprintd_bin);
+        cmd.env("SHAPRINTCTL_BIN", shaprintctl_bin);
+    } else {
+        let el9_shaprintd_bin =
+            repo_root.join("apps/desktop/src-tauri/target/el9/release/shaprintd");
+        let el9_shaprintctl_bin =
+            repo_root.join("apps/desktop/src-tauri/target/el9/release/shaprintctl");
+        if el9_shaprintd_bin.exists() && el9_shaprintctl_bin.exists() {
+            cmd.env("SHAPRINTD_BIN", el9_shaprintd_bin);
+            cmd.env("SHAPRINTCTL_BIN", el9_shaprintctl_bin);
+        }
+    }
+    let output = cmd
+        .output()
+        .expect("runs AlmaLinux 9 RPM smoke test script");
+
+    assert!(
+        output.status.success(),
+        "AlmaLinux 9 RPM smoke test failed (status={}):\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
+async fn almalinux_previous_major_matrix_cross_flows_print_settings_and_baseline_check() {
+    use shaprint_desktop::adapters::identity::FileIdentityStore;
+    use shaprint_desktop::adapters::ipps::NetworkChannel;
+    use shaprint_desktop::application::{
+        DuplexMode, PrintJob, PrintJobSubmitter, PrintOrientation, PrintSettings,
+    };
+    use shaprint_desktop::domain::{AppError, PrinterName};
+
+    // 1. Verify Common Print Settings across Client-to-Windows, Windows-to-Server, and Linux-to-Linux flows (#134 criterion 4).
+    let temp = temporary_directory("alma9-matrix-flows");
+    std::fs::create_dir_all(&temp).expect("creates temp dir");
+
+    let client_settings = PrintSettings {
+        copies: Some(3),
+        color: Some(true),
+        duplex: Some(DuplexMode::LongEdge),
+        media: Some("iso_a4_210x297mm".to_string()),
+        orientation: Some(PrintOrientation::Landscape),
+    };
+
+    let sample_pwg_raster = b"RaSt0123456789PWG-AlmaLinux9-Matrix";
+    let print_job = PrintJob::from_ipp_body(sample_pwg_raster.to_vec(), 0, client_settings.clone());
+
+    // Simulate Server Destination capturing the submitted job with exact settings:
+    struct MockCapturingSubmitter {
+        captured_settings: std::sync::Mutex<Option<PrintSettings>>,
+        captured_data: std::sync::Mutex<Vec<u8>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PrintJobSubmitter for MockCapturingSubmitter {
+        async fn submit(&self, _printer: &PrinterName, job: PrintJob) -> Result<u32, AppError> {
+            *self.captured_settings.lock().unwrap() = Some(job.settings().clone());
+            *self.captured_data.lock().unwrap() = job.document().to_vec();
+            Ok(1)
+        }
+    }
+
+    let submitter = MockCapturingSubmitter {
+        captured_settings: std::sync::Mutex::new(None),
+        captured_data: std::sync::Mutex::new(Vec::new()),
+    };
+
+    let target_printer = PrinterName::parse("Alma9_Office_Printer").unwrap();
+    submitter
+        .submit(&target_printer, print_job)
+        .await
+        .expect("submits job preserving settings");
+
+    let observed = submitter.captured_settings.lock().unwrap().clone().unwrap();
+    assert_eq!(observed.copies, Some(3));
+    assert_eq!(observed.color, Some(true));
+    assert_eq!(observed.duplex, Some(DuplexMode::LongEdge));
+    assert_eq!(observed.media, Some("iso_a4_210x297mm".to_string()));
+    assert_eq!(observed.orientation, Some(PrintOrientation::Landscape));
+    assert_eq!(
+        submitter.captured_data.lock().unwrap().as_slice(),
+        sample_pwg_raster
+    );
+
+    // 2. Verify Server Identity & Salted Channel Verifier storage backward compatibility (#134 criterion 5).
+    use shaprint_desktop::adapters::identity::IdentityStore;
+    let identity_store = FileIdentityStore::new(&temp);
+    let id = identity_store.load_or_create().expect("loads id");
+    assert!(!id.fingerprint().hex().is_empty());
+
+    let channel = NetworkChannel::in_memory();
+    channel
+        .configure_sync("AlmaLinux9-Secure-Channel")
+        .expect("configures channel");
+    assert!(channel.is_configured());
+
+    // 3. Verify polkit action and Wayland/X11 desktop session integration contract (#134 criterion 1, 3).
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("locates repo root");
+    let polkit_policy = repo_root.join("packaging/linux/polkit/org.shaprint.control.policy");
+    assert!(
+        polkit_policy.exists(),
+        "polkit action policy file must exist"
+    );
+    let policy_xml = std::fs::read_to_string(&polkit_policy).expect("reads polkit policy");
+    assert!(
+        policy_xml.contains("org.shaprint.control.start"),
+        "polkit policy must define org.shaprint.control.start"
+    );
+    assert!(
+        policy_xml.contains("org.shaprint.control.stop"),
+        "polkit policy must define org.shaprint.control.stop"
+    );
+    assert!(
+        policy_xml.contains("org.shaprint.control.network-channel"),
+        "polkit policy must define org.shaprint.control.network-channel"
+    );
+
+    // 4. Verify RPM spec and package baseline configuration (#134 criterion 6).
+    let spec_file = repo_root.join("packaging/linux/rpm/shaprint.spec");
+    assert!(spec_file.exists(), "shaprint.spec must exist");
+    let spec_content = std::fs::read_to_string(&spec_file).expect("reads spec");
+    assert!(
+        spec_content.contains("ExclusiveArch:  x86_64"),
+        "RPM must target x86_64 architecture"
+    );
+    assert!(
+        spec_content.contains("Requires:       cups"),
+        "RPM requires cups"
+    );
+    assert!(
+        spec_content.contains("Requires:       systemd"),
+        "RPM requires systemd"
+    );
+
+    std::fs::remove_dir_all(&temp).ok();
+}

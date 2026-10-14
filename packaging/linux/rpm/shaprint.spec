@@ -87,6 +87,9 @@ exit 0
 %attr(0644,root,root) %{_datadir}/polkit-1/actions/org.shaprint.control.policy
 
 %changelog
+* Wed Oct 14 2026 ShaPrint Maintainers <maintainers@shaprint.local> - 3.4.0-1
+- Extend headless daemon RPM package support to AlmaLinux 9 and AlmaLinux 10
+
 * Tue Oct 13 2026 ShaPrint Maintainers <maintainers@shaprint.local> - 3.4.0-1
 - Deliver AlmaLinux 10 headless daemon RPM package baseline
 

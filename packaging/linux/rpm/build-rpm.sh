@@ -12,15 +12,58 @@ if [[ -z "${VERSION}" ]]; then
     exit 1
 fi
 
+ALMALINUX_MAJOR="${ALMALINUX_MAJOR:-}"
+RPM_DIST="${RPM_DIST:-}"
+if [[ -n "${ALMALINUX_MAJOR}" && -z "${RPM_DIST}" ]]; then
+    RPM_DIST="el${ALMALINUX_MAJOR}"
+fi
+
 if [[ -z "${SHAPRINTD_BIN:-}" || -z "${SHAPRINTCTL_BIN:-}" ]]; then
-    cargo build \
-        --manifest-path "${TAURI_DIR}/Cargo.toml" \
-        --release \
-        --no-default-features \
-        --bin shaprintd \
-        --bin shaprintctl >&2
-    SHAPRINTD_BIN="${TAURI_DIR}/target/release/shaprintd"
-    SHAPRINTCTL_BIN="${TAURI_DIR}/target/release/shaprintctl"
+    # When targeting the previous AlmaLinux major (9) on a host with a newer glibc,
+    # use containerized cargo build if container runtime is available to avoid raising
+    # the runtime baseline beyond glibc 2.34.
+    HOST_GLIBC_VERSION="$(ldd --version 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | head -n 1 || true)"
+    CONTAINER_CLI=""
+    if command -v podman >/dev/null 2>&1; then
+        CONTAINER_CLI="podman"
+    elif command -v docker >/dev/null 2>&1; then
+        CONTAINER_CLI="docker"
+    fi
+
+    if [[ ("${ALMALINUX_MAJOR}" == "9" || "${RPM_DIST}" == "el9") && -n "${CONTAINER_CLI}" && -n "${HOST_GLIBC_VERSION}" ]]; then
+        MAJOR_PART="${HOST_GLIBC_VERSION%%.*}"
+        MINOR_PART="${HOST_GLIBC_VERSION#*.}"
+        if [[ "${MAJOR_PART}" -gt 2 || ("${MAJOR_PART}" -eq 2 && "${MINOR_PART}" -gt 34) ]]; then
+            EL9_TARGET_DIR="${TAURI_DIR}/target/el9"
+            mkdir -p "${EL9_TARGET_DIR}"
+            ${CONTAINER_CLI} run --rm \
+                -v "${REPO_ROOT}:/src:ro,z" \
+                -v "${EL9_TARGET_DIR}:/target:z" \
+                docker.io/library/almalinux:9 bash -c "
+                    dnf install -y cargo rust gcc >/dev/null 2>&1
+                    cargo build \
+                        --manifest-path /src/apps/desktop/src-tauri/Cargo.toml \
+                        --target-dir /target \
+                        --release \
+                        --no-default-features \
+                        --bin shaprintd \
+                        --bin shaprintctl
+                " >&2
+            SHAPRINTD_BIN="${EL9_TARGET_DIR}/release/shaprintd"
+            SHAPRINTCTL_BIN="${EL9_TARGET_DIR}/release/shaprintctl"
+        fi
+    fi
+
+    if [[ -z "${SHAPRINTD_BIN:-}" || -z "${SHAPRINTCTL_BIN:-}" ]]; then
+        cargo build \
+            --manifest-path "${TAURI_DIR}/Cargo.toml" \
+            --release \
+            --no-default-features \
+            --bin shaprintd \
+            --bin shaprintctl >&2
+        SHAPRINTD_BIN="${TAURI_DIR}/target/release/shaprintd"
+        SHAPRINTCTL_BIN="${TAURI_DIR}/target/release/shaprintctl"
+    fi
 fi
 
 OUTPUT_DIR="${RPM_OUTPUT_DIR:-${TAURI_DIR}/target/rpm}"
@@ -41,10 +84,17 @@ cp "${PACKAGING_DIR}/systemd/shaprint.tmpfiles" "${RPMBUILD_TOPDIR}/SOURCES/shap
 cp "${PACKAGING_DIR}/systemd/90-shaprint.preset" "${RPMBUILD_TOPDIR}/SOURCES/90-shaprint.preset"
 cp "${SCRIPT_DIR}/shaprint.spec" "${RPMBUILD_TOPDIR}/SPECS/shaprint.spec"
 
-rpmbuild -bb \
-    --define "_topdir ${RPMBUILD_TOPDIR}" \
-    --define "_shaprint_version ${VERSION}" \
-    --define "_shaprint_release ${RELEASE}" \
+RPMBUILD_ARGS=(
+    -bb
+    --define "_topdir ${RPMBUILD_TOPDIR}"
+    --define "_shaprint_version ${VERSION}"
+    --define "_shaprint_release ${RELEASE}"
+)
+if [[ -n "${RPM_DIST}" ]]; then
+    RPMBUILD_ARGS+=(-D "dist .${RPM_DIST#.}")
+fi
+
+rpmbuild "${RPMBUILD_ARGS[@]}" \
     "${RPMBUILD_TOPDIR}/SPECS/shaprint.spec" >&2
 
 BUILT_RPM="$(find "${RPMBUILD_TOPDIR}/RPMS" -type f -name "shaprint-${VERSION}-*.rpm" | head -n 1)"
