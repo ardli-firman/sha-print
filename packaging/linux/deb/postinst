@@ -2,12 +2,13 @@
 set -e
 
 # Set up FHS directories with least-privilege modes
-mkdir -p /etc/shaprint /etc/shaprint-credentials /var/lib/shaprint
+mkdir -p /etc/shaprint /etc/shaprint-credentials /var/lib/shaprint /run/shaprint
 chown root:shaprint /etc/shaprint /etc/shaprint-credentials
 chmod 0750 /etc/shaprint /etc/shaprint-credentials
 
-chown shaprint:shaprint /var/lib/shaprint
+chown shaprint:shaprint /var/lib/shaprint /run/shaprint
 chmod 0700 /var/lib/shaprint
+chmod 0755 /run/shaprint
 
 if [ -f /etc/shaprint/config.json ]; then
     chown root:shaprint /etc/shaprint/config.json

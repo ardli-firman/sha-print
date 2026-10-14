@@ -1,4 +1,4 @@
-.PHONY: help keys release-nightly release-patch release-minor release-major release-android-patch release-android-minor release-android-major test test-android build-android-debug apk-debug build-android-release build-android-apk build-rpm build-deb smoke-rpm-almalinux9 smoke-rpm-almalinux10 smoke-deb-ubuntu2204 smoke-deb-ubuntu2404 smoke-deb-debian12 typecheck check lint
+.PHONY: help keys release-nightly release-patch release-minor release-major release-android-patch release-android-minor release-android-major test test-android build-android-debug apk-debug build-android-release build-android-apk build-rpm build-deb smoke-rpm-almalinux9 smoke-rpm-almalinux10 smoke-deb-ubuntu2204 smoke-deb-ubuntu2404 smoke-deb-debian11 smoke-deb-debian12 typecheck check lint
 
 help:
 	@echo "Available commands in ShaPrint:"
@@ -21,6 +21,7 @@ help:
 	@echo "  make smoke-rpm-almalinux10 - Run the AlmaLinux 10 RPM + systemd smoke test"
 	@echo "  make smoke-deb-ubuntu2204  - Run the Ubuntu 22.04 DEB + systemd smoke test"
 	@echo "  make smoke-deb-ubuntu2404  - Run the Ubuntu 24.04 DEB + systemd smoke test"
+	@echo "  make smoke-deb-debian11    - Run the Debian 11 DEB + systemd smoke test"
 	@echo "  make smoke-deb-debian12    - Run the Debian 12 DEB + systemd smoke test"
 	@echo "  make typecheck             - Run frontend TypeScript typecheck"
 	@echo "  make lint                  - Run cargo fmt check and cargo clippy"
@@ -88,6 +89,9 @@ smoke-deb-ubuntu2204:
 
 smoke-deb-ubuntu2404:
 	bash packaging/linux/deb/smoke-test-ubuntu2404.sh
+
+smoke-deb-debian11:
+	bash packaging/linux/deb/smoke-test-debian11.sh
 
 smoke-deb-debian12:
 	bash packaging/linux/deb/smoke-test-debian12.sh
