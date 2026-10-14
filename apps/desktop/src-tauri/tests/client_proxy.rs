@@ -28,7 +28,7 @@ use shaprint_desktop::domain::{AppError, ErrorCode, JobPath, PrinterName, Servic
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 #[cfg(windows)]
-use tokio::time::{timeout, Duration};
+use tokio::time::timeout;
 
 use support::{get_printer_attributes, temporary_directory, FakeCatalog};
 
