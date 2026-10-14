@@ -1,0 +1,14 @@
+Package: shaprint
+Version: @VERSION@-@RELEASE@
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: ShaPrint Maintainers <maintainers@shaprint.local>
+Depends: systemd, cups, adduser
+Recommends: libwebkit2gtk-4.1-0, polkitd | policykit-1, ufw | firewalld
+Homepage: https://github.com/ardli-firman/sha-print
+Description: ShaPrint print-sharing and client-proxy daemon
+ ShaPrint shares printers over LAN and cross-VLAN using standard IPPS and
+ multicast DNS discovery. This package installs the machine-wide shaprintd
+ daemon, shaprintctl CLI, dedicated unprivileged shaprint account, and
+ systemd service integration.

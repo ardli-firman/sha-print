@@ -62,10 +62,10 @@ application as the product path and lives beside the .NET projects while the tra
 
 Remaining client work: none from the Windows MVP. On Linux (ADR 0018), `shaprintd` supervises the
 client proxy and server sharing runtimes outside Tauri over the local `/run/shaprint/shaprintd.sock`
-Unix socket, `shaprintctl` queries and controls the daemon from local shells, and AlmaLinux 9 and 10
-RPM packages (`packaging/linux/rpm/shaprint.spec`) install the unprivileged `shaprint` machine
-account, `shaprintd.service` systemd unit, `/etc/shaprint` non-secret configuration, and
-`/var/lib/shaprint` durable identity/state directory (#124, #125, #134).
+Unix socket, `shaprintctl` queries and controls the daemon from local shells, AlmaLinux 9 and 10
+RPM packages (`packaging/linux/rpm/shaprint.spec`), and Ubuntu 22.04 and 24.04 DEB packages (`packaging/linux/deb/`)
+install the unprivileged `shaprint` machine account, `shaprintd.service` systemd unit, `/etc/shaprint`
+non-secret configuration, and `/var/lib/shaprint` durable identity/state directory (#124, #125, #134, #135, #136).
 
 ## Development
 
