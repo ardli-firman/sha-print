@@ -907,6 +907,7 @@ describe("guided printer setup", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Review identity" }));
 
     expect(await screen.findByRole("heading", { name: "Choose a printer" })).toBeTruthy();
+    expect(await screen.findByText("Office Laser")).toBeTruthy();
 
     // Click install -> prompts for Network Channel
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
@@ -961,6 +962,7 @@ describe("guided printer setup", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Review identity" }));
 
     expect(await screen.findByRole("heading", { name: "Choose a printer" })).toBeTruthy();
+    expect(await screen.findByText("Office Laser")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
     expect(await screen.findByRole("heading", { name: "Printer installed" })).toBeTruthy();
 

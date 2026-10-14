@@ -103,10 +103,10 @@ export function AddPrinterDialog({
 
   // When result arrives
   useEffect(() => {
-    if (result && step !== "success") {
+    if (result && step !== "success" && step !== "channel") {
       setStep("printers");
     }
-  }, [result]);
+  }, [result, step]);
 
   // When queue installed successfully
   useEffect(() => {
