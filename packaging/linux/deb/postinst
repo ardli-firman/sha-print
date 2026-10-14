@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+# Set up FHS directories with least-privilege modes
+mkdir -p /etc/shaprint /etc/shaprint-credentials /var/lib/shaprint
+chown root:shaprint /etc/shaprint /etc/shaprint-credentials
+chmod 0750 /etc/shaprint /etc/shaprint-credentials
+
+chown shaprint:shaprint /var/lib/shaprint
+chmod 0700 /var/lib/shaprint
+
+if [ -f /etc/shaprint/config.json ]; then
+    chown root:shaprint /etc/shaprint/config.json
+    chmod 0640 /etc/shaprint/config.json
+fi
+
+# Create runtime directory if systemd-tmpfiles is available
+if command -v systemd-tmpfiles >/dev/null 2>&1; then
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/shaprint.conf >/dev/null 2>&1 || true
+fi
+
+# Reload systemd and enable/start service
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if [ "$1" = "configure" ]; then
+        systemctl enable shaprintd.service >/dev/null 2>&1 || true
+        if [ -d /run/systemd/system ]; then
+            systemctl restart shaprintd.service >/dev/null 2>&1 || true
+        fi
+    fi
+fi
+
+exit 0

@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+# Create dedicated unprivileged shaprint user/group if not existing
+if ! getent group shaprint >/dev/null 2>&1; then
+    addgroup --system shaprint >/dev/null 2>&1 || groupadd -r shaprint >/dev/null 2>&1
+fi
+
+if ! getent passwd shaprint >/dev/null 2>&1; then
+    adduser --system --ingroup shaprint --home /var/lib/shaprint --shell /usr/sbin/nologin \
+        --gecos "ShaPrint system daemon" --no-create-home shaprint >/dev/null 2>&1 || \
+    useradd -r -g shaprint -d /var/lib/shaprint -s /usr/sbin/nologin \
+        -c "ShaPrint system daemon" shaprint >/dev/null 2>&1
+fi
+
+# Bounded graceful drain during package updates ($1 = upgrade)
+if [ "$1" = "upgrade" ]; then
+    if [ -x /usr/bin/shaprintctl ] && [ -S /run/shaprint/shaprintd.sock ]; then
+        /usr/bin/shaprintctl drain --timeout 30 >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0

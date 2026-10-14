@@ -1,4 +1,4 @@
-.PHONY: help keys release-nightly release-patch release-minor release-major test test-android build-android-debug apk-debug build-rpm smoke-rpm-almalinux9 smoke-rpm-almalinux10 typecheck check lint
+.PHONY: help keys release-nightly release-patch release-minor release-major test test-android build-android-debug apk-debug build-rpm build-deb smoke-rpm-almalinux9 smoke-rpm-almalinux10 smoke-deb-ubuntu2404 typecheck check lint
 
 help:
 	@echo "Available commands in ShaPrint:"
@@ -11,8 +11,10 @@ help:
 	@echo "  make test-android        - Run Android client unit tests"
 	@echo "  make build-android-debug - Build Android client debug APK (alias: make apk-debug)"
 	@echo "  make build-rpm           - Build the AlmaLinux 9/10 headless daemon RPM artifact"
+	@echo "  make build-deb           - Build the Ubuntu 24.04 DEB artifact"
 	@echo "  make smoke-rpm-almalinux9  - Run the AlmaLinux 9 RPM + systemd smoke test"
 	@echo "  make smoke-rpm-almalinux10 - Run the AlmaLinux 10 RPM + systemd smoke test"
+	@echo "  make smoke-deb-ubuntu2404  - Run the Ubuntu 24.04 DEB + systemd smoke test"
 	@echo "  make typecheck           - Run frontend TypeScript typecheck"
 	@echo "  make lint                - Run cargo fmt check and cargo clippy"
 
@@ -48,11 +50,17 @@ apk-debug: build-android-debug
 build-rpm:
 	bash packaging/linux/rpm/build-rpm.sh
 
+build-deb:
+	bash packaging/linux/deb/build-deb.sh
+
 smoke-rpm-almalinux9:
 	bash packaging/linux/rpm/smoke-test-almalinux9.sh
 
 smoke-rpm-almalinux10:
 	bash packaging/linux/rpm/smoke-test-almalinux10.sh
+
+smoke-deb-ubuntu2404:
+	bash packaging/linux/deb/smoke-test-ubuntu2404.sh
 
 typecheck:
 	bun run --filter shaprint-desktop typecheck

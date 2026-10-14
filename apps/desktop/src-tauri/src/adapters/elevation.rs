@@ -222,8 +222,8 @@ impl ElevationBroker for SystemElevation {
         #[cfg(unix)]
         {
             let client = match &self.firewall_program {
-                Some(program) => linux::FirewalldClient::with_program(program),
-                None => linux::FirewalldClient::new(),
+                Some(program) => linux::LinuxFirewallClient::with_program(program),
+                None => linux::LinuxFirewallClient::new(),
             };
             client.inbound_sharing_allowed()
         }
@@ -261,8 +261,8 @@ impl ElevationBroker for SystemElevation {
         #[cfg(unix)]
         if action == SetupAction::AllowInboundSharing {
             let client = match &self.firewall_program {
-                Some(program) => linux::FirewalldClient::with_program(program),
-                None => linux::FirewalldClient::new(),
+                Some(program) => linux::LinuxFirewallClient::with_program(program),
+                None => linux::LinuxFirewallClient::new(),
             };
             return client.allow_inbound_sharing();
         }
@@ -419,6 +419,12 @@ pub mod linux {
     /// `firewall-cmd` binary.
     pub const FIREWALL_CMD_ENV: &str = "SHAPRINT_FIREWALL_CMD";
 
+    const UFW_CANDIDATES: [&str; 4] = ["/usr/sbin/ufw", "/sbin/ufw", "/usr/bin/ufw", "ufw"];
+
+    /// Environment variable allowing tests or package smoke scripts to point at a controlled
+    /// `ufw` binary.
+    pub const UFW_CMD_ENV: &str = "SHAPRINT_UFW_CMD";
+
     /// Returns the exact firewalld port specifications (`48631/tcp`, `48633/udp`) ShaPrint Server
     /// sharing requires.
     pub fn firewalld_port_specs() -> Vec<String> {
@@ -441,6 +447,295 @@ pub mod linux {
             }
         }
         PathBuf::from("firewall-cmd")
+    }
+
+    fn locate_ufw() -> PathBuf {
+        if let Ok(custom) = std::env::var(UFW_CMD_ENV) {
+            let trimmed = custom.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed);
+            }
+        }
+        for candidate in UFW_CANDIDATES {
+            if candidate.starts_with('/') && Path::new(candidate).exists() {
+                return PathBuf::from(candidate);
+            }
+        }
+        PathBuf::from("ufw")
+    }
+
+    /// Interacts with `ufw` (Uncomplicated Firewall) to verify and configure ShaPrint's exact
+    /// Server sharing ports (`48631/tcp` and `48633/udp`).
+    #[derive(Debug, Clone)]
+    pub struct UfwClient {
+        pub program: PathBuf,
+    }
+
+    impl Default for UfwClient {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl UfwClient {
+        pub fn new() -> Self {
+            Self {
+                program: locate_ufw(),
+            }
+        }
+
+        pub fn with_program(program: impl Into<PathBuf>) -> Self {
+            Self {
+                program: program.into(),
+            }
+        }
+
+        /// Checks whether UFW allows inbound TCP 48631 and UDP 48633.
+        ///
+        /// If UFW is not installed or inactive, returns `Ok(true)` because UFW is not blocking traffic.
+        pub fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+            let output = match Command::new(&self.program).arg("status").output() {
+                Ok(out) => out,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+                Err(error) => {
+                    return Err(SetupFailure::new(
+                        SetupFailureKind::Other,
+                        format!("cannot run ufw status: {error}"),
+                    ))
+                }
+            };
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = format!("{stdout} {stderr}").to_ascii_lowercase();
+
+            if combined.contains("permission denied")
+                || combined.contains("must be root")
+                || combined.contains("not authorized")
+            {
+                return Err(SetupFailure::new(
+                    SetupFailureKind::PermissionDenied,
+                    "ufw requires root or sudo authorization to inspect firewall rules",
+                ));
+            }
+
+            if combined.contains("status: inactive") {
+                return Ok(true);
+            }
+
+            if !output.status.success() {
+                return Err(classify_ufw_failure(&output));
+            }
+
+            if !combined.contains("status: active") {
+                // Unknown or unparseable status, assume inactive/unmanaged
+                return Ok(true);
+            }
+
+            let mut has_48631 = false;
+            let mut has_48633 = false;
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                let lower_line = trimmed.to_ascii_lowercase();
+                let rule_part = match lower_line.split_once('#') {
+                    Some((rule, _comment)) => rule.trim(),
+                    None => lower_line.as_str(),
+                };
+                if (rule_part.contains("48631/tcp")
+                    || (rule_part.contains("48631") && !rule_part.contains("/udp")))
+                    && rule_part.contains("allow")
+                    && !rule_part.contains("deny")
+                    && !rule_part.contains("reject")
+                {
+                    has_48631 = true;
+                }
+                if (rule_part.contains("48633/udp")
+                    || (rule_part.contains("48633") && !rule_part.contains("/tcp")))
+                    && rule_part.contains("allow")
+                    && !rule_part.contains("deny")
+                    && !rule_part.contains("reject")
+                {
+                    has_48633 = true;
+                }
+            }
+
+            Ok(has_48631 && has_48633)
+        }
+
+        /// Opens `48631/tcp` and `48633/udp` in UFW idempotently while preserving unrelated rules.
+        pub fn allow_inbound_sharing(&self) -> Result<(), SetupFailure> {
+            let rules = [
+                ("48631/tcp", "ShaPrint Server IPPS"),
+                ("48633/udp", "ShaPrint Server Discovery"),
+            ];
+            for (port_spec, comment) in rules {
+                let output = Command::new(&self.program)
+                    .args(["allow", port_spec, "comment", comment])
+                    .output()
+                    .map_err(|error| {
+                        SetupFailure::new(
+                            SetupFailureKind::Other,
+                            format!("cannot run ufw allow {port_spec}: {error}"),
+                        )
+                    })?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let combined = format!("{stdout} {stderr}").to_ascii_lowercase();
+                    if combined.contains("rule exists")
+                        || combined.contains("skipping")
+                        || combined.contains("updated")
+                    {
+                        continue;
+                    }
+                    return Err(classify_ufw_failure(&output));
+                }
+            }
+            Ok(())
+        }
+
+        /// Removes `48631/tcp` and `48633/udp` from UFW while preserving unrelated rules.
+        pub fn remove_inbound_sharing(&self) -> Result<(), SetupFailure> {
+            let port_specs = ["48631/tcp", "48633/udp"];
+            for port_spec in port_specs {
+                let _ = Command::new(&self.program)
+                    .args(["delete", "allow", port_spec])
+                    .output();
+            }
+            Ok(())
+        }
+    }
+
+    fn classify_ufw_failure(output: &std::process::Output) -> SetupFailure {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let combined = format!("{} {}", stdout.trim(), stderr.trim());
+        let lower = combined.to_ascii_lowercase();
+        let kind = if lower.contains("must be root")
+            || lower.contains("permission denied")
+            || lower.contains("not authorized")
+        {
+            SetupFailureKind::PermissionDenied
+        } else {
+            SetupFailureKind::Other
+        };
+        SetupFailure::new(kind, format!("ufw failed: {}", combined.trim()))
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum LinuxFirewallBackend {
+        Firewalld,
+        Ufw,
+        None,
+    }
+
+    /// Unified Linux firewall client that coordinates `firewalld` (RHEL/AlmaLinux) and `ufw`
+    /// (Ubuntu/Debian) dynamically based on active system managers.
+    #[derive(Debug, Clone)]
+    pub struct LinuxFirewallClient {
+        pub firewalld: FirewalldClient,
+        pub ufw: UfwClient,
+    }
+
+    impl Default for LinuxFirewallClient {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl LinuxFirewallClient {
+        pub fn new() -> Self {
+            Self {
+                firewalld: FirewalldClient::new(),
+                ufw: UfwClient::new(),
+            }
+        }
+
+        pub fn with_program(program: impl Into<PathBuf>) -> Self {
+            let path = program.into();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.contains("ufw") {
+                Self {
+                    firewalld: FirewalldClient::new(),
+                    ufw: UfwClient::with_program(path),
+                }
+            } else {
+                Self {
+                    firewalld: FirewalldClient::with_program(path),
+                    ufw: UfwClient::new(),
+                }
+            }
+        }
+
+        fn detect_backend(&self) -> LinuxFirewallBackend {
+            if std::env::var_os(UFW_CMD_ENV).is_some() {
+                return LinuxFirewallBackend::Ufw;
+            }
+            if std::env::var_os(FIREWALL_CMD_ENV).is_some() {
+                return LinuxFirewallBackend::Firewalld;
+            }
+
+            // Check if firewalld is running
+            if let Ok(out) = Command::new(&self.firewalld.program)
+                .arg("--state")
+                .output()
+            {
+                if out.status.success() {
+                    return LinuxFirewallBackend::Firewalld;
+                }
+            }
+
+            // Check if ufw is active
+            if let Ok(out) = Command::new(&self.ufw.program).arg("status").output() {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
+                if stdout.contains("status: active") {
+                    return LinuxFirewallBackend::Ufw;
+                }
+                let stderr = String::from_utf8_lossy(&out.stderr).to_ascii_lowercase();
+                if stderr.contains("permission denied") || stderr.contains("must be root") {
+                    return LinuxFirewallBackend::Ufw;
+                }
+            }
+
+            let has_ufw = Command::new(&self.ufw.program)
+                .arg("--version")
+                .output()
+                .is_ok_and(|out| out.status.success());
+            let has_firewalld = Command::new(&self.firewalld.program)
+                .arg("--version")
+                .output()
+                .is_ok_and(|out| out.status.success());
+
+            if has_ufw && !has_firewalld {
+                LinuxFirewallBackend::Ufw
+            } else if has_firewalld && !has_ufw {
+                LinuxFirewallBackend::Firewalld
+            } else {
+                LinuxFirewallBackend::None
+            }
+        }
+
+        pub fn inbound_sharing_allowed(&self) -> Result<bool, SetupFailure> {
+            match self.detect_backend() {
+                LinuxFirewallBackend::Firewalld => self.firewalld.inbound_sharing_allowed(),
+                LinuxFirewallBackend::Ufw => self.ufw.inbound_sharing_allowed(),
+                LinuxFirewallBackend::None => Ok(true),
+            }
+        }
+
+        pub fn allow_inbound_sharing(&self) -> Result<(), SetupFailure> {
+            match self.detect_backend() {
+                LinuxFirewallBackend::Firewalld => self.firewalld.allow_inbound_sharing(),
+                LinuxFirewallBackend::Ufw => self.ufw.allow_inbound_sharing(),
+                LinuxFirewallBackend::None => Ok(()),
+            }
+        }
+
+        pub fn remove_inbound_sharing(&self) -> Result<(), SetupFailure> {
+            let _ = self.firewalld.remove_inbound_sharing();
+            let _ = self.ufw.remove_inbound_sharing();
+            Ok(())
+        }
     }
 
     /// Interacts with `firewalld` via `firewall-cmd` to verify and open ShaPrint's exact Server
@@ -627,12 +922,12 @@ pub mod linux {
     }
 
     pub fn inbound_sharing_allowed() -> Result<bool, SetupFailure> {
-        FirewalldClient::new().inbound_sharing_allowed()
+        LinuxFirewallClient::new().inbound_sharing_allowed()
     }
 
     pub fn perform(action: SetupAction) -> Result<(), SetupFailure> {
         match action {
-            SetupAction::AllowInboundSharing => FirewalldClient::new().allow_inbound_sharing(),
+            SetupAction::AllowInboundSharing => LinuxFirewallClient::new().allow_inbound_sharing(),
             other => Err(SetupFailure::new(
                 SetupFailureKind::InvalidRequest,
                 format!(
@@ -1527,6 +1822,116 @@ esac
             .allow_inbound_sharing()
             .expect_err("declined authorization must fail");
         assert_eq!(err.kind(), SetupFailureKind::PermissionDenied);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn linux_ufw_rules_target_exact_shaprint_ports_and_verify_access_before_and_after_setup() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = crate::test_support::temporary_directory("ufw-test");
+        std::fs::create_dir_all(&dir).expect("creates temp dir");
+        let state_file = dir.join("ufw-rules.txt");
+        let fake_ufw = dir.join("ufw");
+
+        let script = format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+STATE="{state}"
+touch "$STATE"
+
+if [[ "${{FAKE_UFW_DENY:-0}}" == "1" ]]; then
+  echo "ERROR: You must be root to run this tool" >&2
+  exit 1
+fi
+
+case "${{1:-}}" in
+  status)
+    if [[ "${{FAKE_UFW_STATE:-active}}" == "inactive" ]]; then
+      echo "Status: inactive"
+      exit 0
+    fi
+    echo "Status: active"
+    echo ""
+    echo "To                         Action      From"
+    echo "--                         ------      ----"
+    cat "$STATE"
+    exit 0
+    ;;
+  allow)
+    port="${{2:-}}"
+    # Idempotent: don't duplicate
+    if ! grep -q "^$port " "$STATE"; then
+      printf "%-26s ALLOW       Anywhere\n" "$port" >> "$STATE"
+    fi
+    echo "Rule updated"
+    exit 0
+    ;;
+  delete)
+    shift
+    if [[ "${{1:-}}" == "allow" ]]; then
+      port="${{2:-}}"
+      sed -i "\|^$port |d" "$STATE"
+    fi
+    echo "Rule deleted"
+    exit 0
+    ;;
+  *)
+    echo "unexpected args: $*" >&2
+    exit 2
+    ;;
+esac
+"#,
+            state = state_file.display(),
+        );
+        std::fs::write(&fake_ufw, &script).expect("writes fake ufw");
+        std::fs::set_permissions(&fake_ufw, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod +x");
+
+        let ufw = linux::UfwClient::with_program(&fake_ufw);
+
+        // 1. Initial active status with empty rules returns false
+        assert!(
+            !ufw.inbound_sharing_allowed().expect("queries ufw"),
+            "ports not yet allowed"
+        );
+
+        // 2. Allow inbound sharing adds both 48631/tcp and 48633/udp and is idempotent
+        ufw.allow_inbound_sharing().expect("adds ufw rules");
+        assert!(
+            ufw.inbound_sharing_allowed().expect("queries ufw"),
+            "ports now allowed"
+        );
+        ufw.allow_inbound_sharing().expect("idempotent allow");
+
+        let content = std::fs::read_to_string(&state_file).expect("reads state");
+        assert!(content.contains("48631/tcp"));
+        assert!(content.contains("48633/udp"));
+
+        // 3. Remove inbound sharing removes only ShaPrint rules
+        ufw.remove_inbound_sharing().expect("removes ufw rules");
+        assert!(
+            !ufw.inbound_sharing_allowed().expect("queries ufw"),
+            "ports removed"
+        );
+
+        // 4. Inactive UFW returns true (traffic not blocked)
+        std::env::set_var("FAKE_UFW_STATE", "inactive");
+        assert!(
+            ufw.inbound_sharing_allowed().expect("inactive ufw is ok"),
+            "inactive ufw does not block"
+        );
+        std::env::remove_var("FAKE_UFW_STATE");
+
+        // 5. Permission denied returns PermissionDenied
+        std::env::set_var("FAKE_UFW_DENY", "1");
+        let err = ufw.inbound_sharing_allowed().expect_err("deny status");
+        assert_eq!(err.kind(), SetupFailureKind::PermissionDenied);
+        let err_allow = ufw.allow_inbound_sharing().expect_err("deny allow");
+        assert_eq!(err_allow.kind(), SetupFailureKind::PermissionDenied);
+        std::env::remove_var("FAKE_UFW_DENY");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
