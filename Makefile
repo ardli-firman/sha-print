@@ -106,6 +106,9 @@ smoke-deb-debian12:
 smoke-channel-switch:
 	bash packaging/linux/repo/smoke-test-channel-switch.sh
 
+qualify-linux:
+	bash scripts/linux-qualification/qualify-linux-support.sh
+
 typecheck:
 	bun run --filter shaprint-desktop typecheck
 

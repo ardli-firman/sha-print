@@ -68,6 +68,9 @@ install the unprivileged `shaprint` machine account, `shaprintd.service` systemd
 non-secret configuration, and `/var/lib/shaprint` durable identity/state directory (#124, #125, #134, #135, #136, #137, #138).
 Signed Stable and Nightly RPM and DEB repositories (`scripts/linux-repo/publish-repo.sh`, #139) are published with GPG
 signatures, enforce single package identity replacement, and preserve all machine state and credentials across channel switches.
+Linux support has completed the full qualification support gate (`tests/linux_qualification.rs`, #140) across all six supported
+distribution versions, all four Client/Server OS role combinations, Stable <-> Nightly channel switching, GNOME & KDE Wayland/X11
+desktop sessions, and representative driverless network & USB local CUPS queues with visual raster equivalence.
 
 ## Development
 
