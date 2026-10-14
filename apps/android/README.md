@@ -5,9 +5,10 @@ The ShaPrint Android Client (`io.shaprint.client`) connects to nearby or trusted
 ## Play Store Readiness
 
 - **Package Name (Application ID)**: `io.shaprint.client`
-- **Target SDK**: `35` (Android 15)
+- **Target SDK**: `36` (Android 16)
 - **Min SDK**: `26` (Android 8.0 Oreo)
 - **Bundle Format**: Android App Bundle (`.aab`) with R8 minification and resource shrinking enabled.
+- **Artifact Security**: Release `.apk` files are published publicly on GitHub Releases for direct installation, while Play Store `.aab` bundles are securely uploaded as GitHub Actions Workflow Artifacts accessible only to repository maintainers.
 
 ---
 

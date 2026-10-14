@@ -74,13 +74,21 @@ jobs:
         run: |
           TAG="${RELEASE_TAG}"
           VERSION="${TAG#android-v}"
-          mkdir -p dist-android dist-android-latest
-          cp apps/android/app/build/outputs/bundle/release/app-release.aab "dist-android/shaprint-client-${TAG}.aab"
+          mkdir -p dist-android dist-android-latest dist-aab
           cp apps/android/app/build/outputs/apk/release/app-release.apk "dist-android/shaprint-client-${TAG}.apk"
-          cp apps/android/app/build/outputs/bundle/release/app-release.aab "dist-android-latest/shaprint-client-latest.aab"
           cp apps/android/app/build/outputs/apk/release/app-release.apk "dist-android-latest/shaprint-client-latest.apk"
-          echo "Artifacts prepared in dist-android and dist-android-latest:"
+          cp apps/android/app/build/outputs/bundle/release/app-release.aab "dist-aab/shaprint-client-${TAG}.aab"
+          echo "Public APK artifacts:"
           ls -la dist-android dist-android-latest
+          echo "Internal Play Store AAB artifact:"
+          ls -la dist-aab
+
+      - name: Upload Play Store AAB as Private Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shaprint-playstore-${{ env.RELEASE_TAG }}-aab
+          path: dist-aab/*.aab
+          retention-days: 90
 
       - name: Publish Versioned GitHub Release
         uses: softprops/action-gh-release@v2
@@ -91,11 +99,11 @@ jobs:
           name: ShaPrint Android ${{ env.RELEASE_TAG }}
           body: |
             ## ShaPrint Android Client Release
-            - **Google Play Store App Bundle**: `shaprint-client-${{ env.RELEASE_TAG }}.aab` (Upload this file to Google Play Console)
             - **Universal APK**: `shaprint-client-${{ env.RELEASE_TAG }}.apk` (For direct sideloading and testing)
+            - **Google Play Store**: App Bundle (`.aab`) is retained securely in the workflow build artifacts for Play Console deployment.
 
             ### Verification
-            - Target SDK: 35 (Android 15)
+            - Target SDK: 36 (Android 16)
             - Min SDK: 26 (Android 8.0)
             - Package Name: `io.shaprint.client`
           files: |
@@ -114,7 +122,6 @@ jobs:
           body: |
             ## ShaPrint Android Client (Latest)
             - **Universal APK**: [shaprint-client-latest.apk](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.apk)
-            - **Google Play Store Bundle**: [shaprint-client-latest.aab](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.aab)
 
             *Automatically updated from tag: ${{ env.RELEASE_TAG }}*
           files: |

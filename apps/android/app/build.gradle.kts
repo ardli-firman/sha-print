@@ -45,12 +45,12 @@ val hasReleaseSigning = resolvedStoreFile != null &&
 
 android {
     namespace = "io.shaprint.client"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "io.shaprint.client"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersionName
 
