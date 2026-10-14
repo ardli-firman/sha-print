@@ -215,8 +215,7 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
     shaprintctl drain --timeout 10 | grep -q '^drained: true$'
 
     (
-        exec 3<>/dev/tcp/127.0.0.1/48632 2>/dev/null || true
-        if [ -e /dev/fd/3 ]; then
+        if exec 3<>/dev/tcp/127.0.0.1/48632 2>/dev/null; then
             printf 'POST /ipp/print HTTP/1.1\r\nHost: 127.0.0.1:48632\r\nContent-Type: application/ipp\r\nContent-Length: 100\r\n\r\n' >&3 2>/dev/null || true
             sleep 1
             exec 3>&- || true
