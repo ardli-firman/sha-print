@@ -25,7 +25,7 @@ Communication runs entirely over standard **IPPS (Internet Printing Protocol ove
 | **🪟 Windows (10 / 11)** | **Stable** (Server & Client GUI) | `.msi`, `.exe` Installer | [⬇️ Download Latest Stable Release](https://github.com/ardli-firman/sha-print/releases/latest)<br>*(Includes x64 Setup .exe & MSI Installer)* |
 | **🌙 Windows Nightly** | **Nightly** (Bleeding-Edge Test) | `.exe` Setup Installer | [⬇️ Browse Nightly Builds (`q=nightly`)](https://github.com/ardli-firman/sha-print/releases?q=nightly)<br>*(Automated test builds & prerelease verification)* |
 | **📱 Android (8.0+)** | **Client** (Direct & PrintService) | `.aab` (Play Store) & `.apk` | [⬇️ Download Latest APK](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.apk) • [📦 Play Store Bundle (.aab)](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.aab)<br>([View all Android releases](https://github.com/ardli-firman/sha-print/releases?q=Android)) |
-| **🐧 Ubuntu / Debian** | **Daemon** (Headless Server) | `.deb` (Ubuntu 22.04 / 24.04 / Debian 12) | [📦 DEB Packaging Guide](packaging/linux/deb) (`make build-deb`) |
+| **🐧 Ubuntu / Debian** | **Daemon** (Headless Server) | `.deb` (Ubuntu 22.04 / 24.04 / Debian 11 / 12) | [📦 DEB Packaging Guide](packaging/linux/deb) (`make build-deb`) |
 | **🐧 AlmaLinux / RHEL** | **Daemon** (Headless Server) | `.rpm` (AlmaLinux 9 / 10) | [📦 RPM Packaging Guide](packaging/linux/rpm) (`make build-rpm`) |
 
 *👉 [Browse all releases, nightlies, and changelogs on GitHub Releases](https://github.com/ardli-firman/sha-print/releases)*

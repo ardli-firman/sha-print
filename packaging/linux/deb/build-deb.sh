@@ -28,25 +28,27 @@ if [[ -z "${SHAPRINTD_BIN:-}" || -z "${SHAPRINTCTL_BIN:-}" ]]; then
         CONTAINER_CLI="docker"
     fi
 
-    # Check if pre-compiled baseline binary with glibc <= 2.35 is already available
+    # Check if pre-compiled baseline binary with glibc <= 2.31 is already available
     if [[ -f "${TAURI_DIR}/target/deb-baseline/release/shaprintd" && -f "${TAURI_DIR}/target/deb-baseline/release/shaprintctl" ]]; then
         SHAPRINTD_BIN="${TAURI_DIR}/target/deb-baseline/release/shaprintd"
         SHAPRINTCTL_BIN="${TAURI_DIR}/target/deb-baseline/release/shaprintctl"
-    elif [[ -f "${TAURI_DIR}/target/el9/release/shaprintd" && -f "${TAURI_DIR}/target/el9/release/shaprintctl" ]]; then
-        SHAPRINTD_BIN="${TAURI_DIR}/target/el9/release/shaprintd"
-        SHAPRINTCTL_BIN="${TAURI_DIR}/target/el9/release/shaprintctl"
     elif [[ -n "${CONTAINER_CLI}" && -n "${HOST_GLIBC_VERSION}" ]]; then
         MAJOR_PART="${HOST_GLIBC_VERSION%%.*}"
         MINOR_PART="${HOST_GLIBC_VERSION#*.}"
-        if [[ "${MAJOR_PART}" -gt 2 || ("${MAJOR_PART}" -eq 2 && "${MINOR_PART}" -gt 35) ]]; then
+        if [[ "${MAJOR_PART}" -gt 2 || ("${MAJOR_PART}" -eq 2 && "${MINOR_PART}" -gt 31) ]]; then
             DEB_BUILD_TARGET_DIR="${TAURI_DIR}/target/deb-baseline"
             mkdir -p "${DEB_BUILD_TARGET_DIR}"
             ${CONTAINER_CLI} run --rm \
                 -v "${REPO_ROOT}:/src:ro,z" \
                 -v "${DEB_BUILD_TARGET_DIR}:/target:z" \
-                docker.io/library/ubuntu:22.04 bash -c "
+                docker.io/library/debian:11 bash -c "
+                    sed -i 's/deb.debian.org/archive.debian.org/g; s/security.debian.org/archive.debian.org/g' /etc/apt/sources.list || true
                     apt-get update >/dev/null 2>&1 && \
-                    apt-get install -y --no-install-recommends cargo rustc gcc libc6-dev ca-certificates >/dev/null 2>&1
+                    apt-get install -y --no-install-recommends gcc libc6-dev curl ca-certificates >/dev/null 2>&1
+                    if ! command -v cargo >/dev/null 2>&1; then
+                        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal >/dev/null 2>&1
+                        . /root/.cargo/env
+                    fi
                     cargo build \
                         --manifest-path /src/apps/desktop/src-tauri/Cargo.toml \
                         --target-dir /target \
@@ -127,9 +129,9 @@ DEB_NAME="shaprint_${VERSION}-${RELEASE}_amd64.deb"
 FINAL_DEB="${OUTPUT_DIR}/${DEB_NAME}"
 
 if command -v dpkg-deb >/dev/null 2>&1; then
-    dpkg-deb --build --root-owner-group "${STAGING_DIR}" "${FINAL_DEB}" >&2
+    dpkg-deb -Zxz --build --root-owner-group "${STAGING_DIR}" "${FINAL_DEB}" >&2
 else
-    # Fallback to Ubuntu container if host lacks dpkg-deb (e.g. RPM-based host)
+    # Fallback to container if host lacks dpkg-deb (e.g. RPM-based host)
     CONTAINER_CLI=""
     if command -v podman >/dev/null 2>&1; then
         CONTAINER_CLI="podman"
@@ -142,7 +144,7 @@ else
             -v "${STAGING_DIR}:/staging:z" \
             -v "${OUTPUT_DIR}:/out:z" \
             docker.io/library/ubuntu:24.04 \
-            dpkg-deb --build --root-owner-group /staging "/out/${DEB_NAME}" >&2
+            dpkg-deb -Zxz --build --root-owner-group /staging "/out/${DEB_NAME}" >&2
     else
         echo "error: neither dpkg-deb nor podman/docker found to build .deb package" >&2
         exit 1
