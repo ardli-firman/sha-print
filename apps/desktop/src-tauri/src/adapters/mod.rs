@@ -20,6 +20,8 @@ pub mod ipps;
 pub mod legacy;
 pub mod port_binding;
 pub mod printers;
+#[cfg(unix)]
+pub mod purge;
 pub mod queue_installation;
 mod server_sharing;
 pub mod startup;

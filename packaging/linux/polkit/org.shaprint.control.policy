@@ -87,4 +87,17 @@
     <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/shaprintctl</annotate>
     <annotate key="org.freedesktop.policykit.exec.argv1">sharing</annotate>
   </action>
+
+  <!-- Purge decommissions ShaPrint machine state, queues, credentials, and identity. -->
+  <action id="org.shaprint.control.purge">
+    <description>safely purge ShaPrint machine state and configuration</description>
+    <message>Authentication is required to purge ShaPrint machine state and configuration</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/shaprintctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">purge</annotate>
+  </action>
 </policyconfig>
