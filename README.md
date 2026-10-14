@@ -4,9 +4,9 @@
   <p><i>Desktop (Tauri 2, React, Rust) & Mobile (Android, Kotlin)</i></p>
 
   <p>
-    <a href="https://github.com/ardli-firman/sha-print/releases/latest"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?filter=%21*android*&filter=%21*nightly*&label=Windows%20Stable&color=0078D4&logo=windows" alt="Latest Desktop Release" /></a>
-    <a href="https://github.com/ardli-firman/sha-print/releases?q=nightly"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?include_prereleases&filter=*nightly*&label=Windows%20Nightly&color=orange&logo=windows" alt="Latest Windows Nightly" /></a>
-    <a href="https://github.com/ardli-firman/sha-print/releases?q=Android"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?filter=android*&label=Android&color=3DDC84&logo=android" alt="Latest Android Release" /></a>
+    <a href="https://github.com/ardli-firman/sha-print/releases/latest"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?label=Windows%20Stable&color=0078D4&logo=windows" alt="Latest Desktop Release" /></a>
+    <a href="https://github.com/ardli-firman/sha-print/releases?q=nightly"><img src="https://img.shields.io/github/v/tag/ardli-firman/sha-print?filter=*nightly*&label=Windows%20Nightly&color=orange&logo=windows" alt="Latest Windows Nightly" /></a>
+    <a href="https://github.com/ardli-firman/sha-print/releases?q=Android"><img src="https://img.shields.io/github/v/tag/ardli-firman/sha-print?filter=android*&label=Android&color=3DDC84&logo=android" alt="Latest Android Release" /></a>
   </p>
 </div>
 
