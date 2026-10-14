@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use shaprint_desktop::adapters::ipps::{protocol, NetworkChannel};
@@ -28,7 +28,7 @@ use shaprint_desktop::domain::{AppError, ErrorCode, JobPath, PrinterName, Servic
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 #[cfg(windows)]
-use tokio::time::{timeout, Duration};
+use tokio::time::timeout;
 
 use support::{get_printer_attributes, temporary_directory, FakeCatalog};
 
@@ -1132,6 +1132,75 @@ async fn proxy_forwards_validate_job_with_the_configured_network_channel() {
     assert_eq!(http_status, 200);
     assert_eq!(ipp_status(&response), 0x0000);
     assert!(pair.submitter.jobs.lock().expect("reads jobs").is_empty());
+    pair.stop().await;
+}
+
+#[tokio::test]
+async fn multi_step_create_and_send_document_flow_completes_cleanly_during_drain() {
+    let pair = RunningPair::start(true).await;
+    let proxy_address = pair.proxy_address();
+    let printer_uri = local_printer_uri(&proxy_address, &pair.server_address);
+
+    // 1. Submit Create-Job
+    let mut create = operation_request(0x0005, 101, &printer_uri);
+    create.push(3);
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(ipp_status(&response), 0x0000);
+    let created = protocol::Request::parse(&response).expect("valid Create-Job response");
+    let job_id = created.integer("job-id").expect("server assigned job id");
+    assert_eq!(pair.server_tracker.active_count(), 1);
+
+    // 2. Put proxy tracker into drain mode
+    pair.proxy.tracker().begin_drain();
+    assert!(pair.proxy.tracker().is_draining());
+
+    // 3. New Print-Job or Create-Job during drain must be rejected with NotAcceptingJobs (0x0508)
+    let mut rejected_create = operation_request(0x0005, 102, &printer_uri);
+    rejected_create.push(3);
+    let (http_status, response) =
+        submit_request_to_local_queue(&proxy_address, rejected_create).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(
+        ipp_status(&response),
+        0x0508,
+        "new Create-Job during drain is refused with 0x0508"
+    );
+
+    let (http_status, response) =
+        submit_to_local_queue(&proxy_address, &printer_uri, &document_bytes()).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(
+        ipp_status(&response),
+        0x0508,
+        "new Print-Job during drain is refused with 0x0508"
+    );
+
+    // 4. Send-Document for the existing in-flight job succeeds during drain
+    let mut send = operation_request(0x0006, 103, &printer_uri);
+    integer_attribute(&mut send, "job-id", job_id);
+    boolean_attribute(&mut send, "last-document", true);
+    send.push(3);
+    send.extend(document_bytes());
+    let (http_status, response) = submit_request_to_local_queue(&proxy_address, send).await;
+    assert_eq!(http_status, 200);
+    assert_eq!(
+        ipp_status(&response),
+        0x0000,
+        "Send-Document for active job succeeds during drain"
+    );
+
+    // Both server and proxy trackers drop to 0 after send finishes
+    assert_eq!(pair.server_tracker.active_count(), 0);
+    assert_eq!(pair.proxy.tracker().active_count(), 0);
+
+    // Drain completes without timing out
+    pair.proxy
+        .tracker()
+        .drain(Duration::from_secs(5))
+        .await
+        .expect("drain succeeds cleanly");
+
     pair.stop().await;
 }
 

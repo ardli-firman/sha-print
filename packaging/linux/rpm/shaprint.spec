@@ -3,7 +3,7 @@
 
 Name:           shaprint
 Version:        %{_shaprint_version}
-Release:        1%{?dist}
+Release:        %{?_shaprint_release}%{!?_shaprint_release:1}%{?dist}
 Summary:        ShaPrint headless print-sharing and client-proxy daemon
 License:        MIT
 URL:            https://github.com/ardli-firman/sha-print
@@ -38,6 +38,12 @@ getent group shaprint >/dev/null 2>&1 || groupadd -r shaprint
 getent passwd shaprint >/dev/null 2>&1 || \
     useradd -r -g shaprint -d /var/lib/shaprint -s /sbin/nologin \
     -c "ShaPrint system daemon" shaprint
+if [ "$1" -ge 2 ]; then
+    if [ -x %{_bindir}/shaprintctl ] && [ -S /run/shaprint/shaprintd.sock ]; then
+        # Try graceful drain if supported by installed version; do not block upgrade if older binary lacks drain
+        %{_bindir}/shaprintctl drain --timeout 30 >/dev/null 2>&1 || :
+    fi
+fi
 exit 0
 
 %post

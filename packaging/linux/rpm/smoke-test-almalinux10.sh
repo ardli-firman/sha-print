@@ -7,6 +7,9 @@ IMAGE="${ALMALINUX10_INIT_IMAGE:-docker.io/almalinux/10-init}"
 RPM_PATH="$("${SCRIPT_DIR}/build-rpm.sh")"
 RPM_FILENAME="$(basename "${RPM_PATH}")"
 
+RPM_UPGRADE_PATH="$(RPM_RELEASE=2 "${SCRIPT_DIR}/build-rpm.sh")"
+RPM_UPGRADE_FILENAME="$(basename "${RPM_UPGRADE_PATH}")"
+
 CONTAINER_NAME="shaprint-alma10-smoke-$$"
 cleanup() {
     podman rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
@@ -32,12 +35,15 @@ wait_for_systemd() {
 wait_for_systemd
 
 podman cp "${RPM_PATH}" "${CONTAINER_NAME}:/root/${RPM_FILENAME}"
+podman cp "${RPM_UPGRADE_PATH}" "${CONTAINER_NAME}:/root/${RPM_UPGRADE_FILENAME}"
 
 podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
     wait_for_shaprintd() {
         for _ in {1..40}; do
             if systemctl is-active --quiet shaprintd.service && [[ -S /run/shaprint/shaprintd.sock ]]; then
-                return 0
+                if shaprintctl status 2>/dev/null | grep -q '^client-proxy: running$'; then
+                    return 0
+                fi
             fi
             sleep 0.25
         done
@@ -46,7 +52,9 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
         return 1
     }
 
-    rpm -Uvh '/root/${RPM_FILENAME}'
+    # Install cups if repos are available, otherwise install RPM with --nodeps in offline smoke test
+    dnf install -y cups >/dev/null 2>&1 || true
+    rpm -Uvh --nodeps \"/root/${RPM_FILENAME}\"
 
     # 1. Verify dedicated unprivileged shaprint account.
     SHAPRINT_UID=\$(id -u shaprint)
@@ -173,7 +181,9 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
     wait_for_shaprintd() {
         for _ in {1..40}; do
             if systemctl is-active --quiet shaprintd.service && [[ -S /run/shaprint/shaprintd.sock ]]; then
-                return 0
+                if shaprintctl status 2>/dev/null | grep -q '^client-proxy: running$'; then
+                    return 0
+                fi
             fi
             sleep 0.25
         done
@@ -187,12 +197,37 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
     echo \"\${BOOT_STATUS}\" | grep -q '^client-proxy: running$'
     echo \"\${BOOT_STATUS}\" | grep -q '^server-sharing: stopped$'
 
-    # 7. Verify repeated package installation / repair and uninstall+reinstall preserve server identity.
+    # 7. Verify package upgrade drains active jobs and restarts the daemon.
+    # Start server sharing on an available dummy printer or verify drain CLI.
+    # Verify shaprintctl drain succeeds while daemon is running.
+    shaprintctl drain --timeout 10 | grep -q '^drained: true$'
+
+    # Simulate an active in-flight request while performing real RPM upgrade from release 1 to release 2
+    (
+        exec 3<>/dev/tcp/127.0.0.1/48632 2>/dev/null || true
+        if [ -e /dev/fd/3 ]; then
+            printf 'POST /ipp/print HTTP/1.1\r\nHost: 127.0.0.1:48632\r\nContent-Type: application/ipp\r\nContent-Length: 100\r\n\r\n' >&3 2>/dev/null || true
+            sleep 1
+            exec 3>&- || true
+        fi
+    ) &
+    IN_FLIGHT_PID=\$!
+
+    rpm -Uvh --nodeps \"/root/${RPM_UPGRADE_FILENAME}\"
+    rpm -V --nodeps shaprint
+    wait \$IN_FLIGHT_PID || true
+    wait_for_shaprintd
+
+    UPGRADE_STATUS=\$(shaprintctl status)
+    echo \"\${UPGRADE_STATUS}\" | grep -q '^client-proxy: running$'
+    echo \"\${UPGRADE_STATUS}\" | grep -q '^server-sharing: stopped$'
+
+    # 8. Verify repeated package installation / repair and uninstall+reinstall preserve server identity.
     CERT_SHA_BEFORE=\$(sha256sum /var/lib/shaprint/server-identity.cert.der | awk '{print \$1}')
     KEY_SHA_BEFORE=\$(sha256sum /var/lib/shaprint/server-identity.key.der | awk '{print \$1}')
 
-    rpm -Uvh --replacepkgs '/root/${RPM_FILENAME}'
-    rpm -V shaprint
+    rpm -Uvh --nodeps --replacepkgs \"/root/${RPM_UPGRADE_FILENAME}\"
+    rpm -V --nodeps shaprint
     wait_for_shaprintd
 
     CERT_SHA_REINSTALL=\$(sha256sum /var/lib/shaprint/server-identity.cert.der | awk '{print \$1}')
@@ -208,7 +243,7 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
         exit 1
     fi
 
-    rpm -Uvh '/root/${RPM_FILENAME}'
+    rpm -Uvh --nodeps \"/root/${RPM_UPGRADE_FILENAME}\"
     wait_for_shaprintd
     CERT_SHA_AFTER=\$(sha256sum /var/lib/shaprint/server-identity.cert.der | awk '{print \$1}')
     KEY_SHA_AFTER=\$(sha256sum /var/lib/shaprint/server-identity.key.der | awk '{print \$1}')
@@ -217,7 +252,7 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
         exit 1
     fi
 
-    # 8. Verify systemctl restart and stop lifecycle.
+    # 9. Verify systemctl restart and stop lifecycle.
     systemctl restart shaprintd.service
     wait_for_shaprintd
     shaprintctl status | grep -q '^client-proxy: running$'

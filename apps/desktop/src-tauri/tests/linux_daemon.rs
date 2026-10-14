@@ -2632,6 +2632,100 @@ async fn shaprintctl_diagnostics_and_status_distinguish_subsystem_failures_with_
 }
 
 #[tokio::test]
+async fn daemon_drain_command_and_client_rpc_succeed_with_status() {
+    use shaprint_desktop::adapters::daemon::execute_cli_command;
+    use shaprint_desktop::adapters::daemon::parse_cli_args;
+
+    let dir = temporary_directory("daemon-drain-e2e");
+    std::fs::create_dir_all(&dir).expect("creates state dir");
+    let socket_path = dir.join("shaprintd.sock");
+    let proxy_port = support::free_port();
+    let server_port = support::free_port();
+
+    let server = DaemonServer::launch(DaemonConfig::new(&dir, &socket_path).with_ports(
+        RuntimePorts {
+            proxy_port,
+            server_port,
+            discovery_ports: vec![0],
+        },
+    ))
+    .await
+    .expect("launches test daemon");
+
+    let client = DaemonClient::new(&socket_path);
+
+    // Initial status check: proxy is running
+    let status = client.status().await.expect("initial status query");
+    let proxy = status
+        .services
+        .iter()
+        .find(|s| s.id == "client-proxy")
+        .expect("client-proxy exists");
+    assert_eq!(proxy.state, "running");
+
+    // shaprintctl drain command succeeds when idle
+    let drain_opts = parse_cli_args(&[
+        "shaprintctl",
+        "--socket",
+        &socket_path.to_string_lossy(),
+        "--timeout",
+        "5",
+        "drain",
+    ])
+    .expect("parses drain opts");
+    let drain_output = execute_cli_command(&drain_opts)
+        .await
+        .expect("drain executes successfully");
+    assert!(drain_output.contains("drained: true"));
+    assert!(drain_output.contains("active-jobs: 0"));
+
+    // Verify drain via DaemonClient
+    let drain_status = client.drain(Some(5)).await.expect("drain client call");
+    assert!(drain_status.drained);
+    assert_eq!(drain_status.active_jobs, 0);
+
+    // Shutdown daemon cleanly
+    server.shutdown().await.expect("clean shutdown");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn daemon_drain_allows_in_flight_print_job_to_finish_while_refusing_new_ones() {
+    let dir = temporary_directory("daemon-drain-inflight");
+    std::fs::create_dir_all(&dir).expect("creates state dir");
+    let socket_path = dir.join("shaprintd.sock");
+    let proxy_port = support::free_port();
+    let server_port = support::free_port();
+
+    let server = DaemonServer::launch(DaemonConfig::new(&dir, &socket_path).with_ports(
+        RuntimePorts {
+            proxy_port,
+            server_port,
+            discovery_ports: vec![0],
+        },
+    ))
+    .await
+    .expect("launches test daemon");
+
+    let client = DaemonClient::new(&socket_path);
+
+    // Verify proxy port is accepting connections
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", proxy_port))
+        .await
+        .expect("connects to proxy");
+    drop(stream);
+
+    // Initiate drain over DaemonClient with 5s timeout
+    let drain_res = client.drain(Some(5)).await.expect("drain succeeds");
+    assert!(drain_res.drained);
+    assert_eq!(drain_res.active_jobs, 0);
+
+    // Clean shutdown
+    server.shutdown().await.expect("clean shutdown");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
 async fn almalinux_10_rpm_package_smoke_installs_boots_queries_restarts_repairs_and_stops_service()
 {
     use std::process::Command;

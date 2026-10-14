@@ -264,6 +264,13 @@ impl From<ConnectionPrinters> for TrustedServerPrintersDto {
 /// Recognised ShaPrint Client queue installed in the local CUPS spooler.
 pub type InstalledClientQueueDto = RecognisedClientQueueDto;
 
+/// Result of draining in-flight print jobs before an update or restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DrainStatusDto {
+    pub drained: bool,
+    pub active_jobs: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 enum ControlRequest {
@@ -276,6 +283,10 @@ enum ControlRequest {
         id: String,
     },
     Shutdown,
+    Drain {
+        #[serde(default)]
+        timeout_secs: Option<u64>,
+    },
     NetworkChannelStatus,
     SetNetworkChannel {
         channel: String,
@@ -315,6 +326,10 @@ enum ControlRequest {
 enum ControlResponse {
     Ok {
         status: RuntimeStatusDto,
+    },
+    Drain {
+        drained: bool,
+        active_jobs: usize,
     },
     Diagnostics {
         report: DiagnosticsReportDto,
@@ -608,6 +623,9 @@ impl DaemonServer {
     /// ensures every supervised service is stopped, and removes the socket file.
     pub async fn wait(self) -> Result<(), AppError> {
         let _ = self.accept_task.await;
+        if let Some(shell) = &self.shell {
+            let _ = shell.job_tracker().drain(Duration::from_secs(15)).await;
+        }
         let result = self.runtime.shutdown().await;
         let _ = std::fs::remove_file(&self.socket_path);
         log::info!("shaprintd stopped socket={}", self.socket_path.display());
@@ -785,6 +803,16 @@ async fn process_stream(
                 stop_daemon = true;
                 Ok(ControlResponse::Ok {
                     status: runtime_status_dto(&runtime, &shell).await,
+                })
+            }
+            ControlRequest::Drain { timeout_secs } => {
+                policy.authorize_mutation(peer_cred.uid(), daemon_uid)?;
+                let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(30));
+                let shell = require_shell(&shell)?;
+                shell.job_tracker().drain(timeout_duration).await?;
+                Ok(ControlResponse::Drain {
+                    drained: true,
+                    active_jobs: shell.job_tracker().active_count(),
                 })
             }
             ControlRequest::NetworkChannelStatus => {
@@ -1058,6 +1086,20 @@ impl DaemonClient {
         }
     }
 
+    /// Drains active print jobs within the specified timeout before an update or restart.
+    pub async fn drain(&self, timeout_secs: Option<u64>) -> Result<DrainStatusDto, AppError> {
+        match self.send(&ControlRequest::Drain { timeout_secs }).await? {
+            ControlResponse::Drain {
+                drained,
+                active_jobs,
+            } => Ok(DrainStatusDto {
+                drained,
+                active_jobs,
+            }),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
     /// Queries whether the machine Network Channel is configured without returning its value.
     pub async fn network_channel_status(&self) -> Result<NetworkChannelStatusDto, AppError> {
         match self.send(&ControlRequest::NetworkChannelStatus).await? {
@@ -1292,6 +1334,9 @@ pub enum CliCommand {
     StartService(ServiceId),
     StopService(ServiceId),
     Shutdown,
+    Drain {
+        timeout_secs: Option<u64>,
+    },
     NetworkChannelStatus,
     SetNetworkChannel(SecretInputSource),
     InspectServer {
@@ -1482,6 +1527,7 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
     let mut fd_arg: Option<i32> = None;
     let mut credential_file_arg: Option<PathBuf> = None;
     let mut fingerprint_arg: Option<String> = None;
+    let mut timeout_arg: Option<u64> = None;
     let mut positional = Vec::new();
 
     let mut iter = arguments.iter().skip(1).map(AsRef::as_ref);
@@ -1498,6 +1544,22 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
             }
             "--stdin" => {
                 stdin_flag = true;
+            }
+            "--timeout" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| AppError::invalid_input("missing value for '--timeout'"))?;
+                let parsed = value.parse::<u64>().map_err(|_| {
+                    AppError::invalid_input(format!("invalid timeout '{value}' for '--timeout'"))
+                })?;
+                timeout_arg = Some(parsed);
+            }
+            other if other.starts_with("--timeout=") => {
+                let value = &other["--timeout=".len()..];
+                let parsed = value.parse::<u64>().map_err(|_| {
+                    AppError::invalid_input(format!("invalid timeout '{value}' for '--timeout'"))
+                })?;
+                timeout_arg = Some(parsed);
             }
             "--fd" => {
                 let value = iter
@@ -1570,6 +1632,11 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
             "'--fingerprint' is only valid with 'trust approve'",
         ));
     }
+    if timeout_arg.is_some() && !matches!(positional.as_slice(), ["drain", ..]) {
+        return Err(AppError::invalid_input(
+            "'--timeout' is only valid with 'drain'",
+        ));
+    }
 
     let command = match positional.as_slice() {
         ["status"] => CliCommand::Status,
@@ -1577,6 +1644,9 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
         ["start", service] => CliCommand::StartService(ServiceId::parse(service)?),
         ["stop"] | ["stop", "daemon"] | ["shutdown"] => CliCommand::Shutdown,
         ["stop", service] => CliCommand::StopService(ServiceId::parse(service)?),
+        ["drain"] => CliCommand::Drain {
+            timeout_secs: timeout_arg,
+        },
         ["network-channel"] | ["network-channel", "status"] => CliCommand::NetworkChannelStatus,
         ["network-channel", "set"] => {
             let source = if stdin_flag {
@@ -1880,6 +1950,17 @@ pub async fn execute_cli_command(options: &CliOptions) -> Result<String, AppErro
             let status = client.shutdown().await?;
             format_runtime_status(&status, options.json)
         }
+        CliCommand::Drain { timeout_secs } => {
+            if !options.socket_path.exists() {
+                let dto = DrainStatusDto {
+                    drained: true,
+                    active_jobs: 0,
+                };
+                return format_drain_status(&dto, options.json);
+            }
+            let status = client.drain(*timeout_secs).await?;
+            format_drain_status(&status, options.json)
+        }
         CliCommand::NetworkChannelStatus => {
             let nc = client.network_channel_status().await?;
             format_network_channel_status(&nc, options.json)
@@ -2070,6 +2151,17 @@ fn format_server_review(review: &ServerTrustReviewDto, json: bool) -> Result<Str
     }
 }
 
+fn format_drain_status(status: &DrainStatusDto, json: bool) -> Result<String, AppError> {
+    if json {
+        format_json_line(status, "drain")
+    } else {
+        Ok(format!(
+            "drained: {}\nactive-jobs: {}\n",
+            status.drained, status.active_jobs
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2111,6 +2203,47 @@ mod tests {
 
         let stop_daemon = parse_cli_args(&["shaprintctl", "stop"]).expect("stop daemon");
         assert_eq!(stop_daemon.command, CliCommand::Shutdown);
+
+        let drain_default = parse_cli_args(&["shaprintctl", "drain"]).expect("drain default");
+        assert_eq!(
+            drain_default.command,
+            CliCommand::Drain { timeout_secs: None }
+        );
+
+        let drain_timeout =
+            parse_cli_args(&["shaprintctl", "--timeout", "45", "drain"]).expect("drain timeout");
+        assert_eq!(
+            drain_timeout.command,
+            CliCommand::Drain {
+                timeout_secs: Some(45)
+            }
+        );
+
+        let drain_timeout_eq =
+            parse_cli_args(&["shaprintctl", "--timeout=60", "drain"]).expect("drain timeout=");
+        assert_eq!(
+            drain_timeout_eq.command,
+            CliCommand::Drain {
+                timeout_secs: Some(60)
+            }
+        );
+
+        let timeout_invalid = parse_cli_args(&["shaprintctl", "--timeout", "45", "status"]);
+        assert!(timeout_invalid.is_err());
+    }
+
+    #[test]
+    fn drain_formatting_renders_human_and_json_views() {
+        let dto = DrainStatusDto {
+            drained: true,
+            active_jobs: 0,
+        };
+        let human = format_drain_status(&dto, false).expect("human format");
+        assert_eq!(human, "drained: true\nactive-jobs: 0\n");
+
+        let json = format_drain_status(&dto, true).expect("json format");
+        assert!(json.contains("\"drained\":true"));
+        assert!(json.contains("\"active_jobs\":0"));
     }
 
     #[test]
