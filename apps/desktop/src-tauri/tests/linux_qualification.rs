@@ -312,12 +312,14 @@ async fn post_ipps_request(
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .map(|idx| idx + 4)
-        .unwrap_or(0);
-    let ipp_status: u16 = if buf.len() >= body_offset + 4 {
-        u16::from_be_bytes([buf[body_offset + 2], buf[body_offset + 3]])
-    } else {
-        0
-    };
+        .expect("malformed HTTP response: missing header delimiter");
+
+    assert!(
+        buf.len() >= body_offset + 4,
+        "truncated IPP response: expected at least 4 bytes of IPP header, got {}",
+        buf.len().saturating_sub(body_offset)
+    );
+    let ipp_status = u16::from_be_bytes([buf[body_offset + 2], buf[body_offset + 3]]);
 
     (http_status, ipp_status)
 }
@@ -803,6 +805,20 @@ async fn linux_qualification_desktop_sessions_wayland_x11_gnome_kde_window_closi
     .await
     .expect("launches system daemon");
 
+    // Verify polkit policy file covers privileged actions for GNOME and KDE desktop integration
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .unwrap();
+    let polkit_policy = repo_root.join("packaging/linux/polkit/org.shaprint.control.policy");
+    assert!(polkit_policy.exists());
+    let policy_str = std::fs::read_to_string(&polkit_policy).unwrap();
+    assert!(policy_str.contains("org.shaprint.control.start"));
+    assert!(policy_str.contains("org.shaprint.control.stop"));
+    assert!(policy_str.contains("org.shaprint.control.network-channel"));
+
     // Verify session environment variations (GNOME on Wayland, GNOME on X11, KDE on Wayland, KDE on X11)
     let sessions = [
         ("GNOME", "wayland"),
@@ -812,7 +828,11 @@ async fn linux_qualification_desktop_sessions_wayland_x11_gnome_kde_window_closi
     ];
 
     for (desktop, session_type) in sessions {
-        // Unprivileged client connects over local Unix domain socket
+        // Unprivileged client in desktop session context connects over local Unix domain socket.
+        // Unix domain socket IPC is session-agnostic and functions identically across Wayland and X11 display servers.
+        std::env::set_var("XDG_CURRENT_DESKTOP", desktop);
+        std::env::set_var("XDG_SESSION_TYPE", session_type);
+
         let client = shaprint_desktop::adapters::daemon::DaemonClient::new(&socket_path);
         let status = client
             .status()
@@ -830,20 +850,6 @@ async fn linux_qualification_desktop_sessions_wayland_x11_gnome_kde_window_closi
             .find(|s| s.id == "server-sharing")
             .expect("server-sharing service");
         assert_eq!(server_svc.state, "stopped");
-
-        // Verify polkit policy file covers privileged actions for GNOME and KDE desktop integration
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let repo_root = manifest_dir
-            .parent()
-            .and_then(Path::parent)
-            .and_then(Path::parent)
-            .unwrap();
-        let polkit_policy = repo_root.join("packaging/linux/polkit/org.shaprint.control.policy");
-        assert!(polkit_policy.exists());
-        let policy_str = std::fs::read_to_string(&polkit_policy).unwrap();
-        assert!(policy_str.contains("org.shaprint.control.start"));
-        assert!(policy_str.contains("org.shaprint.control.stop"));
-        assert!(policy_str.contains("org.shaprint.control.network-channel"));
 
         println!("Verified session compatibility: desktop={desktop}, type={session_type}");
     }
@@ -924,6 +930,10 @@ async fn linux_qualification_physical_output_driverless_and_usb_cups_visual_equi
     );
 
     // 4. Test driverless network queue forwarding
+    // Note: Rust unit/integration tests verify domain raster validation (`decode_pwg`), option translation
+    // (`build_cups_job_options`), and submitter dispatch via `RecordingSubmitter`.
+    // End-to-end CUPS spooler lifecycle against a real cupsd daemon is exercised in `smoke-test-*.sh` container
+    // suites and `tests/linux_daemon.rs` live CUPS backend test suites.
     let (driverless_submitter, driverless_jobs) = RecordingSubmitter::new();
     let print_job = PrintJob::from_ipp_body(original_pwg_doc.clone(), 0, settings.clone());
     driverless_submitter

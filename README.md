@@ -26,7 +26,7 @@ Communication runs entirely over standard **IPPS (Internet Printing Protocol ove
 | **🌙 Windows Nightly** | **Nightly** (Bleeding-Edge Test) | `.exe` Setup Installer | [⬇️ Browse Nightly Builds (`q=nightly`)](https://github.com/ardli-firman/sha-print/releases?q=nightly)<br>*(Automated test builds & prerelease verification)* |
 | **📱 Android (8.0+)** | **Client** (Direct & PrintService) | `.apk` (Direct Install) | [⬇️ Download Latest APK](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.apk)<br>([View all Android releases](https://github.com/ardli-firman/sha-print/releases?q=Android)) |
 | **🐧 Ubuntu / Debian** | **Stable / Nightly** (Server & Client GUI & Daemon) | `.deb` (Ubuntu 22.04 / 24.04 / Debian 11 / 12) | [📦 Signed Repositories & DEB Guide](packaging/linux/deb) (`make build-deb`, `make publish-linux-repo`) |
-| **🐧 AlmaLinux / RHEL** | **Stable / Nightly** (Server & Client GUI & Daemon) | `.rpm` (AlmaLinux 9 / 10) | [📦 Signed Repositories & RPM Guide](packaging/linux/rpm) (`make build-rpm`, `make publish-linux-repo`) |
+| **🐧 AlmaLinux / RHEL** | **Stable / Nightly** (Server, Daemon & Client GUI*) | `.rpm` (AlmaLinux 9 / 10) | [📦 Signed Repositories & RPM Guide](packaging/linux/rpm) (`make build-rpm`, `make publish-linux-repo`)<br>*GUI on AlmaLinux 10; AlmaLinux 9 is headless daemon & CLI* |
 
 *👉 [Browse all releases, nightlies, and changelogs on GitHub Releases](https://github.com/ardli-firman/sha-print/releases)*
 
