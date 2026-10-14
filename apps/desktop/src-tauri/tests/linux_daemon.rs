@@ -2411,6 +2411,7 @@ async fn shaprintctl_diagnostics_and_status_distinguish_subsystem_failures_with_
     std::fs::set_permissions(&fake_firewall, std::fs::Permissions::from_mode(0o755))
         .expect("sets exec permissions");
     std::env::set_var("SHAPRINT_FIREWALL_PROGRAM", &fake_firewall);
+    std::env::set_var("SHAPRINT_FIREWALL_CMD", &fake_firewall);
 
     // 1. Daemon offline / stopped:
     //    shaprintctl diagnostics against non-existent socket reports daemon: failed,
@@ -2498,6 +2499,8 @@ async fn shaprintctl_diagnostics_and_status_distinguish_subsystem_failures_with_
     //    - credential: failed (not-authorized, sudo shaprintctl network-channel set)
     //    - firewall: failed (not-authorized, sudo firewall-cmd)
     let diag_output = Command::new(ctl_bin)
+        .env("SHAPRINT_FIREWALL_PROGRAM", &fake_firewall)
+        .env("SHAPRINT_FIREWALL_CMD", &fake_firewall)
         .args(["--socket", &socket_str, "diagnostics"])
         .output()
         .expect("runs shaprintctl diagnostics");
@@ -2627,6 +2630,7 @@ async fn shaprintctl_diagnostics_and_status_distinguish_subsystem_failures_with_
     }
 
     std::env::remove_var("SHAPRINT_FIREWALL_PROGRAM");
+    std::env::remove_var("SHAPRINT_FIREWALL_CMD");
     server.shutdown().await.expect("stops test daemon");
     std::fs::remove_dir_all(&root).ok();
 }
@@ -3890,4 +3894,109 @@ esac
     assert!(deb_postrm.exists(), "packaging/linux/deb/postrm must exist");
 
     std::fs::remove_dir_all(&temp).ok();
+}
+
+#[tokio::test]
+async fn linux_repo_channel_switch_smoke_preserves_identity_and_safe_rejection() {
+    use std::process::Command;
+
+    if std::env::var_os("SHAPRINT_RUN_CHANNEL_SWITCH_SMOKE").is_none() {
+        return;
+    }
+
+    let has_podman = Command::new("podman")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    assert!(
+        has_podman,
+        "podman is required when SHAPRINT_RUN_CHANNEL_SWITCH_SMOKE is set"
+    );
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("locates repository root");
+    let smoke_script = repo_root.join("packaging/linux/repo/smoke-test-channel-switch.sh");
+    assert!(
+        smoke_script.exists(),
+        "missing channel switch smoke script at '{}'",
+        smoke_script.display()
+    );
+
+    let output = Command::new("bash")
+        .arg(&smoke_script)
+        .output()
+        .expect("runs channel switch smoke test script");
+
+    assert!(
+        output.status.success(),
+        "channel switch smoke test failed (status={}):\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
+async fn linux_repo_contract_and_signing_verification() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("locates repository root");
+
+    // 1. Verify GPG keys exist for repository signing and verification (#139 criterion 1, 2)
+    let gpg_pubkey = repo_root.join("packaging/linux/keys/shaprint-repo.gpg.key");
+    assert!(
+        gpg_pubkey.exists(),
+        "public ASCII armored GPG key must exist"
+    );
+    let key_content = std::fs::read_to_string(&gpg_pubkey).expect("reads pubkey");
+    assert!(key_content.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----"));
+
+    let gpg_keyring = repo_root.join("packaging/linux/keys/shaprint-archive-keyring.gpg");
+    assert!(
+        gpg_keyring.exists(),
+        "binary GPG keyring for apt must exist"
+    );
+
+    // 2. Verify repository publishing script exists and enforces verification (#139 criterion 2, 7)
+    let publish_script = repo_root.join("scripts/linux-repo/publish-repo.sh");
+    assert!(publish_script.exists(), "publish-repo.sh must exist");
+    let script_content = std::fs::read_to_string(&publish_script).expect("reads publish script");
+    assert!(
+        script_content.contains("repo_gpgcheck=1"),
+        "RPM repo definition must enforce repository signature verification"
+    );
+    assert!(
+        script_content.contains("Signed-By"),
+        "DEB repo definition must enforce cryptographic keyring verification"
+    );
+    assert!(
+        script_content.contains("repomd.xml.asc"),
+        "RPM metadata must be signed"
+    );
+    assert!(
+        script_content.contains("InRelease"),
+        "DEB repository must generate signed InRelease"
+    );
+
+    // 3. Verify single package identity contract (#139 criterion 3)
+    let rpm_spec = repo_root.join("packaging/linux/rpm/shaprint.spec");
+    let spec_content = std::fs::read_to_string(&rpm_spec).expect("reads spec");
+    assert!(
+        spec_content.contains("Name:           shaprint"),
+        "RPM package identity is 'shaprint'"
+    );
+
+    let deb_control = repo_root.join("packaging/linux/deb/control");
+    let control_content = std::fs::read_to_string(&deb_control).expect("reads deb control");
+    assert!(
+        control_content.contains("Package: shaprint"),
+        "DEB package identity is 'shaprint'"
+    );
 }
