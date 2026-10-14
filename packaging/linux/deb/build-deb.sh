@@ -18,14 +18,60 @@ OUTPUT_DIR="${DEB_OUTPUT_DIR:-${TAURI_DIR}/target/deb}"
 mkdir -p "${OUTPUT_DIR}"
 
 if [[ -z "${SHAPRINTD_BIN:-}" || -z "${SHAPRINTCTL_BIN:-}" ]]; then
-    cargo build \
-        --manifest-path "${TAURI_DIR}/Cargo.toml" \
-        --release \
-        --no-default-features \
-        --bin shaprintd \
-        --bin shaprintctl >&2
-    SHAPRINTD_BIN="${TAURI_DIR}/target/release/shaprintd"
-    SHAPRINTCTL_BIN="${TAURI_DIR}/target/release/shaprintctl"
+    # To support both the primary (24.04) and previous (22.04) Ubuntu LTS releases,
+    # the runtime baseline must not exceed glibc 2.35.
+    HOST_GLIBC_VERSION="$(ldd --version 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | head -n 1 || true)"
+    CONTAINER_CLI=""
+    if command -v podman >/dev/null 2>&1; then
+        CONTAINER_CLI="podman"
+    elif command -v docker >/dev/null 2>&1; then
+        CONTAINER_CLI="docker"
+    fi
+
+    # Check if pre-compiled baseline binary with glibc <= 2.35 is already available
+    if [[ -f "${TAURI_DIR}/target/deb-baseline/release/shaprintd" && -f "${TAURI_DIR}/target/deb-baseline/release/shaprintctl" ]]; then
+        SHAPRINTD_BIN="${TAURI_DIR}/target/deb-baseline/release/shaprintd"
+        SHAPRINTCTL_BIN="${TAURI_DIR}/target/deb-baseline/release/shaprintctl"
+    elif [[ -f "${TAURI_DIR}/target/el9/release/shaprintd" && -f "${TAURI_DIR}/target/el9/release/shaprintctl" ]]; then
+        SHAPRINTD_BIN="${TAURI_DIR}/target/el9/release/shaprintd"
+        SHAPRINTCTL_BIN="${TAURI_DIR}/target/el9/release/shaprintctl"
+    elif [[ -n "${CONTAINER_CLI}" && -n "${HOST_GLIBC_VERSION}" ]]; then
+        MAJOR_PART="${HOST_GLIBC_VERSION%%.*}"
+        MINOR_PART="${HOST_GLIBC_VERSION#*.}"
+        if [[ "${MAJOR_PART}" -gt 2 || ("${MAJOR_PART}" -eq 2 && "${MINOR_PART}" -gt 35) ]]; then
+            DEB_BUILD_TARGET_DIR="${TAURI_DIR}/target/deb-baseline"
+            mkdir -p "${DEB_BUILD_TARGET_DIR}"
+            ${CONTAINER_CLI} run --rm \
+                -v "${REPO_ROOT}:/src:ro,z" \
+                -v "${DEB_BUILD_TARGET_DIR}:/target:z" \
+                docker.io/library/ubuntu:22.04 bash -c "
+                    apt-get update >/dev/null 2>&1 && \
+                    apt-get install -y --no-install-recommends cargo rustc gcc libc6-dev ca-certificates >/dev/null 2>&1
+                    cargo build \
+                        --manifest-path /src/apps/desktop/src-tauri/Cargo.toml \
+                        --target-dir /target \
+                        --release \
+                        --no-default-features \
+                        --bin shaprintd \
+                        --bin shaprintctl
+                " >&2
+            if [[ -f "${DEB_BUILD_TARGET_DIR}/release/shaprintd" && -f "${DEB_BUILD_TARGET_DIR}/release/shaprintctl" ]]; then
+                SHAPRINTD_BIN="${DEB_BUILD_TARGET_DIR}/release/shaprintd"
+                SHAPRINTCTL_BIN="${DEB_BUILD_TARGET_DIR}/release/shaprintctl"
+            fi
+        fi
+    fi
+
+    if [[ -z "${SHAPRINTD_BIN:-}" || -z "${SHAPRINTCTL_BIN:-}" ]]; then
+        cargo build \
+            --manifest-path "${TAURI_DIR}/Cargo.toml" \
+            --release \
+            --no-default-features \
+            --bin shaprintd \
+            --bin shaprintctl >&2
+        SHAPRINTD_BIN="${TAURI_DIR}/target/release/shaprintd"
+        SHAPRINTCTL_BIN="${TAURI_DIR}/target/release/shaprintctl"
+    fi
 fi
 
 STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/shaprint-deb-build.XXXXXX")"
