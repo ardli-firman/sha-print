@@ -4000,3 +4000,49 @@ async fn linux_repo_contract_and_signing_verification() {
         "DEB package identity is 'shaprint'"
     );
 }
+
+#[tokio::test]
+async fn deb_package_ships_polkit_control_policy_matching_elevated_ctl_action_ids() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("locates repo root");
+
+    // 1. Verify build-deb.sh stages org.shaprint.control.policy with mode 0644 to /usr/share/polkit-1/actions (#147 criterion 1)
+    let build_deb_script = repo_root.join("packaging/linux/deb/build-deb.sh");
+    assert!(
+        build_deb_script.exists(),
+        "packaging/linux/deb/build-deb.sh must exist"
+    );
+    let build_deb_content = std::fs::read_to_string(&build_deb_script).expect("reads build-deb.sh");
+    assert!(
+        build_deb_content
+            .contains("${STAGING_DIR}/usr/share/polkit-1/actions/org.shaprint.control.policy"),
+        "build-deb.sh must install org.shaprint.control.policy to /usr/share/polkit-1/actions/"
+    );
+    assert!(
+        build_deb_content.contains(
+            "chmod 0644 \"${STAGING_DIR}/usr/share/polkit-1/actions/org.shaprint.control.policy\""
+        ),
+        "build-deb.sh must set mode 0644 on installed polkit action policy"
+    );
+
+    // 2. Verify all six org.shaprint.control.* action ids match ControlAction::ALL in adapters/elevated_ctl.rs (#147 criterion 2)
+    let polkit_policy = repo_root.join("packaging/linux/polkit/org.shaprint.control.policy");
+    assert!(
+        polkit_policy.exists(),
+        "packaging/linux/polkit/org.shaprint.control.policy must exist"
+    );
+    let policy_xml = std::fs::read_to_string(&polkit_policy).expect("reads polkit policy");
+
+    for action in shaprint_desktop::adapters::elevated_ctl::ControlAction::ALL {
+        let action_id = action.action_id();
+        let expected_tag = format!("<action id=\"{action_id}\">");
+        assert!(
+            policy_xml.contains(&expected_tag),
+            "polkit policy file must contain action id '{action_id}' (quoted by elevated_ctl)"
+        );
+    }
+}
