@@ -38,6 +38,11 @@ getent group shaprint >/dev/null 2>&1 || groupadd -r shaprint
 getent passwd shaprint >/dev/null 2>&1 || \
     useradd -r -g shaprint -d /var/lib/shaprint -s /sbin/nologin \
     -c "ShaPrint system daemon" shaprint
+for grp in sys lp lpadmin; do
+    if getent group "$grp" >/dev/null 2>&1; then
+        usermod -a -G "$grp" shaprint 2>/dev/null || :
+    fi
+done
 if [ "$1" -ge 2 ]; then
     if [ -x %{_bindir}/shaprintctl ] && [ -S /run/shaprint/shaprintd.sock ]; then
         # Try graceful drain if supported by installed version; do not block upgrade if older binary lacks drain

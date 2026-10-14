@@ -1,1 +1,4 @@
 u shaprint - "ShaPrint system daemon" /var/lib/shaprint /sbin/nologin
+m shaprint sys
+m shaprint lp
+m shaprint lpadmin

@@ -13,6 +13,12 @@ if ! getent passwd shaprint >/dev/null 2>&1; then
         -c "ShaPrint system daemon" shaprint >/dev/null 2>&1
 fi
 
+for grp in sys lp lpadmin; do
+    if getent group "$grp" >/dev/null 2>&1; then
+        usermod -a -G "$grp" shaprint 2>/dev/null || adduser shaprint "$grp" >/dev/null 2>&1 || true
+    fi
+done
+
 # Bounded graceful drain during package updates ($1 = upgrade)
 if [ "$1" = "upgrade" ]; then
     if [ -x /usr/bin/shaprintctl ] && [ -S /run/shaprint/shaprintd.sock ]; then

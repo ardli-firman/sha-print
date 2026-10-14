@@ -8,6 +8,7 @@ Wants=network-online.target
 Type=simple
 User=shaprint
 Group=shaprint
+SupplementaryGroups=sys lp lpadmin
 UMask=0077
 RuntimeDirectory=shaprint
 RuntimeDirectoryMode=0755

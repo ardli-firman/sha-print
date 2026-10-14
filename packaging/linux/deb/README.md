@@ -101,6 +101,12 @@ sudo shaprintctl trust approve 192.168.1.105:48631 <FINGERPRINT>
 shaprintctl printers 192.168.1.105:48631
 # Gunakan tanda petik jika nama printer mengandung spasi / tanda kurung
 sudo shaprintctl queue install 192.168.1.105:48631 "<PRINTER_NAME>"
+```
+
+> 🔒 **Izin Administrasi CUPS:** Pastikan user daemon `shaprint` memiliki akses ke grup `lpadmin` dan `lp` agar diizinkan membuat antrean di CUPS (`lpadmin`):
+> ```bash
+> sudo usermod -a -G lpadmin,lp shaprint && sudo systemctl restart shaprintd
+> ```
 
 # 4. Share local printers to the network (Server Role)
 shaprintctl sharing list

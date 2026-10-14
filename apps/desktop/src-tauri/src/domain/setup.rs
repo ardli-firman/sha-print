@@ -199,31 +199,31 @@ impl SetupFailureKind {
     pub const fn advice(self) -> &'static str {
         match self {
             SetupFailureKind::Unsupported => {
-                "this build cannot perform that setup action; run ShaPrint on Windows 10 or later."
+                "this build cannot perform that setup action; run ShaPrint on Windows 10 or later, or a supported Linux distribution."
             }
             SetupFailureKind::PermissionDenied => {
-                "administrator permission was not granted. Approve the Windows prompt, then try again."
+                "administrator permission was not granted. Approve the elevation prompt (Windows prompt or Linux CUPS sys/lp/lpadmin permissions), then try again."
             }
             SetupFailureKind::InvalidRequest => {
                 "the request was not valid. Review the server connection and the selected printer, then try again."
             }
             SetupFailureKind::SpoolerUnavailable => {
-                "the Windows Print Spooler service is not running. Start it (services.msc), then try again."
+                "the Print Spooler service (services.msc on Windows, CUPS on Linux) is not running. Start it, then try again."
             }
             SetupFailureKind::QueueRejected => {
-                "Windows refused the printer queue. Confirm the client proxy is running and that the server still shares this printer, then try again."
+                "the print spooler refused the printer queue. Confirm the client proxy is running and that the server still shares this printer, then try again."
             }
             SetupFailureKind::ExistingQueueConflict => {
-                "a printer with that name already exists in Windows and does not point at this remote printer. Remove it in Windows printer settings, then try again."
+                "a printer with that name already exists in the Print Spooler and does not point at this remote printer. Remove it in printer settings, then try again."
             }
             SetupFailureKind::TimedOut => {
-                "the Windows Print Spooler did not answer in time. Check the Print Spooler service, then try again."
+                "the Print Spooler did not answer in time. Check the Print Spooler service, then try again."
             }
             SetupFailureKind::Other => {
-                "the setup helper failed. Restart ShaPrint and try again; if it keeps failing, reinstall the printer driver."
+                "the setup helper failed. Restart ShaPrint and try again; if it keeps failing, check the printer driver or print spooler logs."
             }
             SetupFailureKind::QueueBusy => {
-                "the printer still has pending jobs. Wait for them to finish or cancel them in Windows, then try again."
+                "the printer still has pending jobs. Wait for them to finish or cancel them, then try again."
             }
             SetupFailureKind::QueueNotFound => {
                 "the printer queue no longer exists. Refresh My printers and install it again."
@@ -270,17 +270,17 @@ impl SetupFailure {
                 SetupAction::AllowInboundSharing => {
                     let firewall_advice = match self.kind {
                         SetupFailureKind::Other | SetupFailureKind::TimedOut => {
-                            "the firewall rules could not be checked or applied. Check Windows Firewall settings."
+                            "the firewall rules could not be checked or applied. Check Windows Firewall or host firewall settings."
                         }
                         _ => advice,
                     };
                     format!("Clients cannot connect through the Windows firewall: {firewall_advice} Try starting Server Sharing again after resolving this.")
                 }
                 SetupAction::InstallPrinter => {
-                    format!("Could not install the Windows printer queue: {advice}")
+                    format!("Could not install the printer queue: {advice}")
                 }
                 SetupAction::RepairPrinter => {
-                    format!("Could not repair the Windows printer queue: {advice}")
+                    format!("Could not repair the printer queue: {advice}")
                 }
                 other => format!("Could not complete {}: {advice}", other.as_str()),
             },
@@ -292,7 +292,7 @@ impl SetupFailure {
         AppError::new(
             self.kind.error_code(),
             format!(
-                "Could not install the Windows queue \"{}\" for printer \"{}\": {}",
+                "Could not install the printer queue \"{}\" for printer \"{}\": {}",
                 request.queue_name(),
                 request.printer(),
                 self.kind.advice()
@@ -305,7 +305,7 @@ impl SetupFailure {
         AppError::new(
             self.kind.error_code(),
             format!(
-                "Could not repair the Windows queue \"{}\" for printer \"{}\": {}",
+                "Could not repair the printer queue \"{}\" for printer \"{}\": {}",
                 request.queue_name(),
                 request.printer(),
                 self.kind.advice()

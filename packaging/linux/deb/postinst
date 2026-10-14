@@ -6,6 +6,12 @@ mkdir -p /etc/shaprint /etc/shaprint-credentials /var/lib/shaprint /run/shaprint
 chown root:shaprint /etc/shaprint /etc/shaprint-credentials
 chmod 0750 /etc/shaprint /etc/shaprint-credentials
 
+for grp in sys lp lpadmin; do
+    if getent group "$grp" >/dev/null 2>&1; then
+        usermod -a -G "$grp" shaprint 2>/dev/null || adduser shaprint "$grp" >/dev/null 2>&1 || true
+    fi
+done
+
 chown shaprint:shaprint /var/lib/shaprint /run/shaprint
 chmod 0700 /var/lib/shaprint
 chmod 0755 /run/shaprint

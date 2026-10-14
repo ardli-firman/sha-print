@@ -146,6 +146,17 @@ sudo shaprintctl queue install 192.168.1.105:48631 EPSON_L3210_Series
 sudo shaprintctl queue install 10.102.10.21:48631 "EPSON L3210 Series (Copy 1)"
 ```
 
+> 🔒 **Catatan Izin CUPS (`permission-denied`):**
+> Daemon `shaprintd` berjalan sebagai user unprivileged `shaprint`. Untuk mendaftarkan antrean baru ke CUPS (`lpadmin`), user `shaprint` harus tergabung dalam grup administrasi sistem CUPS (`sys` & `lp` di AlmaLinux/RHEL, atau `lpadmin` & `lp` di Ubuntu/Debian).
+> Jika instalasi antrean menghasilkan error `permission-denied`, pastikan keanggotaan grup user `shaprint` aktif:
+> ```bash
+> # AlmaLinux / RHEL / Fedora:
+> sudo usermod -a -G sys,lp shaprint && sudo systemctl restart shaprintd
+>
+> # Ubuntu / Debian:
+> sudo usermod -a -G lpadmin,lp shaprint && sudo systemctl restart shaprintd
+> ```
+
 List installed client queues:
 ```bash
 shaprintctl queue list
