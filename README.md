@@ -4,8 +4,9 @@
   <p><i>Desktop (Tauri 2, React, Rust) & Mobile (Android, Kotlin)</i></p>
 
   <p>
-    <a href="https://github.com/ardli-firman/sha-print/releases/latest"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?filter=%21*android*&label=Windows%20Release&color=0078D4&logo=windows" alt="Latest Desktop Release" /></a>
-    <a href="https://github.com/ardli-firman/sha-print/releases?q=Android"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?filter=android*&label=Android%20Release&color=3DDC84&logo=android" alt="Latest Android Release" /></a>
+    <a href="https://github.com/ardli-firman/sha-print/releases/latest"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?filter=%21*android*&filter=%21*nightly*&label=Windows%20Stable&color=0078D4&logo=windows" alt="Latest Desktop Release" /></a>
+    <a href="https://github.com/ardli-firman/sha-print/releases?q=nightly"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?include_prereleases&filter=*nightly*&label=Windows%20Nightly&color=orange&logo=windows" alt="Latest Windows Nightly" /></a>
+    <a href="https://github.com/ardli-firman/sha-print/releases?q=Android"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?filter=android*&label=Android&color=3DDC84&logo=android" alt="Latest Android Release" /></a>
   </p>
 </div>
 
@@ -19,14 +20,15 @@ Communication runs entirely over standard **IPPS (Internet Printing Protocol ove
 
 ## 📥 Downloads & Supported Platforms
 
-| Platform | Role | Package / Format | Download / Instructions |
+| Platform | Channel / Role | Package / Format | Download / Instructions |
 |---|---|---|---|
-| **🪟 Windows (10 / 11)** | Server & Client (Full GUI + Spooler) | `.msi`, `.exe` Installer | [⬇️ Download Latest Desktop Release](https://github.com/ardli-firman/sha-print/releases/latest)<br>*(Includes x64 Setup .exe & MSI Installer)* |
-| **📱 Android (8.0+)** | Mobile Client (Direct & PrintService) | `.aab` (Play Store) & `.apk` | [⬇️ Download Latest APK](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.apk) • [📦 Play Store Bundle (.aab)](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.aab)<br>([View all Android releases](https://github.com/ardli-firman/sha-print/releases?q=Android)) |
-| **🐧 Ubuntu / Debian** | Headless Server Daemon | `.deb` (Ubuntu 22.04 / 24.04) | [📦 DEB Packaging Guide](packaging/linux/deb) (`make build-deb`) |
-| **🐧 AlmaLinux / RHEL** | Headless Server Daemon | `.rpm` (AlmaLinux 9 / 10) | [📦 RPM Packaging Guide](packaging/linux/rpm) (`make build-rpm`) |
+| **🪟 Windows (10 / 11)** | **Stable** (Server & Client GUI) | `.msi`, `.exe` Installer | [⬇️ Download Latest Stable Release](https://github.com/ardli-firman/sha-print/releases/latest)<br>*(Includes x64 Setup .exe & MSI Installer)* |
+| **🌙 Windows Nightly** | **Nightly** (Bleeding-Edge Test) | `.exe` Setup Installer | [⬇️ Browse Nightly Builds (`q=nightly`)](https://github.com/ardli-firman/sha-print/releases?q=nightly)<br>*(Automated test builds & prerelease verification)* |
+| **📱 Android (8.0+)** | **Client** (Direct & PrintService) | `.aab` (Play Store) & `.apk` | [⬇️ Download Latest APK](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.apk) • [📦 Play Store Bundle (.aab)](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.aab)<br>([View all Android releases](https://github.com/ardli-firman/sha-print/releases?q=Android)) |
+| **🐧 Ubuntu / Debian** | **Daemon** (Headless Server) | `.deb` (Ubuntu 22.04 / 24.04 / Debian 12) | [📦 DEB Packaging Guide](packaging/linux/deb) (`make build-deb`) |
+| **🐧 AlmaLinux / RHEL** | **Daemon** (Headless Server) | `.rpm` (AlmaLinux 9 / 10) | [📦 RPM Packaging Guide](packaging/linux/rpm) (`make build-rpm`) |
 
-*👉 [Browse all releases and changelogs on GitHub Releases](https://github.com/ardli-firman/sha-print/releases)*
+*👉 [Browse all releases, nightlies, and changelogs on GitHub Releases](https://github.com/ardli-firman/sha-print/releases)*
 
 ---
 
