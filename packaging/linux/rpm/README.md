@@ -100,7 +100,8 @@ sudo shaprintctl network-channel set
 shaprintctl inspect 192.168.1.105:48631
 sudo shaprintctl trust approve 192.168.1.105:48631 <FINGERPRINT>
 shaprintctl printers 192.168.1.105:48631
-sudo shaprintctl queue install 192.168.1.105:48631 <PRINTER_NAME>
+# Gunakan tanda petik jika nama printer mengandung spasi / tanda kurung
+sudo shaprintctl queue install 192.168.1.105:48631 "<PRINTER_NAME>"
 
 # 4. Share local printers to the network (Server Role)
 shaprintctl sharing list

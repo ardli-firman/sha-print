@@ -136,8 +136,14 @@ HP_LaserJet_1020
 #### Step 4: Install Native CUPS Print Queue
 Install the remote printer into your local Linux CUPS system:
 
+> 💡 **Tip:** Jika nama printer memiliki spasi atau tanda kurung seperti `(Copy 1)`, **selalu bungkus dengan tanda petik ganda (`"..."`)** agar tidak dianggap sebagai operator shell/subshell oleh Bash:
+
 ```bash
+# Untuk nama printer tanpa spasi
 sudo shaprintctl queue install 192.168.1.105:48631 EPSON_L3210_Series
+
+# Untuk nama printer dengan spasi atau tanda kurung (Copy 1)
+sudo shaprintctl queue install 10.102.10.21:48631 "EPSON L3210 Series (Copy 1)"
 ```
 
 List installed client queues:
