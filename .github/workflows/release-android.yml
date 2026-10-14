@@ -74,13 +74,15 @@ jobs:
         run: |
           TAG="${RELEASE_TAG}"
           VERSION="${TAG#android-v}"
-          mkdir -p dist-android
+          mkdir -p dist-android dist-android-latest
           cp apps/android/app/build/outputs/bundle/release/app-release.aab "dist-android/shaprint-client-${TAG}.aab"
           cp apps/android/app/build/outputs/apk/release/app-release.apk "dist-android/shaprint-client-${TAG}.apk"
-          echo "Artifacts prepared in dist-android:"
-          ls -la dist-android
+          cp apps/android/app/build/outputs/bundle/release/app-release.aab "dist-android-latest/shaprint-client-latest.aab"
+          cp apps/android/app/build/outputs/apk/release/app-release.apk "dist-android-latest/shaprint-client-latest.apk"
+          echo "Artifacts prepared in dist-android and dist-android-latest:"
+          ls -la dist-android dist-android-latest
 
-      - name: Publish GitHub Release
+      - name: Publish Versioned GitHub Release
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -98,6 +100,25 @@ jobs:
             - Package Name: `io.shaprint.client`
           files: |
             dist-android/*
+          draft: false
+          prerelease: false
+          make_latest: false
+
+      - name: Publish Floating Latest Android Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: android-latest
+          name: ShaPrint Android (Latest)
+          body: |
+            ## ShaPrint Android Client (Latest)
+            - **Universal APK**: [shaprint-client-latest.apk](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.apk)
+            - **Google Play Store Bundle**: [shaprint-client-latest.aab](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.aab)
+
+            *Automatically updated from tag: ${{ env.RELEASE_TAG }}*
+          files: |
+            dist-android-latest/*
           draft: false
           prerelease: false
           make_latest: false

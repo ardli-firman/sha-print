@@ -2,6 +2,11 @@
   <h1>ShaPrint</h1>
   <p><b>Modern, Standards-Based LAN & Cross-VLAN Printer Sharing for Windows and Android</b></p>
   <p><i>Desktop (Tauri 2, React, Rust) & Mobile (Android, Kotlin)</i></p>
+
+  <p>
+    <a href="https://github.com/ardli-firman/sha-print/releases/latest"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?filter=%21*android*&label=Windows%20Release&color=0078D4&logo=windows" alt="Latest Desktop Release" /></a>
+    <a href="https://github.com/ardli-firman/sha-print/releases?q=Android"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?filter=android*&label=Android%20Release&color=3DDC84&logo=android" alt="Latest Android Release" /></a>
+  </p>
 </div>
 
 ---
@@ -16,12 +21,12 @@ Communication runs entirely over standard **IPPS (Internet Printing Protocol ove
 
 | Platform | Role | Package / Format | Download / Instructions |
 |---|---|---|---|
-| **🪟 Windows (10 / 11)** | Server & Client (Full GUI + Spooler) | `.msi`, `.exe` Installer | [⬇️ Windows Setup (.exe)](https://github.com/ardli-firman/sha-print/releases/download/v3.4.0/ShaPrint_3.4.0_x64-setup.exe) • [⬇️ MSI Installer](https://github.com/ardli-firman/sha-print/releases/download/v3.4.0/ShaPrint_3.4.0_x64_en-US.msi)<br>([Desktop Release v3.4.0](https://github.com/ardli-firman/sha-print/releases/tag/v3.4.0)) |
-| **📱 Android (8.0+)** | Mobile Client (Direct & PrintService) | `.aab` (Play Store) & `.apk` | [⬇️ Direct APK (.apk)](https://github.com/ardli-firman/sha-print/releases/download/android-v1.0.1/shaprint-client-android-v1.0.1.apk) • [📦 Play Store Bundle (.aab)](https://github.com/ardli-firman/sha-print/releases/download/android-v1.0.1/shaprint-client-android-v1.0.1.aab)<br>([Android Release android-v1.0.1](https://github.com/ardli-firman/sha-print/releases/tag/android-v1.0.1)) |
+| **🪟 Windows (10 / 11)** | Server & Client (Full GUI + Spooler) | `.msi`, `.exe` Installer | [⬇️ Download Latest Desktop Release](https://github.com/ardli-firman/sha-print/releases/latest)<br>*(Includes x64 Setup .exe & MSI Installer)* |
+| **📱 Android (8.0+)** | Mobile Client (Direct & PrintService) | `.aab` (Play Store) & `.apk` | [⬇️ Download Latest APK](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.apk) • [📦 Play Store Bundle (.aab)](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.aab)<br>([View all Android releases](https://github.com/ardli-firman/sha-print/releases?q=Android)) |
 | **🐧 Ubuntu / Debian** | Headless Server Daemon | `.deb` (Ubuntu 22.04 / 24.04) | [📦 DEB Packaging Guide](packaging/linux/deb) (`make build-deb`) |
 | **🐧 AlmaLinux / RHEL** | Headless Server Daemon | `.rpm` (AlmaLinux 9 / 10) | [📦 RPM Packaging Guide](packaging/linux/rpm) (`make build-rpm`) |
 
-*👉 [Browse all releases and previous changelogs on GitHub Releases](https://github.com/ardli-firman/sha-print/releases)*
+*👉 [Browse all releases and changelogs on GitHub Releases](https://github.com/ardli-firman/sha-print/releases)*
 
 ---
 
