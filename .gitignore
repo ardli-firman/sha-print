@@ -30,6 +30,8 @@ Thumbs.db
 # Signing keys & secrets
 .keys/
 *.key
+!packaging/linux/keys/shaprint-repo.gpg.key
+packaging/linux/keys/*.sec.key
 *.priv
 *.jks
 *.keystore

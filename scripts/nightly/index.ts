@@ -307,6 +307,13 @@ export async function runCli(args: string[]): Promise<void> {
         console.log(`  - ${item}`);
       }
       console.log("");
+      if (!explicitSettingsRisk && !dryRun) {
+        console.error(
+          "🚨 Error: Breaking changes or state compatibility risks were detected since the last stable release.\n" +
+            "Dispatching this nightly requires explicit acknowledgement: please pass 'SETTINGS_RISK=true' (e.g. make release-nightly SETTINGS_RISK=true).\n"
+        );
+        process.exit(1);
+      }
     }
 
     const ghArgs = [

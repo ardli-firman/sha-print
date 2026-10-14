@@ -1,4 +1,4 @@
-.PHONY: help keys release-nightly release-patch release-minor release-major release-android-patch release-android-minor release-android-major test test-android build-android-debug apk-debug build-android-release build-android-apk build-rpm build-deb smoke-rpm-almalinux9 smoke-rpm-almalinux10 smoke-deb-ubuntu2204 smoke-deb-ubuntu2404 smoke-deb-debian11 smoke-deb-debian12 typecheck check lint
+.PHONY: help keys release-nightly release-patch release-minor release-major release-android-patch release-android-minor release-android-major test test-android build-android-debug apk-debug build-android-release build-android-apk build-rpm build-deb publish-linux-repo smoke-rpm-almalinux9 smoke-rpm-almalinux10 smoke-deb-ubuntu2204 smoke-deb-ubuntu2404 smoke-deb-debian11 smoke-deb-debian12 smoke-channel-switch typecheck check lint
 
 help:
 	@echo "Available commands in ShaPrint:"
@@ -17,12 +17,14 @@ help:
 	@echo "  make build-android-apk     - Build Android client release APK"
 	@echo "  make build-rpm             - Build the AlmaLinux 9/10 headless daemon RPM artifact"
 	@echo "  make build-deb             - Build the Debian/Ubuntu DEB artifact"
+	@echo "  make publish-linux-repo    - Generate and sign RPM/DEB repositories (optional: CHANNEL=stable|nightly)"
 	@echo "  make smoke-rpm-almalinux9  - Run the AlmaLinux 9 RPM + systemd smoke test"
 	@echo "  make smoke-rpm-almalinux10 - Run the AlmaLinux 10 RPM + systemd smoke test"
 	@echo "  make smoke-deb-ubuntu2204  - Run the Ubuntu 22.04 DEB + systemd smoke test"
 	@echo "  make smoke-deb-ubuntu2404  - Run the Ubuntu 24.04 DEB + systemd smoke test"
 	@echo "  make smoke-deb-debian11    - Run the Debian 11 DEB + systemd smoke test"
 	@echo "  make smoke-deb-debian12    - Run the Debian 12 DEB + systemd smoke test"
+	@echo "  make smoke-channel-switch  - Run the Stable <-> Nightly channel switch & GPG verification test"
 	@echo "  make typecheck             - Run frontend TypeScript typecheck"
 	@echo "  make lint                  - Run cargo fmt check and cargo clippy"
 
@@ -78,6 +80,11 @@ build-rpm:
 build-deb:
 	bash packaging/linux/deb/build-deb.sh
 
+publish-linux-repo:
+	bash scripts/linux-repo/publish-repo.sh --channel "$${CHANNEL:-stable}" \
+		--rpm-dir "apps/desktop/src-tauri/target/rpm" \
+		--deb-dir "apps/desktop/src-tauri/target/deb"
+
 smoke-rpm-almalinux9:
 	bash packaging/linux/rpm/smoke-test-almalinux9.sh
 
@@ -95,6 +102,9 @@ smoke-deb-debian11:
 
 smoke-deb-debian12:
 	bash packaging/linux/deb/smoke-test-debian12.sh
+
+smoke-channel-switch:
+	bash packaging/linux/repo/smoke-test-channel-switch.sh
 
 typecheck:
 	bun run --filter shaprint-desktop typecheck

@@ -66,6 +66,8 @@ Unix socket, `shaprintctl` queries and controls the daemon from local shells, Al
 RPM packages (`packaging/linux/rpm/shaprint.spec`), and Debian 11 & 12 / Ubuntu 22.04 & 24.04 DEB packages (`packaging/linux/deb/`)
 install the unprivileged `shaprint` machine account, `shaprintd.service` systemd unit, `/etc/shaprint`
 non-secret configuration, and `/var/lib/shaprint` durable identity/state directory (#124, #125, #134, #135, #136, #137, #138).
+Signed Stable and Nightly RPM and DEB repositories (`scripts/linux-repo/publish-repo.sh`, #139) are published with GPG
+signatures, enforce single package identity replacement, and preserve all machine state and credentials across channel switches.
 
 ## Development
 
