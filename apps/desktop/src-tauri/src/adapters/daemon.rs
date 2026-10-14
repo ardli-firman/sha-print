@@ -79,7 +79,7 @@ impl PeerAccessPolicy {
 
 /// Reads the current process's effective UID directly from kernel `SO_PEERCRED` on an in-memory
 /// socket pair so it remains accurate regardless of `/proc` mounts or `PR_SET_DUMPABLE`.
-fn current_effective_uid() -> Option<u32> {
+pub fn current_effective_uid() -> Option<u32> {
     let (left, _right) = UnixStream::pair().ok()?;
     left.peer_cred().ok().map(|cred| cred.uid())
 }
@@ -1366,6 +1366,9 @@ pub enum CliCommand {
     SetSharedPrinters {
         printers: Vec<String>,
     },
+    Purge {
+        confirm: bool,
+    },
 }
 
 /// Parsed command-line options for `shaprintctl`.
@@ -1528,11 +1531,15 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
     let mut credential_file_arg: Option<PathBuf> = None;
     let mut fingerprint_arg: Option<String> = None;
     let mut timeout_arg: Option<u64> = None;
+    let mut confirm_flag = false;
     let mut positional = Vec::new();
 
     let mut iter = arguments.iter().skip(1).map(AsRef::as_ref);
     while let Some(arg) = iter.next() {
         match arg {
+            "--confirm" | "--yes" | "-y" => {
+                confirm_flag = true;
+            }
             "--socket" => {
                 let value = iter
                     .next()
@@ -1722,9 +1729,12 @@ pub fn parse_cli_args<S: AsRef<str>>(arguments: &[S]) -> Result<CliOptions, AppE
                 printers: rest.iter().map(|s| (*s).to_owned()).collect(),
             }
         }
+        ["purge"] => CliCommand::Purge {
+            confirm: confirm_flag,
+        },
         [] => {
             return Err(AppError::invalid_input(
-                "missing command (expected: status, start <service>, stop [service], shutdown, network-channel, trust, printers, queue, or sharing)",
+                "missing command (expected: status, start <service>, stop [service], shutdown, network-channel, trust, printers, queue, sharing, or purge)",
             ))
         }
         other => {
@@ -2082,6 +2092,21 @@ pub async fn execute_cli_command(options: &CliOptions) -> Result<String, AppErro
         CliCommand::SetSharedPrinters { printers } => {
             let updated = client.set_shared_printers(printers).await?;
             format_local_printers(&updated, options.json)
+        }
+        CliCommand::Purge { confirm } => {
+            let purge_options = crate::adapters::purge::PurgeExecutionOptions {
+                confirm: *confirm,
+                config_dir: PathBuf::from(DEFAULT_CONFIG_DIR),
+                credential_dir: PathBuf::from(DEFAULT_CREDENTIAL_DIR),
+                state_dir: PathBuf::from(DEFAULT_STATE_DIR),
+                socket_path: options.socket_path.clone(),
+                cups_endpoint: None,
+                proxy_port: crate::adapters::CLIENT_PROXY_DEFAULT_PORT,
+                firewall_program: None,
+                require_root: true,
+            };
+            let report = crate::adapters::purge::execute_purge(&purge_options).await?;
+            crate::adapters::purge::format_purge_report(&report, options.json)
         }
     }
 }

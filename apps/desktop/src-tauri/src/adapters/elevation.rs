@@ -574,6 +574,39 @@ pub mod linux {
             }
             Ok(())
         }
+
+        /// Removes `48631/tcp` and `48633/udp` from both runtime and permanent configuration idempotently.
+        pub fn remove_inbound_sharing(&self) -> Result<(), SetupFailure> {
+            let state_output = match Command::new(&self.program).arg("--state").output() {
+                Ok(output) => output,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => {
+                    return Err(SetupFailure::new(
+                        SetupFailureKind::Other,
+                        format!("cannot run firewall-cmd --state: {error}"),
+                    ))
+                }
+            };
+            if !state_output.status.success() {
+                // If firewalld is not running, no runtime rules exist
+                return Ok(());
+            }
+
+            let specs = firewalld_port_specs();
+            for spec in &specs {
+                let _ = Command::new(&self.program)
+                    .arg(format!("--remove-port={spec}"))
+                    .output();
+            }
+
+            let mut perm_cmd = Command::new(&self.program);
+            perm_cmd.arg("--permanent");
+            for spec in &specs {
+                perm_cmd.arg(format!("--remove-port={spec}"));
+            }
+            let _ = perm_cmd.output();
+            Ok(())
+        }
     }
 
     fn classify_firewalld_failure(output: &std::process::Output) -> SetupFailure {

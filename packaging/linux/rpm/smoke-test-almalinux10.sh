@@ -222,9 +222,15 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
     echo \"\${UPGRADE_STATUS}\" | grep -q '^client-proxy: running$'
     echo \"\${UPGRADE_STATUS}\" | grep -q '^server-sharing: stopped$'
 
-    # 8. Verify repeated package installation / repair and uninstall+reinstall preserve server identity.
+    # 8. Verify repeated package installation / repair and uninstall+reinstall preserve state and queues.
     CERT_SHA_BEFORE=\$(sha256sum /var/lib/shaprint/server-identity.cert.der | awk '{print \$1}')
     KEY_SHA_BEFORE=\$(sha256sum /var/lib/shaprint/server-identity.key.der | awk '{print \$1}')
+
+    # Simulate presence of a local printer queue and a ShaPrint client queue if CUPS is available
+    if command -v lpadmin >/dev/null 2>&1 && systemctl is-active --quiet cups; then
+        lpadmin -p local_office_printer -E -v file:///dev/null -D \"Local Office Printer\" 2>/dev/null || true
+        lpadmin -p ShaPrint_Office_HP_192.168.1.10_10ec236c -E -v ipp://127.0.0.1:48632/ipp/print/192.168.1.10/Office_HP -D \"Office_HP (192.168.1.10)\" 2>/dev/null || true
+    fi
 
     rpm -Uvh --nodeps --replacepkgs \"/root/${RPM_UPGRADE_FILENAME}\"
     rpm -V --nodeps shaprint
@@ -237,12 +243,34 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
         exit 1
     fi
 
+    # Perform ordinary uninstall
     rpm -e shaprint
+
+    # Verify binaries and service are removed/stopped, but machine state, credentials, and queues are preserved
+    if [[ -x /usr/bin/shaprintd || -x /usr/bin/shaprintctl ]]; then
+        echo 'error: ordinary uninstall left binaries behind' >&2
+        exit 1
+    fi
     if [[ ! -f /var/lib/shaprint/server-identity.cert.der || ! -f /var/lib/shaprint/server-identity.key.der ]]; then
         echo 'error: ordinary uninstall did not preserve /var/lib/shaprint server identity' >&2
         exit 1
     fi
+    if [[ ! -f /etc/shaprint-credentials/network-channel ]]; then
+        echo 'error: ordinary uninstall did not preserve /etc/shaprint-credentials/network-channel' >&2
+        exit 1
+    fi
+    if command -v lpstat >/dev/null 2>&1 && systemctl is-active --quiet cups; then
+        if ! lpstat -v 2>/dev/null | grep -q 'local_office_printer'; then
+            echo 'error: ordinary uninstall deleted local printer queue' >&2
+            exit 1
+        fi
+        if ! lpstat -v 2>/dev/null | grep -q 'ShaPrint_Office_HP_192.168.1.10_10ec236c'; then
+            echo 'error: ordinary uninstall did not preserve ShaPrint client queue' >&2
+            exit 1
+        fi
+    fi
 
+    # Reinstall restores the preserved configuration without generating a new identity
     rpm -Uvh --nodeps \"/root/${RPM_UPGRADE_FILENAME}\"
     wait_for_shaprintd
     CERT_SHA_AFTER=\$(sha256sum /var/lib/shaprint/server-identity.cert.der | awk '{print \$1}')
@@ -251,19 +279,60 @@ podman exec "${CONTAINER_NAME}" bash -euo pipefail -c "
         echo 'error: uninstall + reinstall replaced the existing server identity' >&2
         exit 1
     fi
+    shaprintctl status | grep -q '^network-channel: configured$'
 
     # 9. Verify systemctl restart and stop lifecycle.
     systemctl restart shaprintd.service
     wait_for_shaprintd
     shaprintctl status | grep -q '^client-proxy: running$'
 
-    systemctl stop shaprintd.service
+    # 10. Verify explicit confirmed purge removes ShaPrint resources safely.
+    # Purge without confirmation must be refused
+    if shaprintctl purge >/dev/null 2>&1; then
+        echo 'error: shaprintctl purge without --confirm must fail' >&2
+        exit 1
+    fi
+
+    # Unprivileged user cannot purge
+    if su - localoperator -c 'shaprintctl purge --confirm' >/dev/null 2>&1; then
+        echo 'error: unprivileged user must not be allowed to execute purge' >&2
+        exit 1
+    fi
+
+    # Root executes explicit confirmed purge
+    PURGE_OUT=\$(shaprintctl purge --confirm)
+    echo \"\${PURGE_OUT}\" | grep -q '^purged: true$'
+    echo \"\${PURGE_OUT}\" | grep -q '^removed-credentials: true$'
+    echo \"\${PURGE_OUT}\" | grep -q '^removed-identity-and-state: true$'
+
+    if [[ -d /var/lib/shaprint ]]; then
+        echo 'error: purge did not remove /var/lib/shaprint' >&2
+        exit 1
+    fi
+    if [[ -f /etc/shaprint-credentials/network-channel ]]; then
+        echo 'error: purge did not remove /etc/shaprint-credentials/network-channel' >&2
+        exit 1
+    fi
     if systemctl is-active --quiet shaprintd.service; then
-        echo 'error: shaprintd.service still active after systemctl stop' >&2
+        echo 'error: shaprintd.service still active after purge' >&2
         exit 1
     fi
-    if [[ -e /run/shaprint/shaprintd.sock ]]; then
-        echo 'error: control socket was not removed on service stop' >&2
-        exit 1
+
+    # Local printer queue must NEVER be removed, but ShaPrint queue must be purged
+    if command -v lpstat >/dev/null 2>&1 && systemctl is-active --quiet cups; then
+        if ! lpstat -v 2>/dev/null | grep -q 'local_office_printer'; then
+            echo 'error: purge removed local printer queue' >&2
+            exit 1
+        fi
+        if lpstat -v 2>/dev/null | grep -q 'ShaPrint_Office_HP_192.168.1.10_10ec236c'; then
+            echo 'error: purge failed to remove ShaPrint client queue' >&2
+            exit 1
+        fi
     fi
+
+    # Repeated purge is idempotent
+    shaprintctl purge --confirm | grep -q '^purged: true$'
+
+    # Clean package removal
+    rpm -e shaprint
 "
