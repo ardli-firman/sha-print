@@ -290,12 +290,16 @@ fn purge_firewall_rules(
         None => FirewalldClient::new(),
     };
 
-    if let Err(err) = fw.remove_inbound_sharing() {
-        warnings.push(format!("failed to remove firewalld sharing rules: {err}"));
-        recovery_actions.push(
-            "remove firewall rules manually: firewall-cmd --permanent --remove-port=48631/tcp --remove-port=48633/udp && firewall-cmd --reload".to_string(),
-        );
-    }
+    let firewalld_ok = match fw.remove_inbound_sharing() {
+        Ok(()) => true,
+        Err(err) => {
+            warnings.push(format!("failed to remove firewalld sharing rules: {err}"));
+            recovery_actions.push(
+                "remove firewall rules manually: firewall-cmd --permanent --remove-port=48631/tcp --remove-port=48633/udp && firewall-cmd --reload".to_string(),
+            );
+            false
+        }
+    };
 
     // Also check UFW if available
     let has_ufw = Command::new("ufw")
@@ -311,7 +315,7 @@ fn purge_firewall_rules(
             .output();
     }
 
-    true
+    firewalld_ok
 }
 
 fn purge_credentials(

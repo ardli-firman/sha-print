@@ -599,12 +599,11 @@ pub mod linux {
                     .output();
             }
 
-            let mut perm_cmd = Command::new(&self.program);
-            perm_cmd.arg("--permanent");
             for spec in &specs {
-                perm_cmd.arg(format!("--remove-port={spec}"));
+                let _ = Command::new(&self.program)
+                    .args(["--permanent", &format!("--remove-port={spec}")])
+                    .output();
             }
-            let _ = perm_cmd.output();
             Ok(())
         }
     }
