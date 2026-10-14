@@ -20,15 +20,20 @@ jobs:
       contents: write
 
     steps:
-      - name: Validate Android release tag
+      - name: Determine and validate Android release tag
         shell: bash
         run: |
-          TAG="${{ github.ref_name || inputs.tag }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
           echo "Validating Android release tag: $TAG"
           if [[ ! "$TAG" =~ ^android-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Tag '$TAG' is not a valid Android version tag (expected format: android-vX.Y.Z)."
             exit 1
           fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -67,7 +72,7 @@ jobs:
       - name: Package Artifacts
         shell: bash
         run: |
-          TAG="${{ github.ref_name || inputs.tag }}"
+          TAG="${RELEASE_TAG}"
           VERSION="${TAG#android-v}"
           mkdir -p dist-android
           cp apps/android/app/build/outputs/bundle/release/app-release.aab "dist-android/shaprint-client-${TAG}.aab"
@@ -80,12 +85,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name || inputs.tag }}
-          name: ShaPrint Android ${{ github.ref_name || inputs.tag }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ShaPrint Android ${{ env.RELEASE_TAG }}
           body: |
             ## ShaPrint Android Client Release
-            - **Google Play Store App Bundle**: `shaprint-client-${{ github.ref_name || inputs.tag }}.aab` (Upload this file to Google Play Console)
-            - **Universal APK**: `shaprint-client-${{ github.ref_name || inputs.tag }}.apk` (For direct sideloading and testing)
+            - **Google Play Store App Bundle**: `shaprint-client-${{ env.RELEASE_TAG }}.aab` (Upload this file to Google Play Console)
+            - **Universal APK**: `shaprint-client-${{ env.RELEASE_TAG }}.apk` (For direct sideloading and testing)
 
             ### Verification
             - Target SDK: 35 (Android 15)

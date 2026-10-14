@@ -25,12 +25,17 @@ jobs:
       - name: Validate stable release tag
         shell: bash
         run: |
-          TAG="${{ github.ref_name || inputs.tag }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
           echo "Validating release tag: $TAG"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Tag '$TAG' is not a valid stable version tag (expected format: vX.Y.Z). Nightly or prerelease tags cannot run the stable publishing workflow."
             exit 1
           fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -61,8 +66,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.ref_name || inputs.tag }}
-          releaseName: 'ShaPrint ${{ github.ref_name || inputs.tag }}'
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: 'ShaPrint ${{ env.RELEASE_TAG }}'
           releaseBody: |
             ## ShaPrint Desktop (Tauri & IPP/IPPS)
             See release notes and documentation in `docs/adr/`.
