@@ -12,6 +12,17 @@ Communication runs entirely over standard **IPPS (Internet Printing Protocol ove
 
 ---
 
+## 📥 Downloads & Supported Platforms
+
+| Platform | Role | Package / Format | Download / Instructions |
+|---|---|---|---|
+| **🪟 Windows (10 / 11)** | Server & Client (Full GUI + Spooler) | `.msi`, `.exe` Installer | [⬇️ Desktop Releases (`v*.*.*`)](https://github.com/ardli-firman/sha-print/releases?q=tag%3Av*&expanded=true) |
+| **📱 Android (8.0+)** | Mobile Client (Direct & PrintService) | `.aab` (Play Store) & `.apk` | [⬇️ Android Releases (`android-v*.*.*`)](https://github.com/ardli-firman/sha-print/releases?q=tag%3Aandroid*&expanded=true) |
+| **🐧 Ubuntu / Debian** | Headless Server Daemon | `.deb` (Ubuntu 22.04 / 24.04) | [📦 DEB Packaging Guide](packaging/linux/deb) (`make build-deb`) |
+| **🐧 AlmaLinux / RHEL** | Headless Server Daemon | `.rpm` (AlmaLinux 9 / 10) | [📦 RPM Packaging Guide](packaging/linux/rpm) (`make build-rpm`) |
+
+---
+
 ## 🌐 Dedicated Network Ports
 
 ShaPrint binds fixed, dedicated high ports to eliminate collisions with Windows system responders or common local developer servers ([ADR 0014](docs/adr/0014-unique-ports-and-cross-vlan-reachability.md)):
