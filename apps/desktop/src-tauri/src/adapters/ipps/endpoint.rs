@@ -761,7 +761,11 @@ fn job_settings(request: &Request<'_>) -> Result<PrintSettings, Status> {
     let media = request.value("media").map(str::to_owned);
     let color = match request.value("print-color-mode") {
         Some("color") => Some(true),
-        Some("monochrome") | Some("bi-level") => Some(false),
+        Some("monochrome")
+        | Some("bi-level")
+        | Some("process-monochrome")
+        | Some("process-bi-level") => Some(false),
+        Some("auto") | Some("auto-monochrome") => None,
         Some(_) => return Err(Status::AttributesOrValuesNotSupported),
         None => None,
     };
@@ -1196,6 +1200,10 @@ mod tests {
             ("color", Some(true)),
             ("monochrome", Some(false)),
             ("bi-level", Some(false)),
+            ("process-monochrome", Some(false)),
+            ("process-bi-level", Some(false)),
+            ("auto", None),
+            ("auto-monochrome", None),
         ] {
             let bytes = job_request_with(&[("print-color-mode", mode_str)], &[]);
             let req = Request::parse(&bytes).expect("valid request");

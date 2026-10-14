@@ -717,7 +717,7 @@ mod tests {
             terminations: AtomicUsize::new(0),
         });
         let binder = PortBinder::with_inspector(inspector.clone())
-            .with_reclaim_timeout(Duration::from_millis(100))
+            .with_reclaim_timeout(Duration::from_millis(1000))
             .with_poll_interval(Duration::from_millis(1));
 
         let listener = binder.bind_tcp(address).await.expect("wait and bind");

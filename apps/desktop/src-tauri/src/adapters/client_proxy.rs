@@ -218,11 +218,12 @@ async fn serve_client(
 ) -> Result<(), AppError> {
     let (read, mut write) = tokio::io::split(stream);
     let mut reader = BufReader::new(read);
-    let head = timeout(REQUEST_TIMEOUT, read_head(&mut reader))
-        .await
-        .map_err(|_| {
-            AppError::timeout("The local printer did not finish its request in time.")
-        })??;
+    let head = match timeout(REQUEST_TIMEOUT, read_head(&mut reader)).await {
+        Ok(Ok(head)) => head,
+        Ok(Err(err)) if err.code() == crate::domain::ErrorCode::Timeout => return Ok(()),
+        Ok(Err(err)) => return Err(err),
+        Err(_) => return Ok(()),
+    };
     if head.method != "POST"
         || !head.path.starts_with("/ipp/print")
         || !head
@@ -625,7 +626,17 @@ async fn read_head<R: tokio::io::AsyncBufRead + Unpin>(
             .map_err(|_| {
                 AppError::invalid_input("The local printer sent an unreadable HTTP request.")
             })?;
-        if count == 0 || bytes.len() + count > MAX_HEAD_BYTES {
+        if count == 0 {
+            if bytes.is_empty() {
+                return Err(AppError::timeout(
+                    "Client disconnected without sending data.",
+                ));
+            }
+            return Err(AppError::invalid_input(
+                "The local printer sent an invalid HTTP request.",
+            ));
+        }
+        if bytes.len() + count > MAX_HEAD_BYTES {
             return Err(AppError::invalid_input(
                 "The local printer sent an invalid HTTP request.",
             ));

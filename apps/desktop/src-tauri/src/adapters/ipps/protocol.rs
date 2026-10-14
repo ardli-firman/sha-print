@@ -24,6 +24,13 @@ pub const OPERATION_GET_PRINTERS: u16 = 0x4002;
 /// `printer-state` for a queue that is idle and able to accept a job.
 const PRINTER_STATE_IDLE: i32 = 3;
 
+static SERVER_START_TIME: std::sync::LazyLock<std::time::Instant> =
+    std::sync::LazyLock::new(std::time::Instant::now);
+
+pub fn uptime_seconds() -> i32 {
+    SERVER_START_TIME.elapsed().as_secs().max(1) as i32
+}
+
 /// Attribute group and value tags used by the queries the endpoint answers.
 mod tag {
     pub(super) const OPERATION_ATTRIBUTES: u8 = 0x01;
@@ -454,6 +461,12 @@ pub fn rewrite_printer_uri_supported(
             output.extend_from_slice(name);
             output.extend((queue_name.len() as u16).to_be_bytes());
             output.extend_from_slice(queue_name.as_bytes());
+        } else if current_name == b"printer-more-info" && rewrite_security_in_current_group {
+            output.push(value_tag);
+            output.extend((name_length as u16).to_be_bytes());
+            output.extend_from_slice(name);
+            output.extend((local_printer_uri.len() as u16).to_be_bytes());
+            output.extend_from_slice(local_printer_uri.as_bytes());
         } else {
             output.extend_from_slice(&bytes[start..value_end]);
         }
@@ -743,6 +756,10 @@ pub fn response(
             "uri-authentication-supported",
             "none",
         );
+        write_integer(&mut out, "printer-up-time", uptime_seconds());
+        write_texts(&mut out, tag::KEYWORD, "compression-supported", &["none"]);
+        write_text(&mut out, 0x41, "printer-location", "ShaPrint Network");
+        write_text(&mut out, tag::URI, "printer-more-info", &printer.uri);
 
         write_texts(
             &mut out,
@@ -1342,6 +1359,21 @@ mod tests {
             text(&attributes, "ipp-versions-supported"),
             Some("2.0".to_owned())
         );
+        assert_eq!(
+            text(&attributes, "compression-supported"),
+            Some("none".to_owned())
+        );
+        assert_eq!(
+            text(&attributes, "printer-location"),
+            Some("ShaPrint Network".to_owned())
+        );
+        assert_eq!(
+            text(&attributes, "printer-more-info"),
+            Some("ipps://server:8631/ipp/print/HP%20LaserJet".to_owned())
+        );
+        assert!(attributes
+            .iter()
+            .any(|attribute| attribute.name == "printer-up-time"));
         // Every attribute of a response must sit in a named group.
         assert!(attributes.iter().all(|attribute| attribute.group != 0));
     }
@@ -1496,6 +1528,10 @@ mod tests {
         assert_eq!(
             text(&attributes, "printer-uuid"),
             Some(printer_uuid(expected_queue_name))
+        );
+        assert_eq!(
+            text(&attributes, "printer-more-info"),
+            Some(local_uri.to_owned())
         );
     }
 

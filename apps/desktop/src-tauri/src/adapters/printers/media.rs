@@ -61,8 +61,11 @@ const fn media(
 #[cfg(any(windows, unix, test))]
 pub(crate) fn media_spec(value: &str) -> Option<MediaSpec> {
     let canonical = match value {
+        "a4" | "A4" | "iso-a4" | "iso_a4" => "iso_a4_210x297mm",
+        "letter" | "Letter" | "na-letter" | "na_letter" => "na_letter_8.5x11in",
+        "legal" | "Legal" | "na-legal" | "na_legal" => "na_legal_8.5x14in",
         "f4" | "F4" | "folio" | "Folio" => "om_folio_210x330mm",
-        "na_tabloid_11x17in" => "na_ledger_11x17in",
+        "na_tabloid_11x17in" | "tabloid" | "Tabloid" => "na_ledger_11x17in",
         other => other,
     };
     if let Some(spec) = MEDIA_CATALOG
@@ -149,6 +152,46 @@ mod tests {
                 .any(|previous| previous.keyword == spec.keyword));
             assert_eq!(media_spec(spec.keyword), Some(*spec));
         }
+    }
+
+    #[test]
+    fn common_media_aliases_resolve_to_standard_specs() {
+        assert_eq!(
+            media_spec("A4").map(|s| s.keyword),
+            Some("iso_a4_210x297mm")
+        );
+        assert_eq!(
+            media_spec("a4").map(|s| s.keyword),
+            Some("iso_a4_210x297mm")
+        );
+        assert_eq!(
+            media_spec("Letter").map(|s| s.keyword),
+            Some("na_letter_8.5x11in")
+        );
+        assert_eq!(
+            media_spec("letter").map(|s| s.keyword),
+            Some("na_letter_8.5x11in")
+        );
+        assert_eq!(
+            media_spec("Legal").map(|s| s.keyword),
+            Some("na_legal_8.5x14in")
+        );
+        assert_eq!(
+            media_spec("legal").map(|s| s.keyword),
+            Some("na_legal_8.5x14in")
+        );
+        assert_eq!(
+            media_spec("Folio").map(|s| s.keyword),
+            Some("om_folio_210x330mm")
+        );
+        assert_eq!(
+            media_spec("folio").map(|s| s.keyword),
+            Some("om_folio_210x330mm")
+        );
+        assert_eq!(
+            media_spec("Tabloid").map(|s| s.keyword),
+            Some("na_ledger_11x17in")
+        );
     }
 
     #[test]
