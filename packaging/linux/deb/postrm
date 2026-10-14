@@ -1,0 +1,28 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "purge" ]; then
+    # Confirmed purge removes ShaPrint credentials, identity, state, and firewall rules
+    rm -rf /var/lib/shaprint /etc/shaprint-credentials /etc/shaprint
+    if command -v ufw >/dev/null 2>&1; then
+        ufw delete allow 48631/tcp >/dev/null 2>&1 || true
+        ufw delete allow 48633/udp >/dev/null 2>&1 || true
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1; then
+        firewall-cmd --remove-port=48631/tcp >/dev/null 2>&1 || true
+        firewall-cmd --remove-port=48633/udp >/dev/null 2>&1 || true
+        firewall-cmd --permanent --remove-port=48631/tcp >/dev/null 2>&1 || true
+        firewall-cmd --permanent --remove-port=48633/udp >/dev/null 2>&1 || true
+    fi
+    if command -v deluser >/dev/null 2>&1; then
+        deluser --system shaprint >/dev/null 2>&1 || true
+    elif command -v userdel >/dev/null 2>&1; then
+        userdel shaprint >/dev/null 2>&1 || true
+    fi
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

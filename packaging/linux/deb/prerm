@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        if [ -d /run/systemd/system ]; then
+            systemctl --no-reload disable --now shaprintd.service >/dev/null 2>&1 || true
+        else
+            systemctl disable shaprintd.service >/dev/null 2>&1 || true
+        fi
+    fi
+elif [ "$1" = "upgrade" ]; then
+    if [ -x /usr/bin/shaprintctl ] && [ -S /run/shaprint/shaprintd.sock ]; then
+        /usr/bin/shaprintctl drain --timeout 30 >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0
