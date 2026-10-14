@@ -16,10 +16,12 @@ Communication runs entirely over standard **IPPS (Internet Printing Protocol ove
 
 | Platform | Role | Package / Format | Download / Instructions |
 |---|---|---|---|
-| **🪟 Windows (10 / 11)** | Server & Client (Full GUI + Spooler) | `.msi`, `.exe` Installer | [⬇️ Desktop Releases (`v*.*.*`)](https://github.com/ardli-firman/sha-print/releases?q=tag%3Av*&expanded=true) |
-| **📱 Android (8.0+)** | Mobile Client (Direct & PrintService) | `.aab` (Play Store) & `.apk` | [⬇️ Android Releases (`android-v*.*.*`)](https://github.com/ardli-firman/sha-print/releases?q=tag%3Aandroid*&expanded=true) |
+| **🪟 Windows (10 / 11)** | Server & Client (Full GUI + Spooler) | `.msi`, `.exe` Installer | [⬇️ Windows Setup (.exe)](https://github.com/ardli-firman/sha-print/releases/download/v3.4.0/ShaPrint_3.4.0_x64-setup.exe) • [⬇️ MSI Installer](https://github.com/ardli-firman/sha-print/releases/download/v3.4.0/ShaPrint_3.4.0_x64_en-US.msi)<br>([Desktop Release v3.4.0](https://github.com/ardli-firman/sha-print/releases/tag/v3.4.0)) |
+| **📱 Android (8.0+)** | Mobile Client (Direct & PrintService) | `.aab` (Play Store) & `.apk` | [⬇️ Direct APK (.apk)](https://github.com/ardli-firman/sha-print/releases/download/android-v1.0.1/shaprint-client-android-v1.0.1.apk) • [📦 Play Store Bundle (.aab)](https://github.com/ardli-firman/sha-print/releases/download/android-v1.0.1/shaprint-client-android-v1.0.1.aab)<br>([Android Release android-v1.0.1](https://github.com/ardli-firman/sha-print/releases/tag/android-v1.0.1)) |
 | **🐧 Ubuntu / Debian** | Headless Server Daemon | `.deb` (Ubuntu 22.04 / 24.04) | [📦 DEB Packaging Guide](packaging/linux/deb) (`make build-deb`) |
 | **🐧 AlmaLinux / RHEL** | Headless Server Daemon | `.rpm` (AlmaLinux 9 / 10) | [📦 RPM Packaging Guide](packaging/linux/rpm) (`make build-rpm`) |
+
+*👉 [Browse all releases and previous changelogs on GitHub Releases](https://github.com/ardli-firman/sha-print/releases)*
 
 ---
 

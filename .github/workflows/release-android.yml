@@ -100,3 +100,4 @@ jobs:
             dist-android/*
           draft: false
           prerelease: false
+          make_latest: false
