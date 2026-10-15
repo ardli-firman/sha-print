@@ -33,6 +33,46 @@ install -D -m 0640 "%{_sourcedir}/config.json" "%{buildroot}%{_sysconfdir}/shapr
 install -D -m 0644 "%{_sourcedir}/org.shaprint.control.policy" "%{buildroot}%{_datadir}/polkit-1/actions/org.shaprint.control.policy"
 install -d -m 0700 "%{buildroot}%{_sharedstatedir}/shaprint"
 
+# Desktop application integration (GUI binary, .desktop launcher, icons)
+if [ -f "%{_sourcedir}/shaprint-desktop" ]; then
+    install -D -m 0755 "%{_sourcedir}/shaprint-desktop" "%{buildroot}%{_bindir}/shaprint-desktop"
+fi
+if [ -f "%{_sourcedir}/shaprint.desktop" ]; then
+    install -D -m 0644 "%{_sourcedir}/shaprint.desktop" "%{buildroot}%{_datadir}/applications/shaprint.desktop"
+fi
+for size in 32x32 128x128 256x256 512x512; do
+    if [ -f "%{_sourcedir}/icon-${size}.png" ]; then
+        install -D -m 0644 "%{_sourcedir}/icon-${size}.png" "%{buildroot}%{_datadir}/icons/hicolor/${size}/apps/shaprint.png"
+    fi
+done
+
+# Build dynamic files list to cleanly support both full desktop and headless builds
+cat << 'EOF' > %{_builddir}/files.list
+%attr(0755,root,root) %{_bindir}/shaprintd
+%attr(0755,root,root) %{_bindir}/shaprintctl
+%attr(0644,root,root) %{_unitdir}/shaprintd.service
+%attr(0644,root,root) %{_sysusersdir}/shaprint.conf
+%attr(0644,root,root) %{_tmpfilesdir}/shaprint.conf
+%attr(0644,root,root) %{_presetdir}/90-shaprint.preset
+%dir %attr(0750,root,shaprint) %{_sysconfdir}/shaprint
+%dir %attr(0750,root,shaprint) %{_sysconfdir}/shaprint-credentials
+%config(noreplace) %attr(0640,root,shaprint) %{_sysconfdir}/shaprint/config.json
+%dir %attr(0700,shaprint,shaprint) %{_sharedstatedir}/shaprint
+%attr(0644,root,root) %{_datadir}/polkit-1/actions/org.shaprint.control.policy
+EOF
+
+if [ -f "%{buildroot}%{_bindir}/shaprint-desktop" ]; then
+    echo "%attr(0755,root,root) %{_bindir}/shaprint-desktop" >> %{_builddir}/files.list
+fi
+if [ -f "%{buildroot}%{_datadir}/applications/shaprint.desktop" ]; then
+    echo "%attr(0644,root,root) %{_datadir}/applications/shaprint.desktop" >> %{_builddir}/files.list
+fi
+for size in 32x32 128x128 256x256 512x512; do
+    if [ -f "%{buildroot}%{_datadir}/icons/hicolor/${size}/apps/shaprint.png" ]; then
+        echo "%attr(0644,root,root) %{_datadir}/icons/hicolor/${size}/apps/shaprint.png" >> %{_builddir}/files.list
+    fi
+done
+
 %pre
 getent group shaprint >/dev/null 2>&1 || groupadd -r shaprint
 getent passwd shaprint >/dev/null 2>&1 || \
@@ -62,6 +102,8 @@ if [ "$1" -eq 1 ]; then
 elif [ -d /run/systemd/system ]; then
     systemctl try-restart shaprintd.service >/dev/null 2>&1 || :
 fi
+update-desktop-database &>/dev/null || :
+gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
 exit 0
 
 %preun
@@ -76,20 +118,11 @@ exit 0
 
 %postun
 systemctl daemon-reload >/dev/null 2>&1 || :
+update-desktop-database &>/dev/null || :
+gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
 exit 0
 
-%files
-%attr(0755,root,root) %{_bindir}/shaprintd
-%attr(0755,root,root) %{_bindir}/shaprintctl
-%attr(0644,root,root) %{_unitdir}/shaprintd.service
-%attr(0644,root,root) %{_sysusersdir}/shaprint.conf
-%attr(0644,root,root) %{_tmpfilesdir}/shaprint.conf
-%attr(0644,root,root) %{_presetdir}/90-shaprint.preset
-%dir %attr(0750,root,shaprint) %{_sysconfdir}/shaprint
-%dir %attr(0750,root,shaprint) %{_sysconfdir}/shaprint-credentials
-%config(noreplace) %attr(0640,root,shaprint) %{_sysconfdir}/shaprint/config.json
-%dir %attr(0700,shaprint,shaprint) %{_sharedstatedir}/shaprint
-%attr(0644,root,root) %{_datadir}/polkit-1/actions/org.shaprint.control.policy
+%files -f %{_builddir}/files.list
 
 %changelog
 * Wed Oct 14 2026 ShaPrint Maintainers <maintainers@shaprint.local> - 3.4.0-1

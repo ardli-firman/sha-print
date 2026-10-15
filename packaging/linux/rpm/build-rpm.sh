@@ -76,6 +76,28 @@ mkdir -p "${RPMBUILD_TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS} "${OUTPUT_DIR}"
 
 cp "${SHAPRINTD_BIN}" "${RPMBUILD_TOPDIR}/SOURCES/shaprintd"
 cp "${SHAPRINTCTL_BIN}" "${RPMBUILD_TOPDIR}/SOURCES/shaprintctl"
+
+if [[ -z "${SHAPRINT_DESKTOP_BIN:-}" ]]; then
+    if [[ -f "${TAURI_DIR}/target/release/shaprint-desktop" ]]; then
+        SHAPRINT_DESKTOP_BIN="${TAURI_DIR}/target/release/shaprint-desktop"
+    fi
+fi
+if [[ -n "${SHAPRINT_DESKTOP_BIN:-}" && -f "${SHAPRINT_DESKTOP_BIN}" ]]; then
+    cp "${SHAPRINT_DESKTOP_BIN}" "${RPMBUILD_TOPDIR}/SOURCES/shaprint-desktop"
+fi
+
+if [[ -f "${PACKAGING_DIR}/desktop/shaprint.desktop" ]]; then
+    cp "${PACKAGING_DIR}/desktop/shaprint.desktop" "${RPMBUILD_TOPDIR}/SOURCES/shaprint.desktop"
+fi
+
+ICONS_DIR="${TAURI_DIR}/icons"
+if [[ -d "${ICONS_DIR}" ]]; then
+    cp "${ICONS_DIR}/32x32.png" "${RPMBUILD_TOPDIR}/SOURCES/icon-32x32.png" 2>/dev/null || :
+    cp "${ICONS_DIR}/128x128.png" "${RPMBUILD_TOPDIR}/SOURCES/icon-128x128.png" 2>/dev/null || :
+    cp "${ICONS_DIR}/128x128@2x.png" "${RPMBUILD_TOPDIR}/SOURCES/icon-256x256.png" 2>/dev/null || :
+    cp "${ICONS_DIR}/icon.png" "${RPMBUILD_TOPDIR}/SOURCES/icon-512x512.png" 2>/dev/null || :
+fi
+
 cp "${PACKAGING_DIR}/config.json" "${RPMBUILD_TOPDIR}/SOURCES/config.json"
 cp "${PACKAGING_DIR}/polkit/org.shaprint.control.policy" "${RPMBUILD_TOPDIR}/SOURCES/org.shaprint.control.policy"
 cp "${PACKAGING_DIR}/systemd/shaprintd.service" "${RPMBUILD_TOPDIR}/SOURCES/shaprintd.service"

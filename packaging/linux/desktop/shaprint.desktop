@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=ShaPrint
+Comment=Share printers over LAN and cross-VLAN using IPPS
+Exec=shaprint-desktop
+Icon=shaprint
+Terminal=false
+Type=Application
+Categories=Utility;Printing;Office;
+StartupNotify=true
+Keywords=printer;printing;ipps;cups;sharing;

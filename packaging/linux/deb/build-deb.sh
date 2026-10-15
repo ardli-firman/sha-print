@@ -107,6 +107,46 @@ cp "${SHAPRINTD_BIN}" "${STAGING_DIR}/usr/bin/shaprintd"
 cp "${SHAPRINTCTL_BIN}" "${STAGING_DIR}/usr/bin/shaprintctl"
 chmod 0755 "${STAGING_DIR}/usr/bin"/shaprintd "${STAGING_DIR}/usr/bin"/shaprintctl
 
+if [[ -z "${SHAPRINT_DESKTOP_BIN:-}" ]]; then
+    if [[ -f "${TAURI_DIR}/target/deb-baseline/release/shaprint-desktop" ]]; then
+        SHAPRINT_DESKTOP_BIN="${TAURI_DIR}/target/deb-baseline/release/shaprint-desktop"
+    elif [[ -f "${TAURI_DIR}/target/release/shaprint-desktop" ]]; then
+        SHAPRINT_DESKTOP_BIN="${TAURI_DIR}/target/release/shaprint-desktop"
+    fi
+fi
+
+if [[ -n "${SHAPRINT_DESKTOP_BIN:-}" && -f "${SHAPRINT_DESKTOP_BIN}" ]]; then
+    cp "${SHAPRINT_DESKTOP_BIN}" "${STAGING_DIR}/usr/bin/shaprint-desktop"
+    chmod 0755 "${STAGING_DIR}/usr/bin/shaprint-desktop"
+fi
+
+if [[ -f "${PACKAGING_DIR}/desktop/shaprint.desktop" ]]; then
+    mkdir -p "${STAGING_DIR}/usr/share/applications"
+    cp "${PACKAGING_DIR}/desktop/shaprint.desktop" "${STAGING_DIR}/usr/share/applications/shaprint.desktop"
+    chmod 0644 "${STAGING_DIR}/usr/share/applications/shaprint.desktop"
+fi
+
+ICONS_DIR="${TAURI_DIR}/icons"
+if [[ -d "${ICONS_DIR}" ]]; then
+    for size in 32x32 128x128; do
+        if [[ -f "${ICONS_DIR}/${size}.png" ]]; then
+            mkdir -p "${STAGING_DIR}/usr/share/icons/hicolor/${size}/apps"
+            cp "${ICONS_DIR}/${size}.png" "${STAGING_DIR}/usr/share/icons/hicolor/${size}/apps/shaprint.png"
+            chmod 0644 "${STAGING_DIR}/usr/share/icons/hicolor/${size}/apps/shaprint.png"
+        fi
+    done
+    if [[ -f "${ICONS_DIR}/128x128@2x.png" ]]; then
+        mkdir -p "${STAGING_DIR}/usr/share/icons/hicolor/256x256/apps"
+        cp "${ICONS_DIR}/128x128@2x.png" "${STAGING_DIR}/usr/share/icons/hicolor/256x256/apps/shaprint.png"
+        chmod 0644 "${STAGING_DIR}/usr/share/icons/hicolor/256x256/apps/shaprint.png"
+    fi
+    if [[ -f "${ICONS_DIR}/icon.png" ]]; then
+        mkdir -p "${STAGING_DIR}/usr/share/icons/hicolor/512x512/apps"
+        cp "${ICONS_DIR}/icon.png" "${STAGING_DIR}/usr/share/icons/hicolor/512x512/apps/shaprint.png"
+        chmod 0644 "${STAGING_DIR}/usr/share/icons/hicolor/512x512/apps/shaprint.png"
+    fi
+fi
+
 cp "${PACKAGING_DIR}/systemd/shaprintd.service" "${STAGING_DIR}/usr/lib/systemd/system/shaprintd.service"
 chmod 0644 "${STAGING_DIR}/usr/lib/systemd/system/shaprintd.service"
 

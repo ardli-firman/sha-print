@@ -15,11 +15,15 @@ on:
 
 jobs:
   build-and-release:
-    name: Build & Release Desktop (Windows)
-    runs-on: windows-latest
+    name: Build & Release Desktop (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform }}
     environment: release
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, ubuntu-22.04]
 
     steps:
       - name: Validate stable release tag
@@ -41,6 +45,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev rpm
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -58,7 +68,7 @@ jobs:
         working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
-      - name: Build Tauri Desktop (NSIS & Signed Update Bundles)
+      - name: Build Tauri Desktop (NSIS, MSI, AppImage, DEB)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -73,3 +83,15 @@ jobs:
             See release notes and documentation in `docs/adr/`.
           releaseDraft: false
           prerelease: false
+
+      - name: Build and upload system packages (.deb and .rpm with daemon & GUI)
+        if: runner.os == 'Linux'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash packaging/linux/deb/build-deb.sh
+          bash packaging/linux/rpm/build-rpm.sh
+          gh release upload "${{ env.RELEASE_TAG }}" \
+            apps/desktop/src-tauri/target/deb/*.deb \
+            apps/desktop/src-tauri/target/rpm/*.rpm \
+            --clobber || true
