@@ -1756,6 +1756,36 @@ describe("previous app panel", () => {
 });
 
 describe("system diagnostics and readiness", () => {
+  it("keeps opening and refreshing diagnostics passive and shows uninspected firewall rules as not checked", async () => {
+    vi.mocked(ipc.getDiagnostics).mockResolvedValue({
+      checks: [{
+        check: "firewall",
+        status: "warning",
+        code: "not-authorized",
+        detail: "firewall rules were not inspected; administrator access is required",
+        recovery: "Inspect firewall rules explicitly when needed.",
+      }],
+      healthy: false,
+      recent_failure: null,
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", {
+      name: /Client printing ready\. Open service diagnostics/i,
+    }));
+    const dialog = await screen.findByRole("dialog", { name: "Print service status" });
+    expect(await within(dialog).findByText("Not checked")).toBeTruthy();
+    expect(within(dialog).queryByText("Failed")).toBeNull();
+    for (const count of [2, 3]) {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Refresh All" }));
+      await waitFor(() => expect(ipc.getDiagnostics).toHaveBeenCalledTimes(count));
+    }
+    expect(ipc.startService).not.toHaveBeenCalled();
+    expect(ipc.stopService).not.toHaveBeenCalled();
+    expect(networkChannel.configureNetworkChannel).not.toHaveBeenCalled();
+    expect(serverConnections.approveServerConnection).not.toHaveBeenCalled();
+    expect(serverConnections.installPrinterQueue).not.toHaveBeenCalled();
+  });
+
   it("presents subsystem diagnostics with failure codes and concrete recovery actions matching CLI semantics", async () => {
     vi.mocked(ipc.getDiagnostics).mockResolvedValue({
       checks: [

@@ -313,6 +313,7 @@ export function SystemDiagnosticsDialog({
             {diagnostics.checks.map((check: DiagnosticCheck) => {
               const meta = CHECK_LABELS[check.check];
               const isOk = check.status === "ok";
+              const isWarning = check.status === "warning";
               return (
                 <section
                   key={check.check}
@@ -328,8 +329,8 @@ export function SystemDiagnosticsDialog({
                       </h4>
                       <p className="service-description">{meta?.description}</p>
                     </div>
-                    <Badge variant={isOk ? "success" : "destructive"} role="status">
-                      {isOk ? "OK" : "Failed"}
+                    <Badge variant={isOk ? "success" : isWarning ? "warning" : "destructive"} role="status">
+                      {isOk ? "OK" : isWarning ? "Not checked" : "Failed"}
                     </Badge>
                   </header>
 

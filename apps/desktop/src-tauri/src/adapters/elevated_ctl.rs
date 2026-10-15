@@ -7,6 +7,9 @@
 //! `packaging/linux/polkit` pin `org.freedesktop.policykit.exec.path` to `shaprintctl` and use
 //! the `argv1` annotation so each command word (`start`, `stop`, `network-channel`, `trust`,
 //! `queue`, `sharing`) authorizes under its own narrow action.
+//! Before execution, `pkcheck` authorizes the temporary setup meta action for this exact
+//! GUI process. Its implications cover those six actions for polkit's cache lifetime;
+//! reads never authorize, and purge is excluded. No password or authorization token is stored.
 //!
 //! Contract with the caller:
 //! * the Network Channel secret travels on the helper's standard input (`--stdin`), never in
@@ -77,7 +80,7 @@ impl ControlAction {
         }
     }
 
-    /// Every action the policy file installs, in a stable order.
+    /// Every bounded desktop mutation action, in a stable order. Setup and purge are separate.
     pub const ALL: [ControlAction; 6] = [
         Self::Start,
         Self::Stop,
@@ -239,9 +242,14 @@ enum ExpectedOutput {
 #[derive(Debug, Clone)]
 pub struct ElevatedCtl {
     pkexec: PathBuf,
+    pkcheck: PathBuf,
     program: PathBuf,
     socket_path: PathBuf,
+    authorization: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
+
+#[cfg(unix)]
+pub const SETUP_ACTION: &str = "org.shaprint.control.setup";
 
 #[cfg(unix)]
 impl ElevatedCtl {
@@ -255,8 +263,10 @@ impl ElevatedCtl {
     pub fn system(socket_path: impl Into<PathBuf>) -> Self {
         Self {
             pkexec: option_env_path(PKEXEC_ENV).unwrap_or_else(|| PathBuf::from("pkexec")),
+            pkcheck: PathBuf::from("/usr/bin/pkcheck"),
             program: option_env_path(CTL_ENV).unwrap_or_else(|| PathBuf::from(DEFAULT_CTL_PATH)),
             socket_path: socket_path.into(),
+            authorization: Default::default(),
         }
     }
 
@@ -268,9 +278,17 @@ impl ElevatedCtl {
     ) -> Self {
         Self {
             pkexec: pkexec.into(),
+            pkcheck: PathBuf::from("/usr/bin/pkcheck"),
             program: program.into(),
             socket_path: socket_path.into(),
+            authorization: Default::default(),
         }
+    }
+
+    /// Supplies the authorization checker for isolated control-plane tests.
+    pub fn with_authorization_program(mut self, program: impl Into<PathBuf>) -> Self {
+        self.pkcheck = program.into();
+        self
     }
 
     pub fn program(&self) -> &Path {
@@ -299,13 +317,20 @@ impl ElevatedCtl {
         }
 
         let pkexec = self.pkexec.clone();
+        let pkcheck = self.pkcheck.clone();
         let program = self.program.clone();
         let args = mutation.arguments(&self.socket_path);
         let action = mutation.action();
         let secret = mutation.secret().map(ToOwned::to_owned);
         let expected = mutation.expected_output();
 
+        // Clones share the gate: concurrent requests cannot stack authentication dialogs.
+        // Recheck with polkit every time so expiration/revocation is never bypassed locally.
+        let authorization = self.authorization.clone().lock_owned().await;
+
         tokio::task::spawn_blocking(move || {
+            let _authorization = authorization;
+            authorize_setup(&pkcheck)?;
             execute_elevated(
                 &pkexec,
                 &program,
@@ -319,6 +344,45 @@ impl ElevatedCtl {
         .map_err(|error| {
             AppError::internal(format!("the elevated control task stopped: {error}"))
         })?
+    }
+}
+
+#[cfg(unix)]
+fn authorize_setup(pkcheck: &Path) -> Result<(), crate::domain::AppError> {
+    use crate::domain::AppError;
+    use std::process::{Command, Stdio};
+
+    let stat = std::fs::read_to_string("/proc/self/stat")
+        .map_err(|_| AppError::internal("could not identify the setup authorization process"))?;
+    let start = stat
+        .rsplit_once(')')
+        .and_then(|(_, fields)| fields.split_whitespace().nth(19))
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| AppError::internal("could not identify the setup authorization process"))?;
+    let uid = crate::adapters::daemon::current_effective_uid()
+        .ok_or_else(|| AppError::internal("could not identify the setup authorization user"))?;
+    let subject = format!("{},{start},{uid}", std::process::id());
+    let output = Command::new(pkcheck)
+        .args([
+            "--action-id",
+            SETUP_ACTION,
+            "--process",
+            &subject,
+            "--allow-user-interaction",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|_| {
+            AppError::unsupported(
+                "the polkit authorization checker is unavailable; install polkit and retry",
+            )
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(AppError::not_authorized(
+            "ShaPrint setup was not authorized. No changes were made. Authorize setup to change printing settings; opening the app and refreshing status need no administrator password.",
+        ))
     }
 }
 
@@ -687,6 +751,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn setup_authorization_is_reused_across_actions_and_denial_never_executes() {
+        let dir = workdir("setup-session");
+        let checker = script(
+            &dir,
+            "pkcheck",
+            &format!(
+                r#"test "$1" = --action-id && test "$2" = org.shaprint.control.setup || exit 2
+test "$3" = --process && test "$5" = --allow-user-interaction || exit 2
+test -f '{0}/denied' && exit 1
+if [ ! -f '{0}/cached' ]; then
+    echo prompt >> '{0}/prompts'
+    touch '{0}/cached'
+fi
+exit 0"#,
+                dir.display()
+            ),
+        );
+        let pkexec = script(&dir, "pkexec", r#"exec "$@""#);
+        let ctl = script(
+            &dir,
+            "shaprintctl",
+            &format!(
+                "echo applied >> '{}/applied'; if [ \"$1\" = network-channel ]; then echo '{{\"configured\":true}}'; else echo '[]'; fi",
+                dir.display()
+            ),
+        );
+        let runner = ElevatedCtl::new(pkexec, ctl, dir.join("unused.sock"))
+            .with_authorization_program(checker);
+        // Sharing and Network Channel require different narrow actions, but both are
+        // checked against the same temporary setup authorization before execution.
+        runner
+            .run(ElevatedMutation::SetSharedPrinters(vec![]))
+            .await
+            .unwrap();
+        runner
+            .run(ElevatedMutation::SetNetworkChannel(String::new()))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("prompts"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("applied"))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+
+        std::fs::remove_file(dir.join("cached")).unwrap();
+        runner
+            .run(ElevatedMutation::SetSharedPrinters(vec![]))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("prompts"))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+
+        std::fs::write(dir.join("denied"), "").unwrap();
+        let error = runner
+            .run(ElevatedMutation::SetSharedPrinters(vec![]))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::NotAuthorized);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("applied"))
+                .unwrap()
+                .lines()
+                .count(),
+            3
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn successful_mutation_parses_the_cli_json_output() {
         let dir = workdir("success");
         // A fake `pkexec` that runs the program directly, like the real one does after polkit
@@ -697,7 +844,8 @@ mod tests {
             "network_channel_configured": null
         });
         let ctl = script(&dir, "shaprintctl", &format!("cat <<'EOF'\n{status}\nEOF"));
-        let runner = ElevatedCtl::new(&pkexec, &ctl, dir.join("unused.sock"));
+        let runner = ElevatedCtl::new(&pkexec, &ctl, dir.join("unused.sock"))
+            .with_authorization_program(script(&dir, "pkcheck", "exit 0"));
 
         let outcome = runner
             .run(ElevatedMutation::StartService("client-proxy".into()))
@@ -720,7 +868,8 @@ mod tests {
         let pkexec = script(&dir, "fake-pkexec", "exit 126");
         // The program would report "touched" if it ever ran; it must not run.
         let ctl = script(&dir, "shaprintctl", "echo touched; exit 0");
-        let runner = ElevatedCtl::new(&pkexec, &ctl, dir.join("unused.sock"));
+        let runner = ElevatedCtl::new(&pkexec, &ctl, dir.join("unused.sock"))
+            .with_authorization_program(script(&dir, "pkcheck", "exit 0"));
 
         let error = runner
             .run(ElevatedMutation::SetSharedPrinters(vec!["Laser".into()]))
@@ -743,7 +892,8 @@ mod tests {
             "shaprintctl",
             "read line; echo \"shaprintctl failed code=not-authorized message=declined for ${#line} bytes\" >&2; exit 1",
         );
-        let runner = ElevatedCtl::new(&pkexec, &ctl, dir.join("unused.sock"));
+        let runner = ElevatedCtl::new(&pkexec, &ctl, dir.join("unused.sock"))
+            .with_authorization_program(script(&dir, "pkcheck", "exit 0"));
 
         let error = runner
             .run(ElevatedMutation::SetNetworkChannel(
@@ -771,5 +921,40 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::Unsupported);
         assert!(error.message().contains("not installed"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn temporary_setup_policy_grants_only_bounded_printing_actions() {
+        let policy =
+            include_str!("../../../../../packaging/linux/polkit/org.shaprint.control.policy");
+        let setup = policy
+            .split(&format!("<action id=\"{SETUP_ACTION}\">"))
+            .nth(1)
+            .unwrap()
+            .split("</action>")
+            .next()
+            .unwrap();
+        let implied = setup
+            .split("<annotate key=\"org.freedesktop.policykit.imply\">")
+            .nth(1)
+            .unwrap()
+            .split("</annotate>")
+            .next()
+            .unwrap();
+        let mut actual: Vec<_> = implied.split_whitespace().collect();
+        let mut expected: Vec<_> = ControlAction::ALL
+            .iter()
+            .map(|action| action.action_id())
+            .collect();
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(
+            actual, expected,
+            "setup must not grant purge or arbitrary root execution"
+        );
+        assert!(setup.contains("<allow_active>auth_admin_keep</allow_active>"));
+        assert!(setup.contains("<allow_inactive>no</allow_inactive>"));
+        assert!(setup.contains("<allow_any>no</allow_any>"));
+        assert!(!setup.contains("org.freedesktop.policykit.exec.path"));
     }
 }

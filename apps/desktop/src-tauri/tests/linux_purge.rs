@@ -13,7 +13,30 @@ use shaprint_desktop::adapters::purge::{
     execute_purge, format_purge_report, PurgeExecutionOptions,
 };
 use shaprint_desktop::domain::ErrorCode;
-use support::temporary_directory;
+
+fn temporary_directory(name: &str) -> PathBuf {
+    static TOOLS: std::sync::Once = std::sync::Once::new();
+    TOOLS.call_once(|| {
+        use std::os::unix::fs::PermissionsExt;
+
+        // These filesystem fixtures must not stop the developer's daemon or request
+        // authorization from the host's systemd/firewall services.
+        let tools =
+            std::env::temp_dir().join(format!("shaprint-purge-tools-{}", std::process::id()));
+        fs::create_dir_all(&tools).unwrap();
+        for name in ["systemctl", "ufw"] {
+            let tool = tools.join(name);
+            fs::write(&tool, "#!/bin/sh\nexit 1\n").unwrap();
+            fs::set_permissions(tool, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut paths = vec![tools];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+    });
+    support::temporary_directory(name)
+}
 
 #[test]
 fn cli_parses_purge_with_and_without_confirm_and_yes_flags() {
@@ -50,7 +73,7 @@ async fn purge_refuses_without_confirm() {
         socket_path: dir.join("run/shaprint/shaprintd.sock"),
         cups_endpoint: None,
         proxy_port: 48632,
-        firewall_program: None,
+        firewall_program: Some(dir.join("firewall-not-installed")),
         require_root: false,
     };
 
@@ -72,7 +95,7 @@ async fn purge_refuses_unauthorized_non_root_when_enforced() {
         socket_path: dir.join("run/shaprint/shaprintd.sock"),
         cups_endpoint: None,
         proxy_port: 48632,
-        firewall_program: None,
+        firewall_program: Some(dir.join("firewall-not-installed")),
         require_root: true, // will check current effective uid
     };
 
@@ -130,11 +153,17 @@ async fn purge_removes_state_credentials_config_and_socket_idempotently() {
         socket_path: socket_path.clone(),
         cups_endpoint: None,
         proxy_port: 48632,
-        firewall_program: None,
+        firewall_program: Some(root.join("firewall-not-installed")),
         require_root: false,
     };
 
-    let report = execute_purge(&options).await.expect("purge succeeds");
+    let report = shaprint_desktop::adapters::purge::execute_purge_with_destinations_and_lpadmin(
+        &options,
+        Some(vec![]),
+        None,
+    )
+    .await
+    .expect("purge succeeds");
     assert!(report.purged);
     assert!(report.removed_credentials);
     assert!(report.removed_identity_and_state);
@@ -150,7 +179,12 @@ async fn purge_removes_state_credentials_config_and_socket_idempotently() {
     assert!(!socket_path.exists());
 
     // Idempotent second purge
-    let second_report = execute_purge(&options)
+    let second_report =
+        shaprint_desktop::adapters::purge::execute_purge_with_destinations_and_lpadmin(
+            &options,
+            Some(vec![]),
+            None,
+        )
         .await
         .expect("second purge is idempotent");
     assert!(second_report.purged);
@@ -233,7 +267,7 @@ exit 0
         socket_path: root.join("run/shaprint/shaprintd.sock"),
         cups_endpoint: None,
         proxy_port: 48632,
-        firewall_program: None,
+        firewall_program: Some(root.join("firewall-not-installed")),
         require_root: false,
     };
 
@@ -301,7 +335,7 @@ exit 1
         socket_path: root.join("run/shaprint/shaprintd.sock"),
         cups_endpoint: None,
         proxy_port: 48632,
-        firewall_program: None,
+        firewall_program: Some(root.join("firewall-not-installed")),
         require_root: false,
     };
 

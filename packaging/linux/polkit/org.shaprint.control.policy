@@ -15,6 +15,19 @@
   <vendor>ShaPrint</vendor>
   <vendor_url>https://github.com/ardli-firman/sha-print</vendor_url>
 
+  <!-- A temporary setup authorization implies only the six bounded control actions.
+       It does not grant purge, firewall administration, or generic root execution. -->
+  <action id="org.shaprint.control.setup">
+    <description>set up ShaPrint printing</description>
+    <message>Authentication is required to set up ShaPrint printing. This temporarily allows changing the Network Channel, Trusted Servers, Client queues, shared printers, and print services.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.imply">org.shaprint.control.start org.shaprint.control.stop org.shaprint.control.network-channel org.shaprint.control.trust org.shaprint.control.queue org.shaprint.control.sharing</annotate>
+  </action>
+
   <action id="org.shaprint.control.start">
     <description>start ShaPrint print services</description>
     <message>Authentication is required to start ShaPrint print services</message>
@@ -39,7 +52,7 @@
     <annotate key="org.freedesktop.policykit.exec.argv1">stop</annotate>
   </action>
 
-  <!-- The Network Channel is a credential: every change re-authenticates. -->
+  <!-- Outside an authorized setup session, a Network Channel change re-authenticates. -->
   <action id="org.shaprint.control.network-channel">
     <description>change the Network Channel</description>
     <message>Authentication is required to change the ShaPrint Network Channel</message>

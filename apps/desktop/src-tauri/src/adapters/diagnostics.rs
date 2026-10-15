@@ -357,6 +357,20 @@ fn check_credential_file(credential_dir: &Path) -> DiagnosticCheckDto {
 }
 
 async fn check_firewall(firewall_program: Option<&Path>) -> DiagnosticCheckDto {
+    // firewalld may ask polkit to authenticate even an information query. This runs on
+    // dialog open/refresh, including inside the unprivileged daemon: never start that
+    // conversation from a passive read. An explicit root CLI invocation can inspect rules.
+    if crate::adapters::daemon::current_effective_uid() != Some(0) {
+        return DiagnosticCheckDto {
+            check: "firewall".to_owned(),
+            status: "warning".to_owned(),
+            code: Some(ErrorCode::NotAuthorized.as_str().to_owned()),
+            detail: "firewall rules were not inspected; administrator access is required".to_owned(),
+            recovery: Some(
+                "To inspect explicitly, run sudo firewall-cmd --list-ports for firewalld or sudo ufw status for UFW.".to_owned(),
+            ),
+        };
+    }
     let env_prog = std::env::var("SHAPRINT_FIREWALL_PROGRAM")
         .ok()
         .map(PathBuf::from);
@@ -468,8 +482,13 @@ pub fn format_diagnostics_report(
                 .as_ref()
                 .map(|c| format!(" (code: {c})"))
                 .unwrap_or_default();
+            let label = if check.status == "warning" {
+                "WARN"
+            } else {
+                "FAILED"
+            };
             output.push_str(&format!(
-                "[FAILED] {}: {}{}\n",
+                "[{label}] {}: {}{}\n",
                 check.check, check.detail, code_str
             ));
             if let Some(ref rec) = check.recovery {
@@ -497,6 +516,40 @@ pub fn format_diagnostics_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn repeated_unprivileged_diagnostics_never_launch_firewall_authorization() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if crate::adapters::daemon::current_effective_uid() == Some(0) {
+            return;
+        }
+        let directory = std::env::temp_dir().join(format!(
+            "shaprint-passive-diagnostics-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let marker = directory.join("firewall-invoked");
+        let program = directory.join("firewall-cmd");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        for _ in 0..2 {
+            let check = check_firewall(Some(&program)).await;
+            assert!(
+                !marker.exists(),
+                "opening or refreshing diagnostics must not invoke a firewall tool that can prompt"
+            );
+            assert_eq!(check.status, "warning");
+            assert_eq!(check.code.as_deref(), Some("not-authorized"));
+            assert!(check.detail.contains("not inspected"));
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn format_diagnostics_report_text_and_json() {
