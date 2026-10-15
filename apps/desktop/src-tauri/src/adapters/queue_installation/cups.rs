@@ -143,18 +143,14 @@ impl CupsQueueInstaller {
         uri: &str,
         description: &str,
     ) -> Result<(), SetupFailure> {
-        // First try IPP Everywhere (`-m everywhere`) so CUPS queries the running local proxy for
-        // printer capabilities and media sizes; fall back to raw/generic queue creation if the
-        // local CUPS build does not have the everywhere generator helper available.
+        // Enforce driverless IPP Everywhere (`-m everywhere`). Never fall back to an unfiltered
+        // raw queue if capability negotiation or PPD generation fails (issue #160).
         let everywhere = self.run_lpadmin(endpoint, cups_name, uri, description, true)?;
         if everywhere.status.success() {
             return Ok(());
         }
-        let fallback = self.run_lpadmin(endpoint, cups_name, uri, description, false)?;
-        if fallback.status.success() {
-            return Ok(());
-        }
-        let stderr = String::from_utf8_lossy(&fallback.stderr);
+        let _ = self.delete_destination(endpoint, cups_name);
+        let stderr = String::from_utf8_lossy(&everywhere.stderr);
         Err(classify_lpadmin_failure(stderr.trim()))
     }
 
@@ -204,8 +200,19 @@ fn classify_lpadmin_failure(stderr: &str) -> SetupFailure {
         || lower.contains("service unavailable")
         || lower.contains("bad file descriptor")
         || lower.contains("connection refused")
+        || lower.contains("host is down")
     {
         SetupFailureKind::SpoolerUnavailable
+    } else if lower.contains("unable to create ppd")
+        || lower.contains("unable to copy ppd")
+        || lower.contains("does not support required ipp attributes")
+        || lower.contains("printer does not support")
+        || lower.contains("not supported")
+        || lower.contains("bad-request")
+        || lower.contains("client-error")
+        || lower.contains("server-error")
+    {
+        SetupFailureKind::QueueRejected
     } else {
         SetupFailureKind::Other
     };
@@ -231,6 +238,9 @@ mod tests {
     use super::*;
     use crate::domain::PrinterName;
 
+    use std::process::{Child, Command};
+    use std::time::{Duration, Instant};
+
     fn request(server: &str, printer: &str) -> ClientQueueRequest {
         ClientQueueRequest::new(
             server,
@@ -239,133 +249,236 @@ mod tests {
         .expect("valid request")
     }
 
+    struct IsolatedCupsd {
+        dir: std::path::PathBuf,
+        endpoint: CupsServerEndpoint,
+        child: Child,
+    }
+
+    impl IsolatedCupsd {
+        fn start() -> Self {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("binds ephemeral port");
+            let port = listener.local_addr().expect("reads addr").port();
+            drop(listener);
+
+            let dir = crate::test_support::temporary_directory("cups-installer-test");
+            for sub in [
+                "conf",
+                "spool",
+                "spool/temp",
+                "cache",
+                "state",
+                "state/certs",
+                "logs",
+                "ppd",
+                "serverbin/backend",
+                "serverbin/filter",
+                "serverbin/cgi-bin",
+                "serverbin/daemon",
+                "serverbin/driver",
+                "serverbin/monitor",
+                "serverbin/notifier",
+            ] {
+                std::fs::create_dir_all(dir.join(sub)).expect("creates subdirs");
+            }
+            for sub in [
+                "filter", "cgi-bin", "daemon", "driver", "monitor", "notifier",
+            ] {
+                let src = std::path::Path::new("/usr/lib/cups").join(sub);
+                if let Ok(entries) = std::fs::read_dir(&src) {
+                    for entry in entries.flatten() {
+                        let _ = std::os::unix::fs::symlink(
+                            entry.path(),
+                            dir.join("serverbin").join(sub).join(entry.file_name()),
+                        );
+                    }
+                }
+            }
+            for backend in ["ipp", "usb", "socket", "lpd"] {
+                let src = std::path::Path::new("/usr/lib/cups/backend").join(backend);
+                if src.exists() {
+                    let dst = dir.join("serverbin/backend").join(backend);
+                    std::fs::copy(&src, &dst).expect("copies backend");
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))
+                        .expect("chmod 0755 backend");
+                }
+            }
+            let _ = std::os::unix::fs::symlink("ipp", dir.join("serverbin/backend/http"));
+            let _ = std::os::unix::fs::symlink("ipp", dir.join("serverbin/backend/ipps"));
+
+            let sock = dir.join("cups.sock");
+            let cupsd_conf = dir.join("conf/cupsd.conf");
+            let cups_files_conf = dir.join("conf/cups-files.conf");
+            std::fs::write(
+                &cupsd_conf,
+                format!(
+                    "LogLevel info\nListen 127.0.0.1:{port}\nListen {}\nBrowsing Off\nDefaultAuthType None\n<Location />\n  Order allow,deny\n  Allow all\n</Location>\n<Location /admin>\n  Order allow,deny\n  Allow all\n</Location>\n<Location /admin/conf>\n  Order allow,deny\n  Allow all\n</Location>\n<Policy default>\n  <Limit All>\n    Order allow,deny\n    Allow all\n  </Limit>\n</Policy>\n",
+                    sock.display()
+                ),
+            )
+            .expect("writes cupsd.conf");
+            std::fs::write(
+                &cups_files_conf,
+                format!(
+                    "FileDevice Yes\nAccessLog {d}/logs/access_log\nErrorLog {d}/logs/error_log\nPageLog {d}/logs/page_log\nRequestRoot {d}/spool\nTempDir {d}/spool/temp\nCacheDir {d}/cache\nStateDir {d}/state\nServerRoot {d}/conf\nDataDir /usr/share/cups\nServerBin {d}/serverbin\n",
+                    d = dir.display()
+                ),
+            )
+            .expect("writes cups-files.conf");
+
+            let child = Command::new("/usr/sbin/cupsd")
+                .arg("-f")
+                .arg("-c")
+                .arg(&cupsd_conf)
+                .arg("-s")
+                .arg(&cups_files_conf)
+                .spawn()
+                .expect("spawns cupsd");
+
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if sock.exists() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+
+            Self {
+                dir,
+                endpoint: CupsServerEndpoint::parse(&format!("127.0.0.1:{port}")),
+                child,
+            }
+        }
+    }
+
+    impl Drop for IsolatedCupsd {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    struct MockIppPrinter {
+        port: u16,
+        shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl MockIppPrinter {
+        fn start(server: &str, printer_name: &str) -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds mock ipp");
+            let port = listener.local_addr().expect("reads addr").port();
+            listener.set_nonblocking(true).expect("nonblocking");
+            let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let shutdown_clone = std::sync::Arc::clone(&shutdown);
+
+            let uri = format!(
+                "ipp://127.0.0.1:{}/ipp/print/{}/{}",
+                port,
+                crate::adapters::ipps::protocol::percent_encode(server),
+                crate::adapters::ipps::protocol::percent_encode(printer_name)
+            );
+
+            let resp_template = crate::adapters::ipps::protocol::response(
+                1,
+                crate::adapters::ipps::protocol::IPP_VERSION_2_0,
+                crate::adapters::ipps::protocol::Status::Ok,
+                &[crate::adapters::ipps::protocol::PrinterEntry {
+                    name: printer_name.to_owned(),
+                    uri,
+                    accepting_jobs: true,
+                }],
+            );
+
+            let handle = std::thread::spawn(move || {
+                use std::io::{Read, Write};
+                use std::sync::atomic::Ordering;
+                while !shutdown_clone.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let _ = stream.set_nonblocking(false);
+                            let mut req_buf = Vec::new();
+                            loop {
+                                let mut buf = [0u8; 4096];
+                                let n = match stream.read(&mut buf) {
+                                    Ok(0) => break,
+                                    Ok(n) => n,
+                                    Err(_) => break,
+                                };
+                                req_buf.extend_from_slice(&buf[..n]);
+                                if req_buf
+                                    .windows(23)
+                                    .any(|w| w.eq_ignore_ascii_case(b"expect: 100-continue"))
+                                {
+                                    let _ = stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
+                                    let _ = stream.flush();
+                                    if let Some(pos) = req_buf.windows(23).position(|w| {
+                                        w.eq_ignore_ascii_case(b"expect: 100-continue")
+                                    }) {
+                                        req_buf[pos..pos + 23].fill(0);
+                                    }
+                                }
+                                if let Some(pos) = req_buf.windows(4).position(|w| w == b"\r\n\r\n")
+                                {
+                                    let ipp = &req_buf[pos + 4..];
+                                    if ipp.len() >= 8 {
+                                        let mut resp_bytes = resp_template.clone();
+                                        resp_bytes[4..8].copy_from_slice(&ipp[4..8]);
+                                        let http_resp = format!(
+                                            "HTTP/1.1 200 OK\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                            resp_bytes.len()
+                                        );
+                                        let _ = stream.write_all(http_resp.as_bytes());
+                                        let _ = stream.write_all(&resp_bytes);
+                                        let _ = stream.flush();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+
+            Self {
+                port,
+                shutdown,
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for MockIppPrinter {
+        fn drop(&mut self) {
+            self.shutdown
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(h) = self.handle.take() {
+                let _ = h.join();
+            }
+        }
+    }
+
     #[test]
     fn cups_installer_creates_queue_is_idempotent_and_refuses_non_shaprint_conflict() {
-        use std::process::{Child, Command};
-        use std::time::{Duration, Instant};
-
         if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
             return;
         }
 
-        struct IsolatedCupsd {
-            dir: std::path::PathBuf,
-            endpoint: CupsServerEndpoint,
-            child: Child,
-        }
-
-        impl IsolatedCupsd {
-            fn start() -> Self {
-                let listener =
-                    std::net::TcpListener::bind("127.0.0.1:0").expect("binds ephemeral port");
-                let port = listener.local_addr().expect("reads addr").port();
-                drop(listener);
-
-                let dir = crate::test_support::temporary_directory("cups-installer-test");
-                for sub in [
-                    "conf",
-                    "spool",
-                    "spool/temp",
-                    "cache",
-                    "state",
-                    "state/certs",
-                    "logs",
-                    "ppd",
-                    "serverbin/backend",
-                    "serverbin/filter",
-                    "serverbin/cgi-bin",
-                    "serverbin/daemon",
-                    "serverbin/driver",
-                    "serverbin/monitor",
-                    "serverbin/notifier",
-                ] {
-                    std::fs::create_dir_all(dir.join(sub)).expect("creates subdirs");
-                }
-                for sub in [
-                    "filter", "cgi-bin", "daemon", "driver", "monitor", "notifier",
-                ] {
-                    let src = std::path::Path::new("/usr/lib/cups").join(sub);
-                    if let Ok(entries) = std::fs::read_dir(&src) {
-                        for entry in entries.flatten() {
-                            let _ = std::os::unix::fs::symlink(
-                                entry.path(),
-                                dir.join("serverbin").join(sub).join(entry.file_name()),
-                            );
-                        }
-                    }
-                }
-                for backend in ["ipp", "usb", "socket", "lpd"] {
-                    let src = std::path::Path::new("/usr/lib/cups/backend").join(backend);
-                    if src.exists() {
-                        let dst = dir.join("serverbin/backend").join(backend);
-                        std::fs::copy(&src, &dst).expect("copies backend");
-                        use std::os::unix::fs::PermissionsExt;
-                        std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))
-                            .expect("chmod 0755 backend");
-                    }
-                }
-                let _ = std::os::unix::fs::symlink("ipp", dir.join("serverbin/backend/http"));
-                let _ = std::os::unix::fs::symlink("ipp", dir.join("serverbin/backend/ipps"));
-
-                let sock = dir.join("cups.sock");
-                let cupsd_conf = dir.join("conf/cupsd.conf");
-                let cups_files_conf = dir.join("conf/cups-files.conf");
-                std::fs::write(
-                    &cupsd_conf,
-                    format!(
-                        "LogLevel info\nListen 127.0.0.1:{port}\nListen {}\nBrowsing Off\nDefaultAuthType None\n<Location />\n  Order allow,deny\n  Allow all\n</Location>\n<Location /admin>\n  Order allow,deny\n  Allow all\n</Location>\n<Location /admin/conf>\n  Order allow,deny\n  Allow all\n</Location>\n<Policy default>\n  <Limit All>\n    Order allow,deny\n    Allow all\n  </Limit>\n</Policy>\n",
-                        sock.display()
-                    ),
-                )
-                .expect("writes cupsd.conf");
-                std::fs::write(
-                    &cups_files_conf,
-                    format!(
-                        "FileDevice Yes\nAccessLog {d}/logs/access_log\nErrorLog {d}/logs/error_log\nPageLog {d}/logs/page_log\nRequestRoot {d}/spool\nTempDir {d}/spool/temp\nCacheDir {d}/cache\nStateDir {d}/state\nServerRoot {d}/conf\nDataDir /usr/share/cups\nServerBin {d}/serverbin\n",
-                        d = dir.display()
-                    ),
-                )
-                .expect("writes cups-files.conf");
-
-                let child = Command::new("/usr/sbin/cupsd")
-                    .arg("-f")
-                    .arg("-c")
-                    .arg(&cupsd_conf)
-                    .arg("-s")
-                    .arg(&cups_files_conf)
-                    .spawn()
-                    .expect("spawns cupsd");
-
-                let deadline = Instant::now() + Duration::from_secs(5);
-                while Instant::now() < deadline {
-                    if sock.exists() {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-
-                Self {
-                    dir,
-                    endpoint: CupsServerEndpoint::parse(&format!("127.0.0.1:{port}")),
-                    child,
-                }
-            }
-        }
-
-        impl Drop for IsolatedCupsd {
-            fn drop(&mut self) {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
-                let _ = std::fs::remove_dir_all(&self.dir);
-            }
-        }
-
         let cupsd = IsolatedCupsd::start();
+        let req = request("10.0.0.5:48631", "Office Printer");
+        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        let proxy_authority = format!("127.0.0.1:{}", mock.port);
         let installer = CupsQueueInstaller::with_endpoint_and_authority(
             cupsd.endpoint.clone(),
-            "127.0.0.1:48632",
+            proxy_authority,
         );
-        let req = request("10.0.0.5:48631", "Office Printer");
 
         // 1. First install creates the queue with deterministic CUPS-safe identifier and readable description.
         installer.install(&req).expect("first install succeeds");
@@ -374,11 +487,27 @@ mod tests {
         assert_eq!(dests[0].name, req.cups_destination_name());
         assert_eq!(
             dests[0].device_uri,
-            "ipp://127.0.0.1:48632/ipp/print/10.0.0.5%3A48631/Office%20Printer"
+            format!(
+                "ipp://127.0.0.1:{}/ipp/print/10.0.0.5%3A48631/Office%20Printer",
+                mock.port
+            )
         );
         assert_eq!(
             dests[0].printer_info,
             "Office Printer (ShaPrint 10.0.0.5-48631)"
+        );
+        assert!(
+            cupsd
+                .dir
+                .join("conf/ppd")
+                .join(format!("{}.ppd", req.cups_destination_name()))
+                .exists()
+                || cupsd
+                    .dir
+                    .join("ppd")
+                    .join(format!("{}.ppd", req.cups_destination_name()))
+                    .exists(),
+            "driverless PPD must be generated by lpadmin -m everywhere"
         );
 
         // 2. Reinstalling the same destination is idempotent and does not create duplicates.
@@ -423,5 +552,47 @@ mod tests {
             .expect("conflicting queue still exists");
         assert_eq!(untouched.device_uri, "file:/dev/null");
         assert_eq!(untouched.printer_info, "Unrelated Local Queue");
+
+        // 4. Failed driverless setup reports classified failure and NEVER falls back to an unfiltered raw queue.
+        let failing_req = request("10.0.0.5:48631", "Failing Queue");
+        let failing_installer = CupsQueueInstaller::with_endpoint_and_authority(
+            cupsd.endpoint.clone(),
+            "127.0.0.1:49999",
+        );
+        let err = failing_installer
+            .install(&failing_req)
+            .expect_err("install must fail when driverless setup fails");
+        assert!(matches!(
+            err.kind(),
+            SetupFailureKind::QueueRejected | SetupFailureKind::SpoolerUnavailable
+        ));
+        let dests_failed =
+            query_cups_destinations(&cupsd.endpoint).expect("queries cups destinations");
+        assert!(
+            !dests_failed
+                .iter()
+                .any(|d| d.name == failing_req.cups_destination_name()),
+            "failed queue installation must never leave an unfiltered raw queue in CUPS"
+        );
+    }
+
+    #[test]
+    fn test_mock_ipp_printer_with_driverless() {
+        if !Path::new("/usr/bin/driverless").exists() {
+            return;
+        }
+        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        let uri = format!(
+            "ipp://127.0.0.1:{}/ipp/print/10.0.0.5%3A48631/Office%20Printer",
+            mock.port
+        );
+        let out = Command::new("driverless")
+            .arg("-d")
+            .arg(&uri)
+            .output()
+            .expect("runs driverless");
+        assert!(out.status.success());
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("*cupsFilter2:"));
     }
 }

@@ -378,10 +378,22 @@ pub fn rewrite_printer_uri_supported(
             .get(..7)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"));
 
+    let has_printer_up_time = parsed.integer("printer-up-time").is_some();
+    let has_compression = parsed.value("compression-supported").is_some();
+    let has_location = parsed.value("printer-location").is_some();
+    let has_more_info = parsed.value("printer-more-info").is_some();
+    let has_pwg_resolution_keyword = parsed
+        .attributes
+        .iter()
+        .any(|a| a.name == "pwg-raster-document-resolution-supported" && a.tag == tag::KEYWORD);
+    let status = u16::from_be_bytes([bytes[2], bytes[3]]);
+    let is_success = status <= 0x00ff;
+
     let mut output = Vec::with_capacity(
         bytes.len()
             + local_printer_uri.len()
-            + local_queue_name.as_ref().map_or(0, |name| name.len() * 3),
+            + local_queue_name.as_ref().map_or(0, |name| name.len() * 3)
+            + 128,
     );
     output.extend_from_slice(&bytes[..8]);
     let mut position = 8;
@@ -392,6 +404,38 @@ pub fn rewrite_printer_uri_supported(
         let value_tag = *bytes.get(position).ok_or(ParseError::Truncated)?;
         position += 1;
         if value_tag == tag::END_OF_ATTRIBUTES {
+            if is_success {
+                if !has_printer_up_time {
+                    write_integer(&mut output, "printer-up-time", uptime_seconds());
+                }
+                if !has_compression {
+                    write_texts(
+                        &mut output,
+                        tag::KEYWORD,
+                        "compression-supported",
+                        &["none"],
+                    );
+                }
+                if !has_location {
+                    write_text(&mut output, 0x41, "printer-location", "ShaPrint Network");
+                }
+                if !has_more_info {
+                    write_text(
+                        &mut output,
+                        tag::URI,
+                        "printer-more-info",
+                        local_printer_uri,
+                    );
+                }
+                if !has_pwg_resolution_keyword {
+                    write_texts(
+                        &mut output,
+                        tag::KEYWORD,
+                        "pwg-raster-document-resolution-supported",
+                        &["300dpi"],
+                    );
+                }
+            }
             output.push(value_tag);
             output.extend_from_slice(&bytes[position..]);
             return Ok(output);
@@ -723,6 +767,12 @@ pub fn response(
             300,
             300,
             3,
+        );
+        write_texts(
+            &mut out,
+            tag::KEYWORD,
+            "pwg-raster-document-resolution-supported",
+            &["300dpi"],
         );
         write_texts(
             &mut out,
@@ -1533,6 +1583,47 @@ mod tests {
             text(&attributes, "printer-more-info"),
             Some(local_uri.to_owned())
         );
+    }
+
+    #[test]
+    fn rewrite_printer_uri_supported_supplements_missing_driverless_attributes_for_stable_server() {
+        let remote_uri = "ipps://server:8631/ipp/print/Office%20Printer";
+        let local_uri = "ipp://127.0.0.1:8632/ipp/print/server%3A8631/Office%20Printer";
+
+        // Minimal response simulating a legacy or stable server without printer-up-time / compression-supported
+        let mut bytes = response_start(1, (2, 0), Status::Ok, 256);
+        bytes.push(tag::PRINTER_ATTRIBUTES);
+        write_text(&mut bytes, tag::URI, "printer-uri-supported", remote_uri);
+        write_text(&mut bytes, tag::NAME, "printer-name", "Office Printer");
+        bytes.push(tag::END_OF_ATTRIBUTES);
+
+        let rewritten =
+            rewrite_printer_uri_supported(&bytes, remote_uri, local_uri).expect("rewrites");
+        let attributes = decode(&rewritten);
+
+        assert_eq!(
+            text(&attributes, "printer-uri-supported"),
+            Some(local_uri.to_owned())
+        );
+        assert_eq!(
+            text(&attributes, "compression-supported"),
+            Some("none".to_owned())
+        );
+        assert_eq!(
+            text(&attributes, "printer-location"),
+            Some("ShaPrint Network".to_owned())
+        );
+        assert_eq!(
+            text(&attributes, "printer-more-info"),
+            Some(local_uri.to_owned())
+        );
+        assert_eq!(
+            text(&attributes, "pwg-raster-document-resolution-supported"),
+            Some("300dpi".to_owned())
+        );
+        assert!(attributes
+            .iter()
+            .any(|attribute| attribute.name == "printer-up-time"));
     }
 
     #[test]
