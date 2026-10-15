@@ -41,6 +41,7 @@ mod tag {
     pub(super) const BOOLEAN: u8 = 0x22;
     pub(super) const INTEGER: u8 = 0x21;
     pub(super) const ENUM: u8 = 0x23;
+    pub(super) const TEXT: u8 = 0x41;
     pub(super) const NAME: u8 = 0x42;
     pub(super) const KEYWORD: u8 = 0x44;
     pub(super) const URI: u8 = 0x45;
@@ -417,7 +418,12 @@ pub fn rewrite_printer_uri_supported(
                     );
                 }
                 if !has_location {
-                    write_text(&mut output, 0x41, "printer-location", "ShaPrint Network");
+                    write_text(
+                        &mut output,
+                        tag::TEXT,
+                        "printer-location",
+                        "ShaPrint Network",
+                    );
                 }
                 if !has_more_info {
                     write_text(

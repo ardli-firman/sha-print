@@ -4,6 +4,8 @@
 //! (which omits printer-up-time and compression-supported), install a driverless queue
 //! without response adapters via `lpadmin -m everywhere`, and generate a valid PPD.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use std::path::Path;
@@ -33,18 +35,27 @@ fn text_attribute(body: &mut Vec<u8>, tag: u8, name: &str, value: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires live Windows Server on local LAN (10.102.10.21:48631)"]
 async fn live_windows_server_driverless_queue_installation() {
-    // 1. Check if the live Windows Server is reachable.
-    let reachable = tokio::net::TcpStream::connect(LIVE_WINDOWS_SERVER)
-        .await
-        .is_ok();
+    // 1. Check if the live Windows Server is reachable with a short timeout to prevent CI stall.
+    let reachable = tokio::time::timeout(
+        Duration::from_millis(500),
+        tokio::net::TcpStream::connect(LIVE_WINDOWS_SERVER),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .is_some();
     if !reachable {
         eprintln!("Skipping live test: {LIVE_WINDOWS_SERVER} is unreachable");
         return;
     }
 
-    if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
-        eprintln!("Skipping live test: CUPS tools not installed");
+    if !Path::new("/usr/sbin/cupsd").exists()
+        || !Path::new("/usr/sbin/lpadmin").exists()
+        || !Path::new("/usr/bin/driverless").exists()
+    {
+        eprintln!("Skipping live test: required CUPS tools or driverless binary not installed");
         return;
     }
 
@@ -79,28 +90,23 @@ async fn live_windows_server_driverless_queue_installation() {
     let proxy_authority = format!("127.0.0.1:{proxy_port}");
     println!("Client Proxy listening on {proxy_authority}");
 
-    // 3b. Test direct forward_ipp to Windows Server
-    println!("Testing direct forward_ipp to Windows Server...");
+    // 3b. Verify direct TLS connection to Windows Server and attribute response.
     let remote_printer_uri = format!(
         "ipps://{LIVE_WINDOWS_SERVER}/ipp/print/{}",
         shaprint_desktop::adapters::ipps::protocol::percent_encode(LIVE_PRINTER_NAME)
     );
     let get_attr = support::get_printer_attributes(1, &remote_printer_uri);
-
-    match connections
+    let resp = connections
         .forward_ipp(LIVE_WINDOWS_SERVER, &remote_printer_uri, &get_attr, None)
         .await
-    {
-        Ok(resp) => {
-            println!("Direct forward_ipp SUCCESS, response len = {}", resp.len());
-            let status = u16::from_be_bytes([resp[2], resp[3]]);
-            println!("Direct forward_ipp IPP status: 0x{status:04x}");
-        }
-        Err(e) => {
-            println!("Direct forward_ipp FAILED: {e:?}");
-        }
-    }
+        .expect("remote server responds to Get-Printer-Attributes over TLS");
+    let status = u16::from_be_bytes([resp[2], resp[3]]);
+    assert_eq!(
+        status, 0x0000,
+        "remote server must return IPP 0x0000 (successful-ok)"
+    );
 
+    // Verify unauthenticated job validation is properly rejected by the remote server.
     let mut validate_req = vec![2, 0, 0, 4, 0, 0, 0, 2, 1];
     text_attribute(&mut validate_req, 0x47, "attributes-charset", "utf-8");
     text_attribute(&mut validate_req, 0x48, "attributes-natural-language", "en");
@@ -113,7 +119,7 @@ async fn live_windows_server_driverless_queue_installation() {
     );
     validate_req.push(3);
 
-    match connections
+    let val_resp = connections
         .forward_ipp(
             LIVE_WINDOWS_SERVER,
             &remote_printer_uri,
@@ -121,15 +127,12 @@ async fn live_windows_server_driverless_queue_installation() {
             None,
         )
         .await
-    {
-        Ok(resp) => {
-            let status = u16::from_be_bytes([resp[2], resp[3]]);
-            println!("Validate-Job without credential IPP status: 0x{status:04x}");
-        }
-        Err(e) => {
-            println!("Validate-Job without credential FAILED: {e:?}");
-        }
-    }
+        .expect("Validate-Job request answered");
+    let val_status = u16::from_be_bytes([val_resp[2], val_resp[3]]);
+    assert_eq!(
+        val_status, 0x0403,
+        "Validate-Job without credential must be rejected with 0x0403 NotAuthorized"
+    );
 
     // 4. Verify driverless utility can poll capabilities through the proxy.
     let req = ClientQueueRequest::new(
