@@ -1,6 +1,11 @@
 %global debug_package %{nil}
 %global _build_id_links none
 
+%{!?_unitdir: %global _unitdir %{_prefix}/lib/systemd/system}
+%{!?_sysusersdir: %global _sysusersdir %{_prefix}/lib/sysusers.d}
+%{!?_tmpfilesdir: %global _tmpfilesdir %{_prefix}/lib/tmpfiles.d}
+%{!?_presetdir: %global _presetdir %{_prefix}/lib/systemd/system-preset}
+
 Name:           shaprint
 Version:        %{_shaprint_version}
 Release:        %{?_shaprint_release}%{!?_shaprint_release:1}%{?dist}
