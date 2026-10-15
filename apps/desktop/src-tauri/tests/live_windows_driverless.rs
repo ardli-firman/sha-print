@@ -230,6 +230,214 @@ async fn live_windows_server_driverless_queue_installation() {
     let _ = coordinator.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires live Windows Server on local LAN (10.102.10.21:48631)"]
+async fn live_windows_server_raw_queue_repair_and_driverless_transition() {
+    // 1. Check reachability
+    let reachable = tokio::time::timeout(
+        Duration::from_millis(500),
+        tokio::net::TcpStream::connect(LIVE_WINDOWS_SERVER),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .is_some();
+    if !reachable {
+        eprintln!("Skipping live test: {LIVE_WINDOWS_SERVER} is unreachable");
+        return;
+    }
+
+    if !Path::new("/usr/sbin/cupsd").exists()
+        || !Path::new("/usr/sbin/lpadmin").exists()
+        || !Path::new("/usr/bin/driverless").exists()
+    {
+        eprintln!("Skipping live test: required CUPS tools or driverless binary not installed");
+        return;
+    }
+
+    // 2. Client Connections & Trust
+    let temp_dir = temporary_directory("live-trust-repair");
+    std::fs::create_dir_all(&temp_dir).expect("creates tempdir");
+    let connections = Arc::new(ClientConnections::new(temp_dir).expect("trust store"));
+    let review = connections
+        .inspect(LIVE_WINDOWS_SERVER)
+        .await
+        .expect("inspects Windows Server identity over TLS");
+    connections
+        .approve(&review.address, &review.current_fingerprint)
+        .await
+        .expect("approves server fingerprint");
+
+    // 3. Start local Client Proxy on ephemeral port
+    let channel = Arc::new(NetworkChannel::in_memory());
+    if let Ok(ch) = std::env::var("SHAPRINT_TEST_NETWORK_CHANNEL") {
+        if !ch.trim().is_empty() {
+            channel
+                .configure_sync(ch.trim())
+                .expect("configures test channel");
+        }
+    }
+    let proxy_tracker = Arc::new(PrintJobTracker::new());
+    let proxy = Arc::new(ClientProxyService::with_port(
+        Arc::clone(&connections),
+        Arc::clone(&channel),
+        Arc::new(PrintFailures::new()),
+        proxy_tracker,
+        0,
+    ));
+    let coordinator = Arc::new(RuntimeCoordinator::new(vec![proxy.clone()]));
+    coordinator.start_autostart().await.expect("starts proxy");
+
+    let proxy_addr = proxy.bound_address().expect("bound address");
+    let proxy_authority = format!("127.0.0.1:{}", proxy_addr.port());
+
+    // 4. Setup Isolated CUPS daemon
+    let cups_dir = temporary_directory("live-cups-repair");
+    std::fs::create_dir_all(&cups_dir).expect("cups tempdir");
+    let isolated_cups = start_isolated_cupsd(&cups_dir);
+    let installer = CupsQueueInstaller::with_endpoint_and_authority(
+        isolated_cups.endpoint.clone(),
+        proxy_authority.clone(),
+    );
+
+    let req = ClientQueueRequest::new(
+        LIVE_WINDOWS_SERVER,
+        PrinterName::parse(LIVE_PRINTER_NAME).expect("valid name"),
+    )
+    .expect("valid request");
+
+    let cups_name = req.cups_destination_name();
+    let uri = format!(
+        "ipp://{proxy_authority}/ipp/print/{}/{}",
+        shaprint_desktop::adapters::ipps::protocol::percent_encode(LIVE_WINDOWS_SERVER),
+        shaprint_desktop::adapters::ipps::protocol::percent_encode(LIVE_PRINTER_NAME)
+    );
+
+    // 5. Create pre-#160 raw client queue pointing to proxy without PPD
+    let raw_status = std::process::Command::new("/usr/sbin/lpadmin")
+        .args([
+            "-h",
+            &isolated_cups.endpoint.lpadmin_host_arg(),
+            "-p",
+            &cups_name,
+            "-E",
+            "-v",
+            &uri,
+            "-D",
+            "EPSON L3210 Series (ShaPrint 10.102.10.21-48631)",
+            "-o",
+            "printer-is-shared=false",
+            "-o",
+            "print-color-mode=monochrome",
+        ])
+        .status()
+        .expect("creates raw queue via lpadmin");
+    assert!(raw_status.success());
+
+    // 6. Verify initial state is raw without usable conversion or PPD
+    let dests_before = shaprint_desktop::adapters::printers::cups::query_cups_destinations(
+        &isolated_cups.endpoint,
+    )
+    .expect("queries destinations before repair");
+    let raw_dest = dests_before
+        .iter()
+        .find(|d| d.name == cups_name)
+        .expect("raw destination found");
+    assert!(
+        raw_dest.is_raw(),
+        "queue before repair must be detected as raw"
+    );
+    assert!(!raw_dest.has_usable_conversion);
+    let ppd_path = isolated_cups
+        .dir
+        .join("conf/ppd")
+        .join(format!("{cups_name}.ppd"));
+    let ppd_path_alt = isolated_cups
+        .dir
+        .join("ppd")
+        .join(format!("{cups_name}.ppd"));
+    assert!(
+        !ppd_path.exists() && !ppd_path_alt.exists(),
+        "raw queue must not have a PPD"
+    );
+
+    // 7. Execute normal install() flow which must automatically detect and repair raw queue
+    let req_clone = req.clone();
+    tokio::task::spawn_blocking(move || {
+        installer
+            .install(&req_clone)
+            .expect("install on raw queue repairs queue to driverless");
+    })
+    .await
+    .expect("installer task joined");
+
+    // 8. Verify the destination has been repaired to driverless
+    let dests_after = shaprint_desktop::adapters::printers::cups::query_cups_destinations(
+        &isolated_cups.endpoint,
+    )
+    .expect("queries destinations after repair");
+    let repaired_dest = dests_after
+        .iter()
+        .find(|d| d.name == cups_name)
+        .expect("repaired destination found");
+    assert!(!repaired_dest.is_raw(), "repaired queue must not be raw");
+    assert!(
+        repaired_dest.has_usable_conversion,
+        "repaired queue must have usable conversion"
+    );
+    assert!(
+        ppd_path.exists() || ppd_path_alt.exists(),
+        "repaired queue must have driverless PPD generated"
+    );
+    let active_ppd = if ppd_path.exists() {
+        ppd_path
+    } else {
+        ppd_path_alt
+    };
+    let ppd_content = std::fs::read_to_string(&active_ppd).expect("reads generated PPD");
+    assert!(
+        ppd_content.contains("*cupsFilter2:"),
+        "PPD must contain *cupsFilter2 conversion rule"
+    );
+    assert!(
+        ppd_content.contains("image/pwg-raster"),
+        "PPD must support raster generation (image/pwg-raster)"
+    );
+
+    // Verify user options were preserved
+    let user_opts = repaired_dest.user_options();
+    assert!(
+        user_opts
+            .iter()
+            .any(|(k, v)| k == "print-color-mode" && v == "monochrome"),
+        "user print defaults must be preserved after repair"
+    );
+
+    // 9. Submit a native test document through CUPS
+    let mut lp_cmd = std::process::Command::new("lp");
+    let host_arg = isolated_cups.endpoint.lpadmin_host_arg();
+    if !host_arg.starts_with('/') {
+        lp_cmd.arg("-h").arg(&host_arg);
+    }
+    lp_cmd.arg("-d").arg(&cups_name);
+    lp_cmd.stdin(std::process::Stdio::piped());
+    let mut child = lp_cmd.spawn().expect("spawns lp command");
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let _ = stdin.write_all(b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 595 842]/Parent 2 0 R>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n");
+    }
+    let lp_exit = child.wait().expect("lp completes");
+    println!(
+        "Submitted test document to repaired queue: exit={:?}",
+        lp_exit
+    );
+    println!(
+        "Physical paper output is recorded as unverified as this is observed remotely over LAN."
+    );
+
+    let _ = coordinator.shutdown().await;
+}
+
 struct IsolatedCupsd {
     dir: std::path::PathBuf,
     endpoint: shaprint_desktop::adapters::printers::cups::CupsServerEndpoint,
