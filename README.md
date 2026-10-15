@@ -1,11 +1,12 @@
 <div align="center">
   <h1>ShaPrint</h1>
-  <p><b>Modern, Standards-Based LAN & Cross-VLAN Printer Sharing for Windows and Android</b></p>
+  <p><b>Modern, Standards-Based LAN & Cross-VLAN Printer Sharing for Windows, Linux, and Android</b></p>
   <p><i>Desktop (Tauri 2, React, Rust) & Mobile (Android, Kotlin)</i></p>
 
   <p>
-    <a href="https://github.com/ardli-firman/sha-print/releases/latest"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?label=Windows%20Stable&color=0078D4&logo=windows" alt="Latest Desktop Release" /></a>
-    <a href="https://github.com/ardli-firman/sha-print/releases?q=nightly"><img src="https://img.shields.io/github/v/tag/ardli-firman/sha-print?filter=*nightly*&label=Windows%20Nightly&color=orange&logo=windows" alt="Latest Windows Nightly" /></a>
+    <a href="https://github.com/ardli-firman/sha-print/releases/latest"><img src="https://img.shields.io/github/v/release/ardli-firman/sha-print?label=Desktop%20Stable&color=0078D4&logo=windows" alt="Latest Desktop Release" /></a>
+    <a href="https://github.com/ardli-firman/sha-print/releases/latest"><img src="https://img.shields.io/badge/Linux-AppImage%20%7C%20DEB%20%7C%20RPM-FCC624?logo=linux&logoColor=black" alt="Linux Desktop Support" /></a>
+    <a href="https://github.com/ardli-firman/sha-print/releases?q=nightly"><img src="https://img.shields.io/github/v/tag/ardli-firman/sha-print?filter=*nightly*&label=Desktop%20Nightly&color=orange&logo=tauri" alt="Latest Desktop Nightly" /></a>
     <a href="https://github.com/ardli-firman/sha-print/releases?q=Android"><img src="https://img.shields.io/github/v/tag/ardli-firman/sha-print?filter=android*&label=Android&color=3DDC84&logo=android" alt="Latest Android Release" /></a>
   </p>
 </div>
@@ -14,7 +15,7 @@
 
 **ShaPrint** is a modern printer-sharing solution for local area networks (LAN) and cross-VLAN environments. It allows computers and mobile devices to share and access physical printers securely and transparently without relying on problematic Windows SMB printer sharing, third-party cloud services, or shared domain accounts.
 
-Communication runs entirely over standard **IPPS (Internet Printing Protocol over TLS)** on dedicated high port TCP `48631`, local client queue routing via proxy on TCP `48632` (`127.0.0.1:48632`), and zero-configuration **multicast DNS discovery** on UDP `48633` ([ADR 0001–0017](docs/adr/)).
+Communication runs entirely over standard **IPPS (Internet Printing Protocol over TLS)** on dedicated high port TCP `48631`, local client queue routing via proxy on TCP `48632` (`127.0.0.1:48632`), and zero-configuration **multicast DNS discovery** on UDP `48633` ([ADR 0001–0018](docs/adr/)).
 
 ---
 
@@ -22,11 +23,12 @@ Communication runs entirely over standard **IPPS (Internet Printing Protocol ove
 
 | Platform | Channel / Role | Package / Format | Download / Instructions |
 |---|---|---|---|
-| **🪟 Windows (10 / 11)** | **Stable** (Server & Client GUI) | `.msi`, `.exe` Installer | [⬇️ Download Latest Stable Release](https://github.com/ardli-firman/sha-print/releases/latest)<br>*(Includes x64 Setup .exe & MSI Installer)* |
-| **🌙 Windows Nightly** | **Nightly** (Bleeding-Edge Test) | `.exe` Setup Installer | [⬇️ Browse Nightly Builds (`q=nightly`)](https://github.com/ardli-firman/sha-print/releases?q=nightly)<br>*(Automated test builds & prerelease verification)* |
+| **🪟 Windows (10 / 11)** | **Stable** (Server & Client GUI) | `.msi`, `.exe` Installer | [⬇️ Download Windows Installer](https://github.com/ardli-firman/sha-print/releases/latest)<br>*(Includes x64 Setup .exe & MSI Installer)* |
+| **🐧 Linux (Universal)** | **Stable** (Portable Desktop GUI) | `.AppImage` (x86_64) | [⬇️ Download Linux AppImage](https://github.com/ardli-firman/sha-print/releases/latest)<br>*(Runs out-of-the-box on Ubuntu, Fedora, Debian, Mint, Arch, etc.)* |
+| **🐧 Ubuntu / Debian** | **Stable / Nightly** (Desktop GUI & System Daemon) | `.deb` (Ubuntu 22.04+ / Debian 11+) | [⬇️ Download DEB Package](https://github.com/ardli-firman/sha-print/releases/latest)<br>*(Installs desktop application menu launcher, icons & background daemon)*<br>[📦 Signed Repositories Guide](packaging/linux/deb) |
+| **🐧 AlmaLinux / Fedora / RHEL** | **Stable / Nightly** (Desktop GUI & System Daemon) | `.rpm` (AlmaLinux 9 / 10, Fedora, RHEL) | [⬇️ Download RPM Package](https://github.com/ardli-firman/sha-print/releases/latest)<br>*(Installs desktop application menu launcher, icons & background daemon)*<br>[📦 Signed Repositories Guide](packaging/linux/rpm) |
 | **📱 Android (8.0+)** | **Client** (Direct & PrintService) | `.apk` (Direct Install) | [⬇️ Download Latest APK](https://github.com/ardli-firman/sha-print/releases/download/android-latest/shaprint-client-latest.apk)<br>([View all Android releases](https://github.com/ardli-firman/sha-print/releases?q=Android)) |
-| **🐧 Ubuntu / Debian** | **Stable / Nightly** (Server & Client GUI & Daemon) | `.deb` (Ubuntu 22.04 / 24.04 / Debian 11 / 12) | [📦 Signed Repositories & DEB Guide](packaging/linux/deb) (`make build-deb`, `make publish-linux-repo`) |
-| **🐧 AlmaLinux / RHEL** | **Stable / Nightly** (Server, Daemon & Client GUI*) | `.rpm` (AlmaLinux 9 / 10) | [📦 Signed Repositories & RPM Guide](packaging/linux/rpm) (`make build-rpm`, `make publish-linux-repo`)<br>*GUI on AlmaLinux 10; AlmaLinux 9 is headless daemon & CLI* |
+| **🌙 Desktop Nightly** | **Nightly** (Bleeding-Edge Test) | `.exe`, `.deb`, `.AppImage` | [⬇️ Browse Nightly Builds (`q=nightly`)](https://github.com/ardli-firman/sha-print/releases?q=nightly)<br>*(Automated test builds & prerelease verification)* |
 
 *👉 [Browse all releases, nightlies, and changelogs on GitHub Releases](https://github.com/ardli-firman/sha-print/releases)*
 
@@ -106,6 +108,8 @@ All architectural decisions are documented under [`docs/adr/`](docs/adr/):
 - [ADR 0015: Manual nightly desktop releases](docs/adr/0015-manual-nightly-desktop-releases.md)
 - [ADR 0016: Android mobile client architecture](docs/adr/0016-android-mobile-client.md)
 - [ADR 0017: IPP media catalog and client queue repair](docs/adr/0017-ipp-media-catalog-and-client-queue-repair.md)
+- [ADR 0018: Linux CUPS system daemon, socket control plane, and desktop GUI integration](docs/adr/0018-linux-cups-system-daemon.md)
+- [ADR 0019: Safe Linux diagnostics and journal events](docs/adr/0019-safe-linux-diagnostics-and-journal-events.md)
 
 ---
 
@@ -116,7 +120,10 @@ All architectural decisions are documented under [`docs/adr/`](docs/adr/):
 **Prerequisites:**
 - [Bun](https://bun.sh) (v1.0+)
 - [Rust](https://rustup.rs) (stable)
-- Windows 10/11 with C++ Build Tools (for native Windows builds)
+- **Windows:** Windows 10/11 with Visual Studio C++ Build Tools
+- **Linux:** WebKitGTK 4.1 development libraries, GTK 3, and build essentials:
+  - *Ubuntu / Debian:* `sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev`
+  - *Fedora / AlmaLinux:* `sudo dnf install -y webkit2gtk4.1-devel gtk3-devel openssl-devel libappindicator-gtk3-devel`
 
 ```bash
 # Install frontend dependencies
@@ -135,8 +142,8 @@ bun run test
 # Rust backend checks and unit tests (from apps/desktop/src-tauri)
 cd apps/desktop/src-tauri
 cargo fmt --all -- --check
-cargo clippy --no-default-features --all-targets -- -D warnings
-cargo test --no-default-features
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
 ### Android Mobile Client (`apps/android`)
@@ -159,16 +166,30 @@ cd apps/android
 
 ## 📦 Building Releases
 
+### Desktop Application (Windows & Linux)
+
 ```bash
-# Desktop: Build native Windows NSIS installer and MSI bundle
+# Tauri desktop bundles:
+# - Windows: NSIS Setup .exe and .msi installer
+# - Linux: Portable .AppImage and .deb bundle
 bun run tauri build
 
-# Android: Build release APK or AAB
+# Linux System packages (ships shaprintd daemon, shaprintctl CLI, shaprint-desktop GUI, .desktop launcher & icons):
+# Debian / Ubuntu (.deb):
+bash packaging/linux/deb/build-deb.sh
+
+# AlmaLinux / Fedora / RHEL (.rpm):
+bash packaging/linux/rpm/build-rpm.sh
+```
+
+Built desktop artifacts are output to `apps/desktop/src-tauri/target/release/bundle/`, `apps/desktop/src-tauri/target/deb/`, and `apps/desktop/src-tauri/target/rpm/`.
+
+### Android Mobile Client
+
+```bash
 cd apps/android
 ./gradlew assembleRelease
 ```
-
-Built desktop artifacts are output to `apps/desktop/src-tauri/target/release/bundle/`.
 
 ---
 
