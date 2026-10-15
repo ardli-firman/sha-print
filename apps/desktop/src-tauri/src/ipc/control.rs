@@ -90,6 +90,13 @@ impl MachineControl {
     pub fn client(&self) -> &DaemonClient {
         &self.client
     }
+
+    async fn run_mutation(&self, mutation: ElevatedMutation) -> Result<ElevatedOutcome, AppError> {
+        // An unreachable daemon cannot apply the requested change. Report its recovery
+        // before asking the user to authenticate for a helper that would inevitably fail.
+        self.client.status().await?;
+        self.elevated.run(mutation).await
+    }
 }
 
 /// The control socket the window talks to: `SHAPRINT_SOCKET` when set, the machine default
@@ -179,8 +186,7 @@ impl ControlPlane {
             }
             #[cfg(unix)]
             Self::Machine(machine) => match machine
-                .elevated
-                .run(ElevatedMutation::StartService(id.as_str().to_owned()))
+                .run_mutation(ElevatedMutation::StartService(id.as_str().to_owned()))
                 .await?
             {
                 ElevatedOutcome::Status(status) => Ok(status),
@@ -198,8 +204,7 @@ impl ControlPlane {
             }
             #[cfg(unix)]
             Self::Machine(machine) => match machine
-                .elevated
-                .run(ElevatedMutation::StopService(id.as_str().to_owned()))
+                .run_mutation(ElevatedMutation::StopService(id.as_str().to_owned()))
                 .await?
             {
                 ElevatedOutcome::Status(status) => Ok(status),
@@ -218,7 +223,7 @@ impl ControlPlane {
                 "stopping the machine daemon is only available when ShaPrint runs as a system service",
             )),
             #[cfg(unix)]
-            Self::Machine(machine) => match machine.elevated.run(ElevatedMutation::StopDaemon).await? {
+            Self::Machine(machine) => match machine.run_mutation(ElevatedMutation::StopDaemon).await? {
                 ElevatedOutcome::Status(status) => Ok(status),
                 other => Err(unexpected_outcome("stop the machine daemon", &other)),
             },
@@ -317,8 +322,7 @@ impl ControlPlane {
                 let names: Vec<String> =
                     printers.iter().map(|printer| printer.to_string()).collect();
                 match machine
-                    .elevated
-                    .run(ElevatedMutation::SetSharedPrinters(names))
+                    .run_mutation(ElevatedMutation::SetSharedPrinters(names))
                     .await?
                 {
                     ElevatedOutcome::LocalPrinters(printers) => Ok(LocalPrintersDto { printers }),
@@ -344,8 +348,7 @@ impl ControlPlane {
             #[cfg(unix)]
             Self::Machine(machine) => {
                 match machine
-                    .elevated
-                    .run(ElevatedMutation::SetNetworkChannel(channel.to_owned()))
+                    .run_mutation(ElevatedMutation::SetNetworkChannel(channel.to_owned()))
                     .await?
                 {
                     ElevatedOutcome::NetworkChannel(status) => Ok(status.configured),
@@ -389,8 +392,7 @@ impl ControlPlane {
                 .map(ServerConnectionReviewDto::from),
             #[cfg(unix)]
             Self::Machine(machine) => match machine
-                .elevated
-                .run(ElevatedMutation::ApproveServer {
+                .run_mutation(ElevatedMutation::ApproveServer {
                     address: address.to_owned(),
                     fingerprint: fingerprint.to_owned(),
                 })
@@ -463,8 +465,7 @@ impl ControlPlane {
             #[cfg(unix)]
             Self::Machine(machine) => {
                 machine
-                    .elevated
-                    .run(ElevatedMutation::ForgetServer(address.to_owned()))
+                    .run_mutation(ElevatedMutation::ForgetServer(address.to_owned()))
                     .await?;
                 Ok(())
             }
@@ -517,8 +518,7 @@ impl ControlPlane {
                 .map(|queue| ClientQueueDto::from(&queue)),
             #[cfg(unix)]
             Self::Machine(machine) => match machine
-                .elevated
-                .run(ElevatedMutation::InstallClientQueue {
+                .run_mutation(ElevatedMutation::InstallClientQueue {
                     address: address.to_owned(),
                     printer: printer.to_owned(),
                 })
@@ -544,8 +544,7 @@ impl ControlPlane {
                 .map(|queue| ClientQueueDto::from(&queue)),
             #[cfg(unix)]
             Self::Machine(machine) => match machine
-                .elevated
-                .run(ElevatedMutation::RepairClientQueue {
+                .run_mutation(ElevatedMutation::RepairClientQueue {
                     address: address.to_owned(),
                     printer: printer.to_owned(),
                 })

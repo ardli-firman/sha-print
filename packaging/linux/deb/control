@@ -4,8 +4,8 @@ Section: net
 Priority: optional
 Architecture: amd64
 Maintainer: ShaPrint Maintainers <maintainers@shaprint.local>
-Depends: systemd, cups, adduser
-Recommends: libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37, polkitd | policykit-1, ufw | firewalld
+Depends: systemd, cups, adduser, polkitd | policykit-1, pkexec | policykit-1
+Recommends: libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37, ufw | firewalld
 Homepage: https://github.com/ardli-firman/sha-print
 Description: ShaPrint print-sharing and client-proxy daemon
  ShaPrint shares printers over LAN and cross-VLAN using standard IPPS and

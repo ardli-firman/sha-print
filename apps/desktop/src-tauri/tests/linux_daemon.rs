@@ -2407,7 +2407,15 @@ async fn shaprintctl_diagnostics_and_status_distinguish_subsystem_failures_with_
 
     // Create mock firewall script that fails (returns code 1):
     let fake_firewall = root.join("fake-firewall.sh");
-    std::fs::write(&fake_firewall, "#!/bin/sh\nexit 1\n").expect("writes fake firewall script");
+    let firewall_invoked = root.join("firewall-invoked");
+    std::fs::write(
+        &fake_firewall,
+        format!(
+            "#!/bin/sh\ntouch '{}'\nexit 1\n",
+            firewall_invoked.display()
+        ),
+    )
+    .expect("writes fake firewall script");
     std::fs::set_permissions(&fake_firewall, std::fs::Permissions::from_mode(0o755))
         .expect("sets exec permissions");
     std::env::set_var("SHAPRINT_FIREWALL_PROGRAM", &fake_firewall);
@@ -2497,7 +2505,7 @@ async fn shaprintctl_diagnostics_and_status_distinguish_subsystem_failures_with_
     //    - daemon: ok
     //    - cups: failed (queue-unavailable, sudo systemctl start cups)
     //    - credential: failed (not-authorized, sudo shaprintctl network-channel set)
-    //    - firewall: failed (not-authorized, sudo firewall-cmd)
+    //    - firewall: not inspected without administrator access, failed when explicitly inspected
     let diag_output = Command::new(ctl_bin)
         .env("SHAPRINT_FIREWALL_PROGRAM", &fake_firewall)
         .env("SHAPRINT_FIREWALL_CMD", &fake_firewall)
@@ -2531,10 +2539,21 @@ async fn shaprintctl_diagnostics_and_status_distinguish_subsystem_failures_with_
     assert!(diag_text.contains("code: not-authorized"));
     assert!(diag_text.contains("sudo shaprintctl network-channel set"));
 
-    assert!(
-        diag_text.contains("[FAILED] firewall:"),
-        "expected firewall failed: {diag_text}"
-    );
+    if shaprint_desktop::adapters::daemon::current_effective_uid() == Some(0) {
+        assert!(
+            diag_text.contains("[FAILED] firewall:"),
+            "expected firewall failure: {diag_text}"
+        );
+    } else {
+        assert!(
+            diag_text.contains("[WARN] firewall:"),
+            "expected passive firewall warning: {diag_text}"
+        );
+        assert!(
+            !firewall_invoked.exists(),
+            "passive CLI and daemon diagnostics must not launch firewall authorization"
+        );
+    }
     assert!(diag_text.contains("code: not-authorized"));
     assert!(diag_text.contains("sudo firewall-cmd"));
 

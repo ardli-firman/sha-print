@@ -69,7 +69,8 @@ impl Machine {
         let pkexec = script(&helper_dir, "pkexec", &body);
         let control = ControlPlane::machine_with(
             DaemonClient::new(&socket),
-            ElevatedCtl::new(pkexec, env!("CARGO_BIN_EXE_shaprintctl"), &socket),
+            ElevatedCtl::new(pkexec, env!("CARGO_BIN_EXE_shaprintctl"), &socket)
+                .with_authorization_program(script(&helper_dir, "pkcheck", "exit 0")),
         );
 
         Self {
@@ -205,6 +206,35 @@ async fn gui_reads_the_machine_daemon_without_elevation_or_state_files() {
     );
 
     machine.stop().await;
+}
+
+#[tokio::test]
+async fn unavailable_daemon_reports_recovery_without_asking_for_setup_authorization() {
+    let root = temporary_directory("desktop-control-offline-setup");
+    std::fs::create_dir_all(&root).unwrap();
+    let socket = root.join("missing.sock");
+    let marker = root.join("authorization-invoked");
+    let checker = script(
+        &root,
+        "pkcheck",
+        &format!("touch '{}'; exit 0", marker.display()),
+    );
+    let pkexec = script(&root, "pkexec", r#"exec "$@""#);
+    let control = ControlPlane::machine_with(
+        DaemonClient::new(&socket),
+        ElevatedCtl::new(pkexec, env!("CARGO_BIN_EXE_shaprintctl"), &socket)
+            .with_authorization_program(checker),
+    );
+    let error = control
+        .start_service(ServiceId::ClientProxy)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ServerUnavailable);
+    assert!(
+        !marker.exists(),
+        "a missing daemon must be reported before requesting a password"
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// Every administrative mutation runs the same `shaprintctl` CLI the headless operator uses,
