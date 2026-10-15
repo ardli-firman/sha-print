@@ -420,20 +420,34 @@ async fn live_windows_server_raw_queue_repair_and_driverless_transition() {
         lp_cmd.arg("-h").arg(&host_arg);
     }
     lp_cmd.arg("-d").arg(&cups_name);
-    lp_cmd.stdin(std::process::Stdio::piped());
-    let mut child = lp_cmd.spawn().expect("spawns lp command");
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        let _ = stdin.write_all(b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 595 842]/Parent 2 0 R>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n");
-    }
-    let lp_exit = child.wait().expect("lp completes");
+
+    let native_testpage = std::path::Path::new("/usr/share/cups/data/default-testpage.pdf");
+    let lp_exit = if native_testpage.exists() {
+        lp_cmd.arg(native_testpage);
+        lp_cmd.status().expect("runs lp with native testpage")
+    } else {
+        lp_cmd.stdin(std::process::Stdio::piped());
+        let mut child = lp_cmd.spawn().expect("spawns lp command");
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 595 842]/Parent 2 0 R>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n");
+        }
+        child.wait().expect("lp completes")
+    };
+
     println!(
-        "Submitted test document to repaired queue: exit={:?}",
+        "Submitted native test document to repaired queue: exit={:?}",
         lp_exit
     );
-    println!(
-        "Physical paper output is recorded as unverified as this is observed remotely over LAN."
+    assert!(
+        lp_exit.success(),
+        "lp must succeed in spooling native testpage"
     );
+
+    // Allow CUPS driverless raster filter and proxy a moment to process the spooler job.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    println!("Print output is recorded as unverified as this is observed remotely over LAN.");
 
     let _ = coordinator.shutdown().await;
 }

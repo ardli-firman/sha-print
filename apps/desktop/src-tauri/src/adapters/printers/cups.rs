@@ -461,7 +461,9 @@ pub fn query_cups_destinations(
 
             let name_c = CString::new(name.as_str()).ok();
             let has_usable_conversion = if make_and_model.eq_ignore_ascii_case("Local Raw Printer")
-                || make_and_model.to_ascii_lowercase().contains("raw")
+                || make_and_model
+                    .split(|c: char| !c.is_alphanumeric())
+                    .any(|w| w.eq_ignore_ascii_case("raw"))
             {
                 false
             } else if let Some(ref c_name) = name_c {
@@ -470,8 +472,9 @@ pub fn query_cups_destinations(
                     false
                 } else {
                     let ppd_path = CStr::from_ptr(ppd_ptr).to_string_lossy();
+                    let content = std::fs::read_to_string(ppd_path.as_ref()).unwrap_or_default();
                     let _ = std::fs::remove_file(ppd_path.as_ref());
-                    true
+                    content.contains("*cupsFilter2:") || content.contains("*cupsFilter:")
                 }
             } else {
                 false

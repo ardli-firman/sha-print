@@ -92,6 +92,7 @@ impl CupsQueueInstaller {
         let cups_name = request.cups_destination_name();
         let human_description = request.queue_name().as_str();
         let mut preserved_options = Vec::new();
+        let is_new_queue = !destinations.iter().any(|d| d.name == cups_name);
 
         if let Some(existing) = destinations.iter().find(|d| d.name == cups_name) {
             let record = SpoolerRecord::new(&existing.name, &existing.device_uri);
@@ -133,10 +134,6 @@ impl CupsQueueInstaller {
 
                     // Preserve user print defaults where valid.
                     preserved_options = existing.user_options();
-
-                    if recreate_existing {
-                        self.delete_destination(&endpoint, &cups_name)?;
-                    }
                 }
                 _ => {
                     return Err(SetupFailure::new(
@@ -150,9 +147,18 @@ impl CupsQueueInstaller {
             }
         }
 
-        self.configure_destination(&endpoint, &cups_name, &uri, human_description)?;
+        self.configure_destination(&endpoint, &cups_name, &uri, human_description, is_new_queue)?;
         self.apply_user_options(&endpoint, &cups_name, &preserved_options);
         Ok(())
+    }
+
+    fn lpadmin_command(&self, endpoint: &CupsServerEndpoint) -> Command {
+        let mut cmd = Command::new(locate_lpadmin());
+        let host_arg = endpoint.lpadmin_host_arg();
+        if !host_arg.starts_with('/') {
+            cmd.arg("-h").arg(&host_arg);
+        }
+        cmd
     }
 
     fn apply_user_options(
@@ -164,11 +170,7 @@ impl CupsQueueInstaller {
         if options.is_empty() {
             return;
         }
-        let mut cmd = Command::new(locate_lpadmin());
-        let host_arg = endpoint.lpadmin_host_arg();
-        if !host_arg.starts_with('/') {
-            cmd.arg("-h").arg(&host_arg);
-        }
+        let mut cmd = self.lpadmin_command(endpoint);
         cmd.arg("-p").arg(cups_name);
         for (key, val) in options {
             cmd.arg("-o").arg(format!("{key}={val}"));
@@ -181,11 +183,7 @@ impl CupsQueueInstaller {
         endpoint: &CupsServerEndpoint,
         cups_name: &str,
     ) -> Result<(), SetupFailure> {
-        let mut cmd = Command::new(locate_lpadmin());
-        let host_arg = endpoint.lpadmin_host_arg();
-        if !host_arg.starts_with('/') {
-            cmd.arg("-h").arg(&host_arg);
-        }
+        let mut cmd = self.lpadmin_command(endpoint);
         let output = cmd.arg("-x").arg(cups_name).output().map_err(|error| {
             SetupFailure::new(
                 SetupFailureKind::Other,
@@ -205,6 +203,7 @@ impl CupsQueueInstaller {
         cups_name: &str,
         uri: &str,
         description: &str,
+        is_new_queue: bool,
     ) -> Result<(), SetupFailure> {
         // Enforce driverless IPP Everywhere (`-m everywhere`). Never fall back to an unfiltered
         // raw queue if capability negotiation or PPD generation fails (issue #160).
@@ -212,7 +211,11 @@ impl CupsQueueInstaller {
         if everywhere.status.success() {
             return Ok(());
         }
-        let _ = self.delete_destination(endpoint, cups_name);
+        // Only remove incomplete queue if this was a fresh installation.
+        // Never delete or destroy a pre-existing queue on repair failure.
+        if is_new_queue {
+            let _ = self.delete_destination(endpoint, cups_name);
+        }
         let stderr = String::from_utf8_lossy(&everywhere.stderr);
         Err(classify_lpadmin_failure(stderr.trim()))
     }
@@ -225,11 +228,7 @@ impl CupsQueueInstaller {
         description: &str,
         everywhere: bool,
     ) -> Result<std::process::Output, SetupFailure> {
-        let mut cmd = Command::new(locate_lpadmin());
-        let host_arg = endpoint.lpadmin_host_arg();
-        if !host_arg.starts_with('/') {
-            cmd.arg("-h").arg(&host_arg);
-        }
+        let mut cmd = self.lpadmin_command(endpoint);
         cmd.arg("-p")
             .arg(cups_name)
             .arg("-E")
