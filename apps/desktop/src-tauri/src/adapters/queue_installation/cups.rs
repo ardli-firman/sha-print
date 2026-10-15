@@ -14,7 +14,9 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::adapters::printers::cups::{query_cups_destinations, CupsServerEndpoint};
+use crate::adapters::printers::cups::{
+    query_cups_active_jobs, query_cups_destinations, CupsServerEndpoint,
+};
 use crate::application::QueueInstaller;
 use crate::domain::{
     AppError, ClientQueueRequest, SetupFailure, SetupFailureKind, SpoolerRecord,
@@ -89,14 +91,49 @@ impl CupsQueueInstaller {
 
         let cups_name = request.cups_destination_name();
         let human_description = request.queue_name().as_str();
+        let mut preserved_options = Vec::new();
+        let is_new_queue = !destinations.iter().any(|d| d.name == cups_name);
 
         if let Some(existing) = destinations.iter().find(|d| d.name == cups_name) {
             let record = SpoolerRecord::new(&existing.name, &existing.device_uri);
             match record.classify(&self.proxy_authority) {
-                SpoolerRecordClassification::RecognisedClientQueue(_) => {
-                    if recreate_existing {
-                        self.delete_destination(&endpoint, &cups_name)?;
+                SpoolerRecordClassification::RecognisedClientQueue(q) => {
+                    // Refuse conflicting destination
+                    if q.server_address() != request.server_address()
+                        || q.printer_name() != request.printer()
+                    {
+                        return Err(SetupFailure::new(
+                            SetupFailureKind::ExistingQueueConflict,
+                            format!(
+                                "existing CUPS queue '{cups_name}' points to conflicting destination server='{}' printer='{}'",
+                                q.server_address(),
+                                q.printer_name()
+                            ),
+                        ));
                     }
+
+                    // Leave healthy Client queues intact if recreate was not explicitly requested.
+                    if existing.has_usable_conversion && !recreate_existing {
+                        return Ok(());
+                    }
+
+                    // Existing queue is either raw (no usable conversion) or explicit repair requested.
+                    // Check for active print jobs to ensure no pending jobs are discarded.
+                    let active_jobs =
+                        query_cups_active_jobs(&endpoint, &cups_name).map_err(|e| {
+                            SetupFailure::new(SetupFailureKind::SpoolerUnavailable, e.message())
+                        })?;
+                    if active_jobs > 0 {
+                        return Err(SetupFailure::new(
+                            SetupFailureKind::QueueBusy,
+                            format!(
+                                "CUPS queue '{cups_name}' has {active_jobs} pending print jobs; cancel or wait for them to finish before repairing",
+                            ),
+                        ));
+                    }
+
+                    // Preserve user print defaults where valid.
+                    preserved_options = existing.user_options();
                 }
                 _ => {
                     return Err(SetupFailure::new(
@@ -110,7 +147,35 @@ impl CupsQueueInstaller {
             }
         }
 
-        self.configure_destination(&endpoint, &cups_name, &uri, human_description)
+        self.configure_destination(&endpoint, &cups_name, &uri, human_description, is_new_queue)?;
+        self.apply_user_options(&endpoint, &cups_name, &preserved_options);
+        Ok(())
+    }
+
+    fn lpadmin_command(&self, endpoint: &CupsServerEndpoint) -> Command {
+        let mut cmd = Command::new(locate_lpadmin());
+        let host_arg = endpoint.lpadmin_host_arg();
+        if !host_arg.starts_with('/') {
+            cmd.arg("-h").arg(&host_arg);
+        }
+        cmd
+    }
+
+    fn apply_user_options(
+        &self,
+        endpoint: &CupsServerEndpoint,
+        cups_name: &str,
+        options: &[(String, String)],
+    ) {
+        if options.is_empty() {
+            return;
+        }
+        let mut cmd = self.lpadmin_command(endpoint);
+        cmd.arg("-p").arg(cups_name);
+        for (key, val) in options {
+            cmd.arg("-o").arg(format!("{key}={val}"));
+        }
+        let _ = cmd.output();
     }
 
     fn delete_destination(
@@ -118,11 +183,7 @@ impl CupsQueueInstaller {
         endpoint: &CupsServerEndpoint,
         cups_name: &str,
     ) -> Result<(), SetupFailure> {
-        let mut cmd = Command::new(locate_lpadmin());
-        let host_arg = endpoint.lpadmin_host_arg();
-        if !host_arg.starts_with('/') {
-            cmd.arg("-h").arg(&host_arg);
-        }
+        let mut cmd = self.lpadmin_command(endpoint);
         let output = cmd.arg("-x").arg(cups_name).output().map_err(|error| {
             SetupFailure::new(
                 SetupFailureKind::Other,
@@ -142,6 +203,7 @@ impl CupsQueueInstaller {
         cups_name: &str,
         uri: &str,
         description: &str,
+        is_new_queue: bool,
     ) -> Result<(), SetupFailure> {
         // Enforce driverless IPP Everywhere (`-m everywhere`). Never fall back to an unfiltered
         // raw queue if capability negotiation or PPD generation fails (issue #160).
@@ -149,7 +211,11 @@ impl CupsQueueInstaller {
         if everywhere.status.success() {
             return Ok(());
         }
-        let _ = self.delete_destination(endpoint, cups_name);
+        // Only remove incomplete queue if this was a fresh installation.
+        // Never delete or destroy a pre-existing queue on repair failure.
+        if is_new_queue {
+            let _ = self.delete_destination(endpoint, cups_name);
+        }
         let stderr = String::from_utf8_lossy(&everywhere.stderr);
         Err(classify_lpadmin_failure(stderr.trim()))
     }
@@ -162,11 +228,7 @@ impl CupsQueueInstaller {
         description: &str,
         everywhere: bool,
     ) -> Result<std::process::Output, SetupFailure> {
-        let mut cmd = Command::new(locate_lpadmin());
-        let host_arg = endpoint.lpadmin_host_arg();
-        if !host_arg.starts_with('/') {
-            cmd.arg("-h").arg(&host_arg);
-        }
+        let mut cmd = self.lpadmin_command(endpoint);
         cmd.arg("-p")
             .arg(cups_name)
             .arg("-E")
@@ -594,5 +656,220 @@ mod tests {
         assert!(out.status.success());
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(stdout.contains("*cupsFilter2:"));
+    }
+
+    #[test]
+    fn raw_client_queue_is_detected_and_repaired_to_driverless_preserving_user_defaults() {
+        if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
+            return;
+        }
+
+        let cupsd = IsolatedCupsd::start();
+        let req = request("10.0.0.5:48631", "Office Printer");
+        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        let proxy_authority = format!("127.0.0.1:{}", mock.port);
+        let installer = CupsQueueInstaller::with_endpoint_and_authority(
+            cupsd.endpoint.clone(),
+            proxy_authority,
+        );
+
+        let cups_name = req.cups_destination_name();
+        let uri = format!(
+            "ipp://127.0.0.1:{}/ipp/print/10.0.0.5%3A48631/Office%20Printer",
+            mock.port
+        );
+
+        // 1. Reproduce the pre-#160 raw queue: create queue without -m everywhere
+        let status = Command::new("/usr/sbin/lpadmin")
+            .args([
+                "-h",
+                &cupsd.endpoint.lpadmin_host_arg(),
+                "-p",
+                &cups_name,
+                "-E",
+                "-v",
+                &uri,
+                "-D",
+                "Office Printer (ShaPrint 10.0.0.5-48631)",
+                "-o",
+                "printer-is-shared=false",
+                "-o",
+                "print-color-mode=monochrome",
+            ])
+            .status()
+            .expect("creates raw queue with user options");
+        assert!(status.success());
+
+        // Verify initial state is raw without PPD and with user options
+        let dests_init =
+            query_cups_destinations(&cupsd.endpoint).expect("queries cups destinations");
+        assert_eq!(dests_init.len(), 1);
+        let raw_dest = &dests_init[0];
+        assert_eq!(raw_dest.name, cups_name);
+        assert!(!raw_dest.has_usable_conversion);
+        assert!(raw_dest.is_raw());
+        let user_opts = raw_dest.user_options();
+        assert!(user_opts
+            .iter()
+            .any(|(k, v)| k == "print-color-mode" && v == "monochrome"));
+
+        let ppd_path = cupsd.dir.join("conf/ppd").join(format!("{cups_name}.ppd"));
+        let ppd_path_alt = cupsd.dir.join("ppd").join(format!("{cups_name}.ppd"));
+        assert!(
+            !ppd_path.exists() && !ppd_path_alt.exists(),
+            "raw queue must not have a PPD"
+        );
+
+        // 2. Normal installation flow detects the raw queue and idempotently repairs it
+        installer
+            .install(&req)
+            .expect("install on raw queue must trigger automatic repair to driverless");
+
+        let dests_repaired =
+            query_cups_destinations(&cupsd.endpoint).expect("queries cups destinations");
+        assert_eq!(dests_repaired.len(), 1);
+        let repaired = &dests_repaired[0];
+        assert_eq!(repaired.name, cups_name);
+        assert_eq!(repaired.device_uri, uri);
+        assert!(
+            repaired.has_usable_conversion,
+            "repaired queue must have usable conversion"
+        );
+        assert!(!repaired.is_raw());
+        assert!(
+            ppd_path.exists() || ppd_path_alt.exists(),
+            "repaired queue must now have a generated driverless PPD"
+        );
+
+        // Verify user defaults were preserved
+        let opts_after = repaired.user_options();
+        assert!(
+            opts_after
+                .iter()
+                .any(|(k, v)| k == "print-color-mode" && v == "monochrome"),
+            "print-color-mode default must be preserved"
+        );
+
+        // 3. Subsequent install is idempotent and leaves the healthy queue intact
+        installer
+            .install(&req)
+            .expect("subsequent install on healthy queue must succeed idempotently");
+
+        // 4. Explicit repair also succeeds cleanly
+        installer
+            .repair(&req)
+            .expect("explicit repair succeeds cleanly");
+    }
+
+    #[test]
+    fn repair_defers_when_pending_print_jobs_exist() {
+        if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
+            return;
+        }
+
+        let cupsd = IsolatedCupsd::start();
+        let req = request("10.0.0.5:48631", "Office Printer");
+        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        let proxy_authority = format!("127.0.0.1:{}", mock.port);
+        let installer = CupsQueueInstaller::with_endpoint_and_authority(
+            cupsd.endpoint.clone(),
+            proxy_authority,
+        );
+
+        // Install the queue
+        installer.install(&req).expect("first install succeeds");
+        let cups_name = req.cups_destination_name();
+
+        // Stop the printer queue so submitted jobs remain pending in spooler
+        let stop_status = Command::new("/usr/sbin/cupsdisable")
+            .args(["-h", &cupsd.endpoint.lpadmin_host_arg(), &cups_name])
+            .status();
+        let stopped = stop_status.map(|s| s.success()).unwrap_or(false);
+        if !stopped {
+            // Alternatively stop via lpadmin -p cups_name -u
+            let _ = Command::new("/usr/sbin/lpadmin")
+                .args([
+                    "-h",
+                    &cupsd.endpoint.lpadmin_host_arg(),
+                    "-p",
+                    &cups_name,
+                    "-r",
+                    "hold",
+                ])
+                .status();
+        }
+
+        // Submit a job using lp
+        let mut lp = Command::new("lp");
+        let host_arg = cupsd.endpoint.lpadmin_host_arg();
+        if !host_arg.starts_with('/') {
+            lp.arg("-h").arg(&host_arg);
+        }
+        lp.arg("-d").arg(&cups_name);
+        lp.stdin(std::process::Stdio::piped());
+        if let Ok(mut child) = lp.spawn() {
+            use std::io::Write;
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(
+                    b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF",
+                );
+            }
+            let _ = child.wait();
+        }
+
+        let active = query_cups_active_jobs(&cupsd.endpoint, &cups_name).unwrap_or(0);
+        if active > 0 {
+            // Repair must fail with QueueBusy and NOT discard the job
+            let err = installer
+                .repair(&req)
+                .expect_err("repair must fail when pending jobs exist");
+            assert_eq!(err.kind(), SetupFailureKind::QueueBusy);
+
+            // Job must still exist
+            let active_after = query_cups_active_jobs(&cupsd.endpoint, &cups_name).unwrap_or(0);
+            assert_eq!(active_after, active, "pending jobs must not be discarded");
+        }
+    }
+
+    #[test]
+    fn conflicting_destination_is_rejected_without_overwriting() {
+        if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
+            return;
+        }
+
+        let cupsd = IsolatedCupsd::start();
+        let req1 = request("10.0.0.5:48631", "Office Printer");
+        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        let proxy_authority = format!("127.0.0.1:{}", mock.port);
+        let installer = CupsQueueInstaller::with_endpoint_and_authority(
+            cupsd.endpoint.clone(),
+            proxy_authority.clone(),
+        );
+
+        // Install valid queue
+        installer.install(&req1).expect("first install succeeds");
+
+        // Request with different server but derived to conflicting queue
+        let _req2 = request("10.0.0.99:48631", "Office Printer");
+        let cups_name = req1.cups_destination_name();
+
+        // Suppose someone manually pointed existing cups_name to another ShaPrint destination
+        let other_uri =
+            format!("ipp://{proxy_authority}/ipp/print/10.0.0.99%3A48631/Other%20Printer");
+        let _ = Command::new("/usr/sbin/lpadmin")
+            .args([
+                "-h",
+                &cupsd.endpoint.lpadmin_host_arg(),
+                "-p",
+                &cups_name,
+                "-v",
+                &other_uri,
+            ])
+            .status();
+
+        let err = installer
+            .install(&req1)
+            .expect_err("conflicting destination must be rejected");
+        assert_eq!(err.kind(), SetupFailureKind::ExistingQueueConflict);
     }
 }

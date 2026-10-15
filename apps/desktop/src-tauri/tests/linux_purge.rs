@@ -199,6 +199,9 @@ exit 0
             printer_info: "Office_HP (192.168.1.10)".to_string(),
             state: Some(3),
             accepting_jobs: true,
+            make_and_model: "Generic IPP Everywhere Printer".to_string(),
+            has_usable_conversion: true,
+            options: Vec::new(),
         },
         CupsDestinationRecord {
             name: "local_laser_printer".to_string(),
@@ -206,6 +209,9 @@ exit 0
             printer_info: "Physical Local Office Printer".to_string(),
             state: Some(3),
             accepting_jobs: true,
+            make_and_model: "HP LaserJet 1020".to_string(),
+            has_usable_conversion: true,
+            options: Vec::new(),
         },
         CupsDestinationRecord {
             name: "foreign_ipp_queue".to_string(),
@@ -213,6 +219,9 @@ exit 0
             printer_info: "Corporate CUPS Queue".to_string(),
             state: Some(3),
             accepting_jobs: true,
+            make_and_model: "Generic PostScript Printer".to_string(),
+            has_usable_conversion: true,
+            options: Vec::new(),
         },
     ];
 
@@ -279,6 +288,9 @@ exit 1
         printer_info: "Fail_Printer (192.168.1.10)".to_string(),
         state: Some(3),
         accepting_jobs: true,
+        make_and_model: "Generic IPP Everywhere Printer".to_string(),
+        has_usable_conversion: true,
+        options: Vec::new(),
     }];
 
     let options = PurgeExecutionOptions {

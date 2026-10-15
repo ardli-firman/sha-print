@@ -5,7 +5,7 @@
 //! `libcups` C API calls (`httpConnect2`, `cupsGetDests2`, `cupsCreateJob`, `cupsStartDocument`,
 //! `cupsWriteRequestData`, `cupsFinishDocument`) at runtime instead of parsing localized CLI text.
 
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_long, c_void, CStr, CString};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
@@ -97,6 +97,31 @@ type CupsCancelJob2Fn = unsafe extern "C" fn(
 type CupsLastErrorFn = unsafe extern "C" fn() -> c_int;
 type CupsLastErrorStringFn = unsafe extern "C" fn() -> *const c_char;
 
+#[repr(C)]
+struct CupsJob {
+    id: c_int,
+    dest: *mut c_char,
+    title: *mut c_char,
+    user: *mut c_char,
+    state: c_int,
+    size: c_int,
+    priority: c_int,
+    processing_time: c_long,
+    creation_time: c_long,
+    completion_time: c_long,
+    format: *mut c_char,
+}
+
+type CupsGetJobs2Fn = unsafe extern "C" fn(
+    http: *mut c_void,
+    jobs: *mut *mut CupsJob,
+    dest: *const c_char,
+    myjobs: c_int,
+    whichjobs: c_int,
+) -> c_int;
+type CupsFreeJobsFn = unsafe extern "C" fn(num_jobs: c_int, jobs: *mut CupsJob);
+type CupsGetPPD2Fn = unsafe extern "C" fn(http: *mut c_void, name: *const c_char) -> *const c_char;
+
 struct LibCups {
     http_connect2: HttpConnect2Fn,
     http_close: HttpCloseFn,
@@ -112,6 +137,9 @@ struct LibCups {
     cups_cancel_job2: CupsCancelJob2Fn,
     cups_last_error: CupsLastErrorFn,
     cups_last_error_string: CupsLastErrorStringFn,
+    cups_get_jobs2: CupsGetJobs2Fn,
+    cups_free_jobs: CupsFreeJobsFn,
+    cups_get_ppd2: CupsGetPPD2Fn,
 }
 
 // Safety: `LibCups` holds immutable function pointers resolved from the process-wide `libcups.so.2`.
@@ -173,6 +201,9 @@ fn load_libcups() -> Result<LibCups, String> {
             cups_cancel_job2: sym(handle, b"cupsCancelJob2\0")?,
             cups_last_error: sym(handle, b"cupsLastError\0")?,
             cups_last_error_string: sym(handle, b"cupsLastErrorString\0")?,
+            cups_get_jobs2: sym(handle, b"cupsGetJobs2\0")?,
+            cups_free_jobs: sym(handle, b"cupsFreeJobs\0")?,
+            cups_get_ppd2: sym(handle, b"cupsGetPPD2\0")?,
         })
     }
 }
@@ -299,6 +330,78 @@ pub struct CupsDestinationRecord {
     pub printer_info: String,
     pub state: Option<i32>,
     pub accepting_jobs: bool,
+    pub make_and_model: String,
+    pub has_usable_conversion: bool,
+    pub options: Vec<(String, String)>,
+}
+
+impl CupsDestinationRecord {
+    pub fn is_raw(&self) -> bool {
+        !self.has_usable_conversion
+    }
+
+    /// User-configured print defaults (excluding CUPS internal/system options).
+    pub fn user_options(&self) -> Vec<(String, String)> {
+        self.options
+            .iter()
+            .filter(|(k, _)| !is_cups_system_option(k))
+            .cloned()
+            .collect()
+    }
+}
+
+/// Identifies internal / spooler-managed destination options in CUPS that should not be treated
+/// as user print defaults.
+pub fn is_cups_system_option(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "device-uri"
+            | "printer-name"
+            | "printer-info"
+            | "printer-is-accepting-jobs"
+            | "printer-is-shared"
+            | "printer-is-temporary"
+            | "printer-location"
+            | "printer-make-and-model"
+            | "printer-state"
+            | "printer-state-change-time"
+            | "printer-state-reasons"
+            | "printer-state-message"
+            | "printer-type"
+            | "printer-uri-supported"
+            | "marker-change-time"
+            | "job-cancel-after"
+            | "job-hold-until"
+            | "job-priority"
+            | "job-sheets"
+    )
+}
+
+/// Queries the number of active (pending, held, processing) jobs for `cups_name`.
+pub fn query_cups_active_jobs(
+    endpoint: &CupsServerEndpoint,
+    cups_name: &str,
+) -> Result<usize, AppError> {
+    let conn = CupsHttpConnection::connect(endpoint)?;
+    let c_name = CString::new(cups_name)
+        .map_err(|_| AppError::invalid_input("invalid printer destination name"))?;
+    let mut jobs_ptr: *mut CupsJob = std::ptr::null_mut();
+    // Safety: `conn.http` is connected, `jobs_ptr` is an out-pointer.
+    // myjobs = 0 (all users), whichjobs = 0 (active jobs).
+    let count =
+        unsafe { (conn.lib.cups_get_jobs2)(conn.http, &mut jobs_ptr, c_name.as_ptr(), 0, 0) };
+    if count < 0 {
+        return Err(AppError::queue_unavailable(format!(
+            "CUPS refused job listing ({})",
+            last_cups_error_message(conn.lib)
+        )));
+    }
+    if count > 0 && !jobs_ptr.is_null() {
+        unsafe {
+            (conn.lib.cups_free_jobs)(count, jobs_ptr);
+        }
+    }
+    Ok(count as usize)
 }
 
 /// Queries all destinations from `endpoint` via `libcups` (`cupsGetDests2`).
@@ -340,12 +443,52 @@ pub fn query_cups_destinations(
             let accepting_jobs = get_dest_option(conn.lib, dest, b"printer-is-accepting-jobs\0")
                 .map(|v| !v.eq_ignore_ascii_case("false") && v != "0")
                 .unwrap_or(true);
+            let make_and_model =
+                get_dest_option(conn.lib, dest, b"printer-make-and-model\0").unwrap_or_default();
+
+            let mut options = Vec::new();
+            if !dest.options.is_null() && dest.num_options > 0 {
+                let slice_opts =
+                    std::slice::from_raw_parts(dest.options, dest.num_options as usize);
+                for opt in slice_opts {
+                    if !opt.name.is_null() && !opt.value.is_null() {
+                        let k = CStr::from_ptr(opt.name).to_string_lossy().into_owned();
+                        let v = CStr::from_ptr(opt.value).to_string_lossy().into_owned();
+                        options.push((k, v));
+                    }
+                }
+            }
+
+            let name_c = CString::new(name.as_str()).ok();
+            let has_usable_conversion = if make_and_model.eq_ignore_ascii_case("Local Raw Printer")
+                || make_and_model
+                    .split(|c: char| !c.is_alphanumeric())
+                    .any(|w| w.eq_ignore_ascii_case("raw"))
+            {
+                false
+            } else if let Some(ref c_name) = name_c {
+                let ppd_ptr = (conn.lib.cups_get_ppd2)(conn.http, c_name.as_ptr());
+                if ppd_ptr.is_null() {
+                    false
+                } else {
+                    let ppd_path = CStr::from_ptr(ppd_ptr).to_string_lossy();
+                    let content = std::fs::read_to_string(ppd_path.as_ref()).unwrap_or_default();
+                    let _ = std::fs::remove_file(ppd_path.as_ref());
+                    content.contains("*cupsFilter2:") || content.contains("*cupsFilter:")
+                }
+            } else {
+                false
+            };
+
             records.push(CupsDestinationRecord {
                 name,
                 device_uri,
                 printer_info,
                 state,
                 accepting_jobs,
+                make_and_model,
+                has_usable_conversion,
+                options,
             });
         }
         (conn.lib.cups_free_dests)(count, dests_ptr);
