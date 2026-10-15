@@ -5,6 +5,7 @@ description = "ShaPrint desktop shell: supervises the client proxy and server sh
 edition = "2021"
 license = "MIT"
 publish = false
+default-run = "shaprint-desktop"
 
 [features]
 default = ["desktop"]
