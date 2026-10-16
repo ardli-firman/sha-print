@@ -50,6 +50,9 @@ mod tag {
     pub(super) const MIME_MEDIA_TYPE: u8 = 0x49;
     pub(super) const RESOLUTION: u8 = 0x32;
     pub(super) const RANGE_OF_INTEGER: u8 = 0x33;
+    pub(super) const BEG_COLLECTION: u8 = 0x34;
+    pub(super) const END_COLLECTION: u8 = 0x37;
+    pub(super) const MEMBER_ATTR_NAME: u8 = 0x4a;
 
     /// Delimiter tags that introduce an attribute group; they carry no name or value.
     pub(super) const fn is_delimiter(tag: u8) -> bool {
@@ -273,6 +276,67 @@ impl<'a> Request<'a> {
         } else {
             IPP_VERSION_1_1
         }
+    }
+
+    /// Returns the requested media size, checking both `media` keyword and `media-col` collection.
+    pub fn media(&self) -> Option<String> {
+        if let Some(media) = self.value("media") {
+            return Some(media.to_owned());
+        }
+        let media_col = self
+            .attributes
+            .iter()
+            .find(|attr| attr.name == "media-col")?;
+
+        for (idx, val) in media_col.values.iter().enumerate() {
+            if val.as_slice() == b"media-size-name" {
+                if let Some(next_val) = media_col.values.get(idx + 1) {
+                    if let Ok(name) = std::str::from_utf8(next_val) {
+                        return Some(name.trim_end_matches('\0').to_owned());
+                    }
+                }
+            }
+        }
+
+        let mut x_dim = None;
+        let mut y_dim = None;
+        for (idx, val) in media_col.values.iter().enumerate() {
+            if val.as_slice() == b"x-dimension" {
+                if let Some(next_val) = media_col.values.get(idx + 1) {
+                    if let Ok(bytes) = next_val.as_slice().try_into() {
+                        x_dim = Some(i32::from_be_bytes(bytes));
+                    }
+                }
+            } else if val.as_slice() == b"y-dimension" {
+                if let Some(next_val) = media_col.values.get(idx + 1) {
+                    if let Ok(bytes) = next_val.as_slice().try_into() {
+                        y_dim = Some(i32::from_be_bytes(bytes));
+                    }
+                }
+            }
+        }
+
+        if let (Some(x), Some(y)) = (x_dim, y_dim) {
+            let short_tenths = (x.min(y) / 10) as i16;
+            let long_tenths = (x.max(y) / 10) as i16;
+            if let Some(spec) =
+                crate::adapters::printers::media::media_for_dimensions(short_tenths, long_tenths)
+            {
+                return Some(spec.keyword.to_owned());
+            }
+            if crate::adapters::printers::media::custom_dimensions_are_supported(
+                short_tenths,
+                long_tenths,
+            ) {
+                return Some(format!(
+                    "custom_{:.1}x{:.1}mm",
+                    f64::from(short_tenths) / 10.0,
+                    f64::from(long_tenths) / 10.0
+                ));
+            }
+        }
+
+        None
     }
 }
 
@@ -698,7 +762,7 @@ pub fn response(
     status: Status,
     printers: &[PrinterEntry],
 ) -> Vec<u8> {
-    let mut out = response_start(request_id, version, status, 256 + printers.len() * 1024);
+    let mut out = response_start(request_id, version, status, 256 + printers.len() * 4096);
     for printer in printers {
         out.push(tag::PRINTER_ATTRIBUTES);
         // `printer-uri` is an operation attribute in a request; a printer attributes group is
@@ -711,8 +775,8 @@ pub fn response(
             &printer_uuid(&printer.name),
         );
         write_text(&mut out, tag::NAME, "printer-name", &printer.name);
-        write_text(&mut out, 0x41, "printer-make-and-model", &printer.name);
-        write_text(&mut out, 0x41, "printer-info", &printer.name);
+        write_text(&mut out, tag::TEXT, "printer-make-and-model", &printer.name);
+        write_text(&mut out, tag::TEXT, "printer-info", &printer.name);
         write_text(
             &mut out,
             tag::MIME_MEDIA_TYPE,
@@ -741,6 +805,25 @@ pub fn response(
         write_integers(&mut out, tag::INTEGER, "media-top-margin-supported", &[0]);
         write_integers(&mut out, tag::INTEGER, "media-left-margin-supported", &[0]);
         write_integers(&mut out, tag::INTEGER, "media-right-margin-supported", &[0]);
+        write_media_col_default(
+            &mut out,
+            &crate::adapters::printers::media::MEDIA_CATALOG[0],
+        );
+        write_texts(
+            &mut out,
+            tag::KEYWORD,
+            "media-col-supported",
+            &[
+                "media-size",
+                "media-size-name",
+                "media-bottom-margin",
+                "media-top-margin",
+                "media-left-margin",
+                "media-right-margin",
+            ],
+        );
+        write_media_col_database(&mut out, crate::adapters::printers::media::MEDIA_CATALOG);
+        write_media_size_supported(&mut out, crate::adapters::printers::media::MEDIA_CATALOG);
         write_text(&mut out, tag::KEYWORD, "sides-default", "one-sided");
         write_texts(
             &mut out,
@@ -1015,6 +1098,138 @@ fn write_name_and_value(out: &mut Vec<u8>, name: &str, value: &[u8]) {
     out.extend(value);
 }
 
+fn write_media_col_database(
+    out: &mut Vec<u8>,
+    specs: &[crate::adapters::printers::media::MediaSpec],
+) {
+    for (index, spec) in specs.iter().enumerate() {
+        out.push(tag::BEG_COLLECTION);
+        write_name_and_value(out, if index == 0 { "media-col-database" } else { "" }, &[]);
+
+        out.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(out, "", b"media-size");
+        out.push(tag::BEG_COLLECTION);
+        write_name_and_value(out, "", &[]);
+        out.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(out, "", b"x-dimension");
+        out.push(tag::INTEGER);
+        write_name_and_value(out, "", &((spec.short_tenths_mm as i32) * 10).to_be_bytes());
+        out.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(out, "", b"y-dimension");
+        out.push(tag::INTEGER);
+        write_name_and_value(out, "", &((spec.long_tenths_mm as i32) * 10).to_be_bytes());
+        out.push(tag::END_COLLECTION);
+        write_name_and_value(out, "", &[]);
+
+        out.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(out, "", b"media-size-name");
+        out.push(tag::KEYWORD);
+        write_name_and_value(out, "", spec.keyword.as_bytes());
+
+        out.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(out, "", b"media-bottom-margin");
+        out.push(tag::INTEGER);
+        write_name_and_value(out, "", &0i32.to_be_bytes());
+
+        out.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(out, "", b"media-top-margin");
+        out.push(tag::INTEGER);
+        write_name_and_value(out, "", &0i32.to_be_bytes());
+
+        out.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(out, "", b"media-left-margin");
+        out.push(tag::INTEGER);
+        write_name_and_value(out, "", &0i32.to_be_bytes());
+
+        out.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(out, "", b"media-right-margin");
+        out.push(tag::INTEGER);
+        write_name_and_value(out, "", &0i32.to_be_bytes());
+
+        out.push(tag::END_COLLECTION);
+        write_name_and_value(out, "", &[]);
+    }
+}
+
+fn write_media_col_default(out: &mut Vec<u8>, spec: &crate::adapters::printers::media::MediaSpec) {
+    out.push(tag::BEG_COLLECTION);
+    write_name_and_value(out, "media-col-default", &[]);
+
+    out.push(tag::MEMBER_ATTR_NAME);
+    write_name_and_value(out, "", b"media-size");
+    out.push(tag::BEG_COLLECTION);
+    write_name_and_value(out, "", &[]);
+    out.push(tag::MEMBER_ATTR_NAME);
+    write_name_and_value(out, "", b"x-dimension");
+    out.push(tag::INTEGER);
+    write_name_and_value(out, "", &((spec.short_tenths_mm as i32) * 10).to_be_bytes());
+    out.push(tag::MEMBER_ATTR_NAME);
+    write_name_and_value(out, "", b"y-dimension");
+    out.push(tag::INTEGER);
+    write_name_and_value(out, "", &((spec.long_tenths_mm as i32) * 10).to_be_bytes());
+    out.push(tag::END_COLLECTION);
+    write_name_and_value(out, "", &[]);
+
+    out.push(tag::MEMBER_ATTR_NAME);
+    write_name_and_value(out, "", b"media-size-name");
+    out.push(tag::KEYWORD);
+    write_name_and_value(out, "", spec.keyword.as_bytes());
+
+    out.push(tag::MEMBER_ATTR_NAME);
+    write_name_and_value(out, "", b"media-bottom-margin");
+    out.push(tag::INTEGER);
+    write_name_and_value(out, "", &0i32.to_be_bytes());
+
+    out.push(tag::MEMBER_ATTR_NAME);
+    write_name_and_value(out, "", b"media-top-margin");
+    out.push(tag::INTEGER);
+    write_name_and_value(out, "", &0i32.to_be_bytes());
+
+    out.push(tag::MEMBER_ATTR_NAME);
+    write_name_and_value(out, "", b"media-left-margin");
+    out.push(tag::INTEGER);
+    write_name_and_value(out, "", &0i32.to_be_bytes());
+
+    out.push(tag::MEMBER_ATTR_NAME);
+    write_name_and_value(out, "", b"media-right-margin");
+    out.push(tag::INTEGER);
+    write_name_and_value(out, "", &0i32.to_be_bytes());
+
+    out.push(tag::END_COLLECTION);
+    write_name_and_value(out, "", &[]);
+}
+
+fn write_media_size_supported(
+    out: &mut Vec<u8>,
+    specs: &[crate::adapters::printers::media::MediaSpec],
+) {
+    for (index, spec) in specs.iter().enumerate() {
+        out.push(tag::BEG_COLLECTION);
+        write_name_and_value(
+            out,
+            if index == 0 {
+                "media-size-supported"
+            } else {
+                ""
+            },
+            &[],
+        );
+
+        out.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(out, "", b"x-dimension");
+        out.push(tag::INTEGER);
+        write_name_and_value(out, "", &((spec.short_tenths_mm as i32) * 10).to_be_bytes());
+
+        out.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(out, "", b"y-dimension");
+        out.push(tag::INTEGER);
+        write_name_and_value(out, "", &((spec.long_tenths_mm as i32) * 10).to_be_bytes());
+
+        out.push(tag::END_COLLECTION);
+        write_name_and_value(out, "", &[]);
+    }
+}
+
 /// Percent-encodes the parts of a URI that a printer name may contain.
 ///
 /// Unreserved characters (RFC 3986) stay as they are; everything else, including non-ASCII bytes,
@@ -1217,6 +1432,67 @@ mod tests {
             integer_range(&attributes, "media-y-dimension-supported"),
             None
         );
+
+        let col_supported = texts(&attributes, "media-col-supported");
+        assert_eq!(
+            col_supported,
+            vec![
+                "media-size",
+                "media-size-name",
+                "media-bottom-margin",
+                "media-top-margin",
+                "media-left-margin",
+                "media-right-margin",
+            ]
+        );
+        assert!(attributes.iter().any(|a| a.name == "media-col-default"));
+        assert!(attributes.iter().any(|a| a.name == "media-col-database"));
+        assert!(attributes.iter().any(|a| a.name == "media-size-supported"));
+    }
+
+    #[test]
+    fn request_media_resolves_from_flat_keyword_or_media_col() {
+        // Flat keyword
+        let flat_req = request(
+            IPP_VERSION_2_0,
+            OPERATION_PRINT_JOB,
+            1,
+            &[("media", "om_folio_210x330mm")],
+        );
+        let parsed = Request::parse(&flat_req).expect("parsed");
+        assert_eq!(parsed.media().as_deref(), Some("om_folio_210x330mm"));
+
+        // media-col with media-size-name
+        let mut col_bytes = vec![2, 0, 0, 2, 0, 0, 0, 2, tag::OPERATION_ATTRIBUTES];
+        col_bytes.push(tag::BEG_COLLECTION);
+        write_name_and_value(&mut col_bytes, "media-col", &[]);
+        col_bytes.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(&mut col_bytes, "", b"media-size-name");
+        col_bytes.push(tag::KEYWORD);
+        write_name_and_value(&mut col_bytes, "", b"om_folio_210x330mm");
+        col_bytes.push(tag::END_COLLECTION);
+        write_name_and_value(&mut col_bytes, "", &[]);
+        col_bytes.push(tag::END_OF_ATTRIBUTES);
+        let parsed_col = Request::parse(&col_bytes).expect("parsed col");
+        assert_eq!(parsed_col.media().as_deref(), Some("om_folio_210x330mm"));
+
+        // media-col with dimensions
+        let mut dim_bytes = vec![2, 0, 0, 2, 0, 0, 0, 3, tag::OPERATION_ATTRIBUTES];
+        dim_bytes.push(tag::BEG_COLLECTION);
+        write_name_and_value(&mut dim_bytes, "media-col", &[]);
+        dim_bytes.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(&mut dim_bytes, "", b"x-dimension");
+        dim_bytes.push(tag::INTEGER);
+        write_name_and_value(&mut dim_bytes, "", &21000i32.to_be_bytes());
+        dim_bytes.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(&mut dim_bytes, "", b"y-dimension");
+        dim_bytes.push(tag::INTEGER);
+        write_name_and_value(&mut dim_bytes, "", &33000i32.to_be_bytes());
+        dim_bytes.push(tag::END_COLLECTION);
+        write_name_and_value(&mut dim_bytes, "", &[]);
+        dim_bytes.push(tag::END_OF_ATTRIBUTES);
+        let parsed_dim = Request::parse(&dim_bytes).expect("parsed dim");
+        assert_eq!(parsed_dim.media().as_deref(), Some("om_folio_210x330mm"));
     }
 
     fn integers(attributes: &[Decoded], name: &str) -> Vec<i32> {
