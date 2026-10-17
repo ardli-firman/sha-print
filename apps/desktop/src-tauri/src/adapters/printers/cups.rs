@@ -497,6 +497,29 @@ pub fn query_cups_destinations(
     Ok(records)
 }
 
+/// Queries the PPD file content for `cups_name` from `endpoint` via `libcups` (`cupsGetPPD2`).
+pub fn query_cups_printer_ppd(
+    endpoint: &CupsServerEndpoint,
+    cups_name: &str,
+) -> Result<String, AppError> {
+    let conn = CupsHttpConnection::connect(endpoint)?;
+    let c_name = CString::new(cups_name)
+        .map_err(|_| AppError::invalid_input("invalid printer destination name"))?;
+    let ppd_ptr = unsafe { (conn.lib.cups_get_ppd2)(conn.http, c_name.as_ptr()) };
+    if ppd_ptr.is_null() {
+        return Err(AppError::queue_unavailable(format!(
+            "CUPS did not provide PPD for '{cups_name}' ({})",
+            last_cups_error_message(conn.lib)
+        )));
+    }
+    let ppd_path = unsafe { CStr::from_ptr(ppd_ptr) }.to_string_lossy();
+    let path = std::path::Path::new(ppd_path.as_ref());
+    let read_res = std::fs::read_to_string(path);
+    let _ = std::fs::remove_file(path);
+    let content = read_res.map_err(|e| AppError::internal(format!("cannot read PPD file: {e}")))?;
+    Ok(content)
+}
+
 unsafe fn get_dest_option(
     lib: &LibCups,
     dest: &CupsDest,

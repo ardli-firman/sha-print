@@ -15,7 +15,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::adapters::printers::cups::{
-    query_cups_active_jobs, query_cups_destinations, CupsServerEndpoint,
+    query_cups_active_jobs, query_cups_destinations, query_cups_printer_ppd, CupsServerEndpoint,
 };
 use crate::application::QueueInstaller;
 use crate::domain::{
@@ -134,6 +134,15 @@ impl CupsQueueInstaller {
 
                     // Preserve user print defaults where valid.
                     preserved_options = existing.user_options();
+                    if !has_user_pagesize_or_media(&preserved_options) {
+                        if let Ok(old_ppd) = query_cups_printer_ppd(&endpoint, &cups_name) {
+                            if let Some(valid_ps) =
+                                extract_valid_default_pagesize_from_ppd(&old_ppd)
+                            {
+                                preserved_options.push(("PageSize".to_string(), valid_ps));
+                            }
+                        }
+                    }
                 }
                 _ => {
                     return Err(SetupFailure::new(
@@ -148,8 +157,44 @@ impl CupsQueueInstaller {
         }
 
         self.configure_destination(&endpoint, &cups_name, &uri, human_description, is_new_queue)?;
+
+        let has_user_media = has_user_pagesize_or_media(&preserved_options);
+        if !has_user_media {
+            self.auto_configure_default_pagesize(&endpoint, &cups_name);
+        }
+
         self.apply_user_options(&endpoint, &cups_name, &preserved_options);
         Ok(())
+    }
+
+    fn auto_configure_default_pagesize(&self, endpoint: &CupsServerEndpoint, cups_name: &str) {
+        let pagesize = query_cups_printer_ppd(endpoint, cups_name)
+            .ok()
+            .and_then(|ppd| resolve_default_pagesize_from_ppd(&ppd))
+            .or_else(|| {
+                let mut cmd = Command::new("lpoptions");
+                let host_arg = endpoint.lpadmin_host_arg();
+                if !host_arg.starts_with('/') {
+                    cmd.arg("-h").arg(&host_arg);
+                }
+                cmd.arg("-p").arg(cups_name).arg("-l");
+                let out = cmd.output().ok()?;
+                if out.status.success() {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    resolve_default_pagesize_from_lpoptions(&stdout)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(ps) = pagesize {
+            let mut cmd = self.lpadmin_command(endpoint);
+            cmd.arg("-p")
+                .arg(cups_name)
+                .arg("-o")
+                .arg(format!("PageSize={ps}"));
+            let _ = cmd.output();
+        }
     }
 
     fn lpadmin_command(&self, endpoint: &CupsServerEndpoint) -> Command {
@@ -279,6 +324,140 @@ fn classify_lpadmin_failure(stderr: &str) -> SetupFailure {
         SetupFailureKind::Other
     };
     SetupFailure::new(kind, format!("lpadmin failed: {stderr}"))
+}
+
+fn has_user_pagesize_or_media(options: &[(String, String)]) -> bool {
+    options
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("pagesize") || k.eq_ignore_ascii_case("media"))
+}
+
+/// Parses the declared `*DefaultPageSize:` and all available `*PageSize ` choices from PPD content.
+pub fn parse_ppd_pagesizes(ppd_content: &str) -> (Option<String>, Vec<String>) {
+    let mut declared_default = None;
+    let mut available_sizes = Vec::new();
+
+    for line in ppd_content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("*DefaultPageSize:") {
+            let val = rest.trim();
+            if !val.is_empty() && !val.eq_ignore_ascii_case("unknown") {
+                declared_default = Some(val.to_owned());
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("*PageSize ") {
+            let rest = rest.trim_start();
+            let name: String = rest
+                .chars()
+                .take_while(|c| *c != '/' && *c != ':' && !c.is_whitespace())
+                .collect();
+            if !name.is_empty() && !available_sizes.contains(&name) {
+                available_sizes.push(name);
+            }
+        }
+    }
+
+    (declared_default, available_sizes)
+}
+
+/// Extracts the declared `*DefaultPageSize` from a PPD only if it exactly matches an available
+/// `*PageSize` option in that PPD.
+pub fn extract_valid_default_pagesize_from_ppd(ppd_content: &str) -> Option<String> {
+    let (declared_default, available_sizes) = parse_ppd_pagesizes(ppd_content);
+    let def = declared_default?;
+    available_sizes
+        .into_iter()
+        .find(|s| s.eq_ignore_ascii_case(&def))
+}
+
+/// Identifies available `PageSize` options in the generated PPD and selects a valid default
+/// page size (resolving `.Borderless` suffixes where needed under modern cups-filters 2.0).
+pub fn resolve_default_pagesize_from_ppd(ppd_content: &str) -> Option<String> {
+    let (declared_default, available_sizes) = parse_ppd_pagesizes(ppd_content);
+
+    if available_sizes.is_empty() {
+        return None;
+    }
+
+    // 1. If declared default exists:
+    if let Some(ref def) = declared_default {
+        // 1a. If declared default is directly an available choice:
+        if let Some(matched) = available_sizes.iter().find(|s| s.eq_ignore_ascii_case(def)) {
+            return Some(matched.clone());
+        }
+        // 1b. If declared default with `.Borderless` suffix is an available choice:
+        let borderless = format!("{def}.Borderless");
+        if let Some(matched) = available_sizes
+            .iter()
+            .find(|s| s.eq_ignore_ascii_case(&borderless))
+        {
+            return Some(matched.clone());
+        }
+        // 1c. If declared default ended with `.Borderless`, try stripping it:
+        if let Some(stripped) = def.strip_suffix(".Borderless") {
+            if let Some(matched) = available_sizes
+                .iter()
+                .find(|s| s.eq_ignore_ascii_case(stripped))
+            {
+                return Some(matched.clone());
+            }
+        }
+    }
+
+    // 2. Common default candidates in preference order:
+    const FALLBACK_CANDIDATES: [&str; 4] = ["A4.Borderless", "A4", "Letter.Borderless", "Letter"];
+    for candidate in FALLBACK_CANDIDATES {
+        if let Some(matched) = available_sizes
+            .iter()
+            .find(|s| s.eq_ignore_ascii_case(candidate))
+        {
+            return Some(matched.clone());
+        }
+    }
+
+    // 3. Fallback to the first available page size in the PPD:
+    available_sizes.into_iter().next()
+}
+
+/// Parses the output of `lpoptions -l` to extract available page sizes and select a valid default.
+pub fn resolve_default_pagesize_from_lpoptions(lpoptions_output: &str) -> Option<String> {
+    for line in lpoptions_output.lines() {
+        if line.starts_with("PageSize/") || line.starts_with("PageSize:") {
+            let Some((_, choices)) = line.split_once(':') else {
+                continue;
+            };
+            let mut available_sizes = Vec::new();
+            let mut active_default = None;
+            for choice in choices.split_whitespace() {
+                if let Some(active) = choice.strip_prefix('*') {
+                    if !active.is_empty() {
+                        active_default = Some(active.to_owned());
+                    }
+                }
+                let name = choice.trim_start_matches('*');
+                if !name.is_empty() && !available_sizes.contains(&name.to_owned()) {
+                    available_sizes.push(name.to_owned());
+                }
+            }
+            if let Some(active) = active_default {
+                return Some(active);
+            }
+            if available_sizes.is_empty() {
+                return None;
+            }
+            const FALLBACK_CANDIDATES: [&str; 4] =
+                ["A4.Borderless", "A4", "Letter.Borderless", "Letter"];
+            for candidate in FALLBACK_CANDIDATES {
+                if let Some(matched) = available_sizes
+                    .iter()
+                    .find(|s| s.eq_ignore_ascii_case(candidate))
+                {
+                    return Some(matched.clone());
+                }
+            }
+            return available_sizes.into_iter().next();
+        }
+    }
+    None
 }
 
 impl QueueInstaller for CupsQueueInstaller {
@@ -525,6 +704,302 @@ mod tests {
                 let _ = h.join();
             }
         }
+    }
+
+    fn query_cups_active_pagesize(
+        endpoint: &CupsServerEndpoint,
+        cups_name: &str,
+        home_dir: &Path,
+    ) -> Option<String> {
+        let mut cmd = Command::new("lpoptions");
+        let host_arg = endpoint.lpadmin_host_arg();
+        if !host_arg.starts_with('/') {
+            cmd.arg("-h").arg(&host_arg);
+        }
+        cmd.env("HOME", home_dir);
+        cmd.arg("-p").arg(cups_name).arg("-l");
+        let out = cmd.output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for line in stdout.lines() {
+            if line.starts_with("PageSize/") || line.starts_with("PageSize:") {
+                let (_, choices) = line.split_once(':')?;
+                for choice in choices.split_whitespace() {
+                    if let Some(active) = choice.strip_prefix('*') {
+                        return Some(active.to_owned());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn new_queue_automatically_configures_valid_default_pagesize() {
+        if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
+            return;
+        }
+
+        let cupsd = IsolatedCupsd::start();
+        let req = request("10.0.0.5:48631", "Office Printer");
+        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        let proxy_authority = format!("127.0.0.1:{}", mock.port);
+        let installer = CupsQueueInstaller::with_endpoint_and_authority(
+            cupsd.endpoint.clone(),
+            proxy_authority,
+        );
+
+        installer.install(&req).expect("install succeeds");
+
+        let active_pagesize =
+            query_cups_active_pagesize(&cupsd.endpoint, &req.cups_destination_name(), &cupsd.dir)
+                .expect("newly installed driverless queue must have an active default PageSize");
+        assert!(
+            active_pagesize == "A4.Borderless" || active_pagesize == "A4",
+            "active default PageSize must be valid, got {active_pagesize}"
+        );
+    }
+
+    #[test]
+    fn repair_preserves_user_defined_pagesize_and_media() {
+        if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
+            return;
+        }
+
+        let cupsd = IsolatedCupsd::start();
+        let req = request("10.0.0.5:48631", "Office Printer");
+        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        let proxy_authority = format!("127.0.0.1:{}", mock.port);
+        let installer = CupsQueueInstaller::with_endpoint_and_authority(
+            cupsd.endpoint.clone(),
+            proxy_authority,
+        );
+
+        // 1. Install queue
+        installer.install(&req).expect("install succeeds");
+        let cups_name = req.cups_destination_name();
+
+        // Verify initial default is A4.Borderless
+        let init_pagesize = query_cups_active_pagesize(&cupsd.endpoint, &cups_name, &cupsd.dir)
+            .expect("active PageSize");
+        assert_eq!(init_pagesize, "A4.Borderless");
+
+        // 2. User configures Letter.Borderless via lpadmin
+        let _ = Command::new("/usr/sbin/lpadmin")
+            .args([
+                "-h",
+                &cupsd.endpoint.lpadmin_host_arg(),
+                "-p",
+                &cups_name,
+                "-o",
+                "PageSize=Letter.Borderless",
+            ])
+            .status()
+            .expect("sets PageSize=Letter.Borderless");
+
+        let user_pagesize = query_cups_active_pagesize(&cupsd.endpoint, &cups_name, &cupsd.dir)
+            .expect("active PageSize");
+        assert_eq!(user_pagesize, "Letter.Borderless");
+
+        // 3. Repair the queue
+        installer.repair(&req).expect("repair succeeds");
+
+        // 4. Assert user-defined PageSize was preserved intact
+        let repaired_pagesize = query_cups_active_pagesize(&cupsd.endpoint, &cups_name, &cupsd.dir)
+            .expect("active PageSize after repair");
+        assert_eq!(
+            repaired_pagesize, "Letter.Borderless",
+            "repair must preserve user-defined PageSize"
+        );
+    }
+
+    #[test]
+    fn repair_unconfigured_broken_driverless_queue_configures_default_pagesize() {
+        if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
+            return;
+        }
+
+        let cupsd = IsolatedCupsd::start();
+        let req = request("10.0.0.5:48631", "Office Printer");
+        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        let proxy_authority = format!("127.0.0.1:{}", mock.port);
+        let installer = CupsQueueInstaller::with_endpoint_and_authority(
+            cupsd.endpoint.clone(),
+            proxy_authority,
+        );
+
+        let cups_name = req.cups_destination_name();
+        let uri = format!(
+            "ipp://127.0.0.1:{}/ipp/print/10.0.0.5%3A48631/Office%20Printer",
+            mock.port
+        );
+
+        // Reproduce the pre-#165 unconfigured queue: create with lpadmin -m everywhere but no PageSize configured
+        let status = Command::new("/usr/sbin/lpadmin")
+            .args([
+                "-h",
+                &cupsd.endpoint.lpadmin_host_arg(),
+                "-p",
+                &cups_name,
+                "-E",
+                "-v",
+                &uri,
+                "-D",
+                "Office Printer (ShaPrint 10.0.0.5-48631)",
+                "-o",
+                "printer-is-shared=false",
+                "-m",
+                "everywhere",
+            ])
+            .status()
+            .expect("creates driverless queue without PageSize option");
+        assert!(status.success());
+
+        // Verify initial state has NO active default PageSize (pre-#165 bug)
+        let init_active = query_cups_active_pagesize(&cupsd.endpoint, &cups_name, &cupsd.dir);
+        assert_eq!(
+            init_active, None,
+            "pre-#165 unconfigured queue must have no active PageSize"
+        );
+
+        // Repair the queue
+        installer.repair(&req).expect("repair succeeds");
+
+        // Assert that the repaired queue now receives an active default PageSize
+        let repaired_active = query_cups_active_pagesize(&cupsd.endpoint, &cups_name, &cupsd.dir)
+            .expect("repaired queue must now have an active PageSize");
+        assert!(
+            repaired_active == "A4.Borderless" || repaired_active == "A4",
+            "active default PageSize must be valid, got {repaired_active}"
+        );
+    }
+
+    #[test]
+    fn print_job_without_explicit_media_options_succeeds_through_filter() {
+        if !Path::new("/usr/sbin/cupsd").exists()
+            || !Path::new("/usr/sbin/lpadmin").exists()
+            || !Path::new("/usr/sbin/cupsfilter").exists()
+        {
+            return;
+        }
+
+        let cupsd = IsolatedCupsd::start();
+        let req = request("10.0.0.5:48631", "Office Printer");
+        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        let proxy_authority = format!("127.0.0.1:{}", mock.port);
+        let installer = CupsQueueInstaller::with_endpoint_and_authority(
+            cupsd.endpoint.clone(),
+            proxy_authority,
+        );
+
+        installer.install(&req).expect("install succeeds");
+        let cups_name = req.cups_destination_name();
+
+        let ppd_path = cupsd.dir.join("conf/ppd").join(format!("{cups_name}.ppd"));
+        let ppd_path_alt = cupsd.dir.join("ppd").join(format!("{cups_name}.ppd"));
+        let final_ppd = if ppd_path.exists() {
+            ppd_path
+        } else {
+            ppd_path_alt
+        };
+        assert!(final_ppd.exists(), "PPD must exist");
+
+        // Create a minimal PDF test file
+        let pdf_file = cupsd.dir.join("test_doc.pdf");
+        std::fs::write(
+            &pdf_file,
+            b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF",
+        )
+        .expect("writes test pdf");
+
+        // Run cupsfilter without explicit media options (-o media=... or -o PageSize=...)
+        let mut cmd = Command::new("/usr/sbin/cupsfilter");
+        cmd.env("HOME", &cupsd.dir);
+        cmd.arg("-p")
+            .arg(&final_ppd)
+            .arg("-m")
+            .arg("application/vnd.cups-raster")
+            .arg(&pdf_file);
+
+        let out = cmd.output().expect("runs cupsfilter");
+        assert!(
+            out.status.success(),
+            "cupsfilter must succeed without explicit media options; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn test_resolve_default_pagesize_from_ppd_borderless() {
+        let ppd = r#"*OpenUI *PageSize: PickOne
+*DefaultPageSize: A4
+*PageSize 4x6.Borderless: "<</PageSize[288 432]>>setpagedevice"
+*PageSize A4.Borderless: "<</PageSize[595 842]>>setpagedevice"
+*PageSize Letter.Borderless: "<</PageSize[612 792]>>setpagedevice"
+*CloseUI: *PageSize"#;
+
+        assert_eq!(
+            resolve_default_pagesize_from_ppd(ppd),
+            Some("A4.Borderless".to_string())
+        );
+        assert_eq!(extract_valid_default_pagesize_from_ppd(ppd), None);
+
+        let user_ppd = ppd.replace(
+            "*DefaultPageSize: A4",
+            "*DefaultPageSize: Letter.Borderless",
+        );
+        assert_eq!(
+            extract_valid_default_pagesize_from_ppd(&user_ppd),
+            Some("Letter.Borderless".to_string())
+        );
+        assert_eq!(
+            resolve_default_pagesize_from_ppd(&user_ppd),
+            Some("Letter.Borderless".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_default_pagesize_from_ppd_standard() {
+        let ppd = r#"*OpenUI *PageSize: PickOne
+*DefaultPageSize: A4
+*PageSize A4/A4: "<</PageSize[595 842]>>setpagedevice"
+*PageSize Letter/US Letter: "<</PageSize[612 792]>>setpagedevice"
+*CloseUI: *PageSize"#;
+
+        assert_eq!(
+            resolve_default_pagesize_from_ppd(ppd),
+            Some("A4".to_string())
+        );
+        assert_eq!(
+            extract_valid_default_pagesize_from_ppd(ppd),
+            Some("A4".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_default_pagesize_from_lpoptions() {
+        let lpoptions_with_active = r#"Resolution/Output Resolution: *300dpi 600dpi
+PageSize/Media Size: 4x6.Borderless *Letter.Borderless A4.Borderless
+Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble"#;
+
+        assert_eq!(
+            resolve_default_pagesize_from_lpoptions(lpoptions_with_active),
+            Some("Letter.Borderless".to_string()),
+            "must prioritize active choice marked with *"
+        );
+
+        let lpoptions_unselected = r#"Resolution/Output Resolution: *300dpi 600dpi
+MalformedLineWithoutColon
+PageSize/Media Size: 4x6.Borderless A4.Borderless Letter.Borderless
+Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble"#;
+
+        assert_eq!(
+            resolve_default_pagesize_from_lpoptions(lpoptions_unselected),
+            Some("A4.Borderless".to_string()),
+            "must fall back to candidate when no active choice is set and ignore malformed lines"
+        );
     }
 
     #[test]
