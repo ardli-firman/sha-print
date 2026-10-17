@@ -24,6 +24,11 @@ pub const OPERATION_GET_PRINTERS: u16 = 0x4002;
 /// `printer-state` for a queue that is idle and able to accept a job.
 const PRINTER_STATE_IDLE: i32 = 3;
 
+/// Standard print margin advertised in hundredths of a millimeter (3.5 mm, PWG 5100.14).
+pub const STANDARD_MARGIN_HUNDREDTHS_MM: i32 = 350;
+/// Borderless print margin advertised in hundredths of a millimeter (0.0 mm).
+pub const BORDERLESS_MARGIN_HUNDREDTHS_MM: i32 = 0;
+
 static SERVER_START_TIME: std::sync::LazyLock<std::time::Instant> =
     std::sync::LazyLock::new(std::time::Instant::now);
 
@@ -829,6 +834,25 @@ pub fn response(
     status: Status,
     printers: &[PrinterEntry],
 ) -> Vec<u8> {
+    build_response(request_id, version, status, printers, false)
+}
+
+pub fn legacy_zero_margin_response(
+    request_id: u32,
+    version: (u8, u8),
+    status: Status,
+    printers: &[PrinterEntry],
+) -> Vec<u8> {
+    build_response(request_id, version, status, printers, true)
+}
+
+fn build_response(
+    request_id: u32,
+    version: (u8, u8),
+    status: Status,
+    printers: &[PrinterEntry],
+    legacy_zero_margin: bool,
+) -> Vec<u8> {
     let mut out = response_start(request_id, version, status, 256 + printers.len() * 4096);
     for printer in printers {
         out.push(tag::PRINTER_ATTRIBUTES);
@@ -863,19 +887,51 @@ pub fn response(
             .collect();
         write_texts(&mut out, tag::KEYWORD, "media-supported", &supported_media);
         write_texts(&mut out, tag::KEYWORD, "media-ready", &supported_media);
+        let margins: &[i32] = if legacy_zero_margin {
+            &[BORDERLESS_MARGIN_HUNDREDTHS_MM]
+        } else {
+            &[
+                BORDERLESS_MARGIN_HUNDREDTHS_MM,
+                STANDARD_MARGIN_HUNDREDTHS_MM,
+            ]
+        };
         write_integers(
             &mut out,
             tag::INTEGER,
             "media-bottom-margin-supported",
-            &[0],
+            margins,
         );
-        write_integers(&mut out, tag::INTEGER, "media-top-margin-supported", &[0]);
-        write_integers(&mut out, tag::INTEGER, "media-left-margin-supported", &[0]);
-        write_integers(&mut out, tag::INTEGER, "media-right-margin-supported", &[0]);
-        write_media_col_default(
+        write_integers(
             &mut out,
-            &crate::adapters::printers::media::MEDIA_CATALOG[0],
+            tag::INTEGER,
+            "media-top-margin-supported",
+            margins,
         );
+        write_integers(
+            &mut out,
+            tag::INTEGER,
+            "media-left-margin-supported",
+            margins,
+        );
+        write_integers(
+            &mut out,
+            tag::INTEGER,
+            "media-right-margin-supported",
+            margins,
+        );
+        if legacy_zero_margin {
+            write_media_collection(
+                &mut out,
+                "media-col-default",
+                &crate::adapters::printers::media::MEDIA_CATALOG[0],
+                BORDERLESS_MARGIN_HUNDREDTHS_MM,
+            );
+        } else {
+            write_media_col_default(
+                &mut out,
+                &crate::adapters::printers::media::MEDIA_CATALOG[0],
+            );
+        }
         write_texts(
             &mut out,
             tag::KEYWORD,
@@ -889,7 +945,14 @@ pub fn response(
                 "media-right-margin",
             ],
         );
-        write_media_col_database(&mut out, crate::adapters::printers::media::MEDIA_CATALOG);
+        if legacy_zero_margin {
+            write_media_col_database_zero_margin(
+                &mut out,
+                crate::adapters::printers::media::MEDIA_CATALOG,
+            );
+        } else {
+            write_media_col_database(&mut out, crate::adapters::printers::media::MEDIA_CATALOG);
+        }
         write_media_size_supported(&mut out, crate::adapters::printers::media::MEDIA_CATALOG);
         write_text(&mut out, tag::KEYWORD, "sides-default", "one-sided");
         write_texts(
@@ -1169,23 +1232,51 @@ fn write_media_col_database(
     out: &mut Vec<u8>,
     specs: &[crate::adapters::printers::media::MediaSpec],
 ) {
+    let mut is_first = true;
+    for spec in specs {
+        for margin in [
+            STANDARD_MARGIN_HUNDREDTHS_MM,
+            BORDERLESS_MARGIN_HUNDREDTHS_MM,
+        ] {
+            write_media_collection(
+                out,
+                if is_first { "media-col-database" } else { "" },
+                spec,
+                margin,
+            );
+            is_first = false;
+        }
+    }
+}
+
+fn write_media_col_database_zero_margin(
+    out: &mut Vec<u8>,
+    specs: &[crate::adapters::printers::media::MediaSpec],
+) {
     for (index, spec) in specs.iter().enumerate() {
         write_media_collection(
             out,
             if index == 0 { "media-col-database" } else { "" },
             spec,
+            BORDERLESS_MARGIN_HUNDREDTHS_MM,
         );
     }
 }
 
 fn write_media_col_default(out: &mut Vec<u8>, spec: &crate::adapters::printers::media::MediaSpec) {
-    write_media_collection(out, "media-col-default", spec);
+    write_media_collection(
+        out,
+        "media-col-default",
+        spec,
+        STANDARD_MARGIN_HUNDREDTHS_MM,
+    );
 }
 
 fn write_media_collection(
     out: &mut Vec<u8>,
     name: &str,
     spec: &crate::adapters::printers::media::MediaSpec,
+    margin_hundredths_mm: i32,
 ) {
     out.push(tag::BEG_COLLECTION);
     write_name_and_value(out, name, &[]);
@@ -1200,7 +1291,7 @@ fn write_media_collection(
         "media-right-margin",
     ] {
         write_text(out, tag::MEMBER_ATTR_NAME, "", margin);
-        write_integers(out, tag::INTEGER, "", &[0]);
+        write_integers(out, tag::INTEGER, "", &[margin_hundredths_mm]);
     }
     out.push(tag::END_COLLECTION);
     write_name_and_value(out, "", &[]);
@@ -1420,19 +1511,34 @@ mod tests {
         assert!(!ready.is_empty());
         assert!(ready.contains(&"iso_a4_210x297mm".to_string()));
 
-        // Assert 0 margins for 100% layout and margin fidelity
+        // Assert both borderless and standard margins are advertised
         assert_eq!(
             integers(&attributes, "media-bottom-margin-supported"),
-            vec![0]
+            vec![
+                BORDERLESS_MARGIN_HUNDREDTHS_MM,
+                STANDARD_MARGIN_HUNDREDTHS_MM
+            ]
         );
-        assert_eq!(integers(&attributes, "media-top-margin-supported"), vec![0]);
+        assert_eq!(
+            integers(&attributes, "media-top-margin-supported"),
+            vec![
+                BORDERLESS_MARGIN_HUNDREDTHS_MM,
+                STANDARD_MARGIN_HUNDREDTHS_MM
+            ]
+        );
         assert_eq!(
             integers(&attributes, "media-left-margin-supported"),
-            vec![0]
+            vec![
+                BORDERLESS_MARGIN_HUNDREDTHS_MM,
+                STANDARD_MARGIN_HUNDREDTHS_MM
+            ]
         );
         assert_eq!(
             integers(&attributes, "media-right-margin-supported"),
-            vec![0]
+            vec![
+                BORDERLESS_MARGIN_HUNDREDTHS_MM,
+                STANDARD_MARGIN_HUNDREDTHS_MM
+            ]
         );
 
         assert_eq!(
@@ -1612,11 +1718,16 @@ mod tests {
     #[test]
     fn advertised_media_collections_round_trip_every_catalog_entry() {
         for spec in crate::adapters::printers::media::MEDIA_CATALOG {
-            let mut bytes = vec![2, 0, 0, 2, 0, 0, 0, 3, tag::JOB_ATTRIBUTES];
-            write_media_collection(&mut bytes, "media-col", spec);
-            bytes.push(tag::END_OF_ATTRIBUTES);
-            let parsed = Request::parse(&bytes).expect("valid collection");
-            assert_eq!(parsed.media().unwrap().as_deref(), Some(spec.keyword));
+            for margin in [
+                STANDARD_MARGIN_HUNDREDTHS_MM,
+                BORDERLESS_MARGIN_HUNDREDTHS_MM,
+            ] {
+                let mut bytes = vec![2, 0, 0, 2, 0, 0, 0, 3, tag::JOB_ATTRIBUTES];
+                write_media_collection(&mut bytes, "media-col", spec, margin);
+                bytes.push(tag::END_OF_ATTRIBUTES);
+                let parsed = Request::parse(&bytes).expect("valid collection");
+                assert_eq!(parsed.media().unwrap().as_deref(), Some(spec.keyword));
+            }
         }
     }
 

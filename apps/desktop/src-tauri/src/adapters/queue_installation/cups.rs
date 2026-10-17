@@ -610,6 +610,14 @@ mod tests {
 
     impl MockIppPrinter {
         fn start(server: &str, printer_name: &str) -> Self {
+            Self::start_internal(server, printer_name, false)
+        }
+
+        fn start_legacy(server: &str, printer_name: &str) -> Self {
+            Self::start_internal(server, printer_name, true)
+        }
+
+        fn start_internal(server: &str, printer_name: &str, legacy_zero_margin: bool) -> Self {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds mock ipp");
             let port = listener.local_addr().expect("reads addr").port();
             listener.set_nonblocking(true).expect("nonblocking");
@@ -623,16 +631,29 @@ mod tests {
                 crate::adapters::ipps::protocol::percent_encode(printer_name)
             );
 
-            let resp_template = crate::adapters::ipps::protocol::response(
-                1,
-                crate::adapters::ipps::protocol::IPP_VERSION_2_0,
-                crate::adapters::ipps::protocol::Status::Ok,
-                &[crate::adapters::ipps::protocol::PrinterEntry {
-                    name: printer_name.to_owned(),
-                    uri,
-                    accepting_jobs: true,
-                }],
-            );
+            let resp_template = if legacy_zero_margin {
+                crate::adapters::ipps::protocol::legacy_zero_margin_response(
+                    1,
+                    crate::adapters::ipps::protocol::IPP_VERSION_2_0,
+                    crate::adapters::ipps::protocol::Status::Ok,
+                    &[crate::adapters::ipps::protocol::PrinterEntry {
+                        name: printer_name.to_owned(),
+                        uri,
+                        accepting_jobs: true,
+                    }],
+                )
+            } else {
+                crate::adapters::ipps::protocol::response(
+                    1,
+                    crate::adapters::ipps::protocol::IPP_VERSION_2_0,
+                    crate::adapters::ipps::protocol::Status::Ok,
+                    &[crate::adapters::ipps::protocol::PrinterEntry {
+                        name: printer_name.to_owned(),
+                        uri,
+                        accepting_jobs: true,
+                    }],
+                )
+            };
 
             let handle = std::thread::spawn(move || {
                 use std::io::{Read, Write};
@@ -737,6 +758,34 @@ mod tests {
     }
 
     #[test]
+    fn driverless_generates_valid_ppd_with_default_pagesize_matching_choices() {
+        if !Path::new("/usr/bin/driverless").exists() {
+            return;
+        }
+        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        let uri = format!(
+            "ipp://127.0.0.1:{}/ipp/print/10.0.0.5%3A48631/Office%20Printer",
+            mock.port
+        );
+        let output = Command::new("driverless")
+            .arg(&uri)
+            .output()
+            .expect("runs driverless");
+        assert!(output.status.success(), "driverless command succeeds");
+        let ppd = String::from_utf8_lossy(&output.stdout);
+        let (default_size, available_sizes) = parse_ppd_pagesizes(&ppd);
+        assert_eq!(default_size.as_deref(), Some("A4"));
+        assert!(
+            available_sizes.contains(&"A4".to_string()),
+            "available sizes must contain standard A4"
+        );
+        assert!(
+            available_sizes.contains(&"A4.Borderless".to_string()),
+            "available sizes must contain A4.Borderless"
+        );
+    }
+
+    #[test]
     fn new_queue_automatically_configures_valid_default_pagesize() {
         if !Path::new("/usr/sbin/cupsd").exists() || !Path::new("/usr/sbin/lpadmin").exists() {
             return;
@@ -781,10 +830,13 @@ mod tests {
         installer.install(&req).expect("install succeeds");
         let cups_name = req.cups_destination_name();
 
-        // Verify initial default is A4.Borderless
+        // Verify initial default is A4 or A4.Borderless
         let init_pagesize = query_cups_active_pagesize(&cupsd.endpoint, &cups_name, &cupsd.dir)
             .expect("active PageSize");
-        assert_eq!(init_pagesize, "A4.Borderless");
+        assert!(
+            init_pagesize == "A4" || init_pagesize == "A4.Borderless",
+            "initial default should be A4 or A4.Borderless, got {init_pagesize}"
+        );
 
         // 2. User configures Letter.Borderless via lpadmin
         let _ = Command::new("/usr/sbin/lpadmin")
@@ -823,7 +875,8 @@ mod tests {
 
         let cupsd = IsolatedCupsd::start();
         let req = request("10.0.0.5:48631", "Office Printer");
-        let mock = MockIppPrinter::start("10.0.0.5:48631", "Office Printer");
+        // Start legacy zero-margin mock printer to reproduce pre-#166 unconfigured queue
+        let mock = MockIppPrinter::start_legacy("10.0.0.5:48631", "Office Printer");
         let proxy_authority = format!("127.0.0.1:{}", mock.port);
         let installer = CupsQueueInstaller::with_endpoint_and_authority(
             cupsd.endpoint.clone(),
