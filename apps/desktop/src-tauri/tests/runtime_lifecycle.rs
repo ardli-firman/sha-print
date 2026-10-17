@@ -60,6 +60,17 @@ fn state(runtime: &RuntimeCoordinator, id: ServiceId) -> ServiceState {
 
 #[tokio::test]
 async fn launching_the_shell_runs_the_proxy_and_leaves_sharing_stopped() {
+    let probe = match TcpListener::bind("127.0.0.1:48632") {
+        Ok(listener) => listener,
+        Err(_) => {
+            eprintln!(
+                "Skipping test: port 48632 is already bound by an external system daemon or concurrent process"
+            );
+            return;
+        }
+    };
+    drop(probe);
+
     let directory = temporary_directory("lifecycle");
     let shell = Shell::new(&directory).expect("builds the shell");
     let runtime = shell.runtime();

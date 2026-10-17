@@ -25,6 +25,12 @@ It refuses unrelated queues and queues with pending Print jobs. Recreating a que
 Windows printing preferences. Normal installation remains idempotent and does not replace a current
 working queue.
 
+For driverless client PPD generation (CUPS `driverless` and `libppd`), ShaPrint advertises both standard
+margins (3.5 mm / 350 hundredths of mm per PWG 5100.14) and borderless margins (0.0 mm / 0 hundredths of mm)
+in `media-*-margin-supported` and `media-col-database`. `media-col-default` advertises standard margins so
+that driverless PPD generators create matching standard `*PageSize` keywords (such as `A4`) that align with
+`*DefaultPageSize: A4`, alongside optional `.Borderless` alternatives (such as `A4.Borderless`).
+
 This decision replaces ADR 0005's requirement that removal always remain manual and ADR 0010's
 manual remove-and-install guidance for stale capabilities. Dedicated ports, queue URI paths,
 Network Channel authentication, and TLS identity remain unchanged.
