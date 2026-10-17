@@ -68,7 +68,7 @@ jobs:
         working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
-      - name: Build Tauri Desktop (NSIS, MSI, AppImage, DEB)
+      - name: Build Tauri Desktop (NSIS, MSI, AppImage)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -83,6 +83,7 @@ jobs:
             See release notes and documentation in `docs/adr/`.
           releaseDraft: false
           prerelease: false
+          args: ${{ runner.os == 'Linux' && '--bundles appimage' || '' }}
 
       - name: Build and upload system packages (.deb and .rpm with daemon & GUI)
         if: runner.os == 'Linux'
@@ -90,6 +91,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bash packaging/linux/deb/build-deb.sh
+          # Build generic RPM (works on any RPM-based distribution with systemd)
+          RPM_DIST=none bash packaging/linux/rpm/build-rpm.sh
+          # Build specific AlmaLinux 10 RPM
           ALMALINUX_MAJOR=10 bash packaging/linux/rpm/build-rpm.sh
           (
             cd apps/desktop/src-tauri/target/rpm

@@ -112,7 +112,9 @@ RPMBUILD_ARGS=(
     --define "_shaprint_version ${VERSION}"
     --define "_shaprint_release ${RELEASE}"
 )
-if [[ -n "${RPM_DIST}" ]]; then
+if [[ "${RPM_DIST}" == "none" ]]; then
+    RPMBUILD_ARGS+=(--define "dist %{nil}")
+elif [[ -n "${RPM_DIST}" ]]; then
     RPMBUILD_ARGS+=(-D "dist .${RPM_DIST#.}")
 fi
 
