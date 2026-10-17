@@ -121,6 +121,7 @@ class ShaPrintSystemPrintService : PrintService() {
                             pdfRenderer = pdfRenderer,
                             media = domainRequest.media,
                             colorMode = domainRequest.colorMode,
+                            orientation = domainRequest.orientation,
                             out = outputStream
                         )
                     }

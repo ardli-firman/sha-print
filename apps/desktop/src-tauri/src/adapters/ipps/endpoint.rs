@@ -758,7 +758,7 @@ fn submission_failure(code: ErrorCode) -> ErrorCode {
 }
 
 fn job_settings(request: &Request<'_>) -> Result<PrintSettings, Status> {
-    let media = request.value("media").map(str::to_owned);
+    let media = request.media()?;
     let color = match request.value("print-color-mode") {
         Some("color") => Some(true),
         Some("monochrome")
