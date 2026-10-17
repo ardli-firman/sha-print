@@ -513,9 +513,10 @@ pub fn query_cups_printer_ppd(
         )));
     }
     let ppd_path = unsafe { CStr::from_ptr(ppd_ptr) }.to_string_lossy();
-    let content = std::fs::read_to_string(ppd_path.as_ref())
-        .map_err(|e| AppError::internal(format!("cannot read PPD file: {e}")))?;
-    let _ = std::fs::remove_file(ppd_path.as_ref());
+    let path = std::path::Path::new(ppd_path.as_ref());
+    let read_res = std::fs::read_to_string(path);
+    let _ = std::fs::remove_file(path);
+    let content = read_res.map_err(|e| AppError::internal(format!("cannot read PPD file: {e}")))?;
     Ok(content)
 }
 

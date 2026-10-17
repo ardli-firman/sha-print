@@ -332,9 +332,8 @@ fn has_user_pagesize_or_media(options: &[(String, String)]) -> bool {
         .any(|(k, _)| k.eq_ignore_ascii_case("pagesize") || k.eq_ignore_ascii_case("media"))
 }
 
-/// Extracts the declared `*DefaultPageSize` from a PPD only if it exactly matches an available
-/// `*PageSize` option in that PPD.
-pub fn extract_valid_default_pagesize_from_ppd(ppd_content: &str) -> Option<String> {
+/// Parses the declared `*DefaultPageSize:` and all available `*PageSize ` choices from PPD content.
+pub fn parse_ppd_pagesizes(ppd_content: &str) -> (Option<String>, Vec<String>) {
     let mut declared_default = None;
     let mut available_sizes = Vec::new();
 
@@ -357,6 +356,13 @@ pub fn extract_valid_default_pagesize_from_ppd(ppd_content: &str) -> Option<Stri
         }
     }
 
+    (declared_default, available_sizes)
+}
+
+/// Extracts the declared `*DefaultPageSize` from a PPD only if it exactly matches an available
+/// `*PageSize` option in that PPD.
+pub fn extract_valid_default_pagesize_from_ppd(ppd_content: &str) -> Option<String> {
+    let (declared_default, available_sizes) = parse_ppd_pagesizes(ppd_content);
     let def = declared_default?;
     available_sizes
         .into_iter()
@@ -366,27 +372,7 @@ pub fn extract_valid_default_pagesize_from_ppd(ppd_content: &str) -> Option<Stri
 /// Identifies available `PageSize` options in the generated PPD and selects a valid default
 /// page size (resolving `.Borderless` suffixes where needed under modern cups-filters 2.0).
 pub fn resolve_default_pagesize_from_ppd(ppd_content: &str) -> Option<String> {
-    let mut declared_default = None;
-    let mut available_sizes = Vec::new();
-
-    for line in ppd_content.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("*DefaultPageSize:") {
-            let val = rest.trim();
-            if !val.is_empty() && !val.eq_ignore_ascii_case("unknown") {
-                declared_default = Some(val.to_owned());
-            }
-        } else if let Some(rest) = trimmed.strip_prefix("*PageSize ") {
-            let rest = rest.trim_start();
-            let name: String = rest
-                .chars()
-                .take_while(|c| *c != '/' && *c != ':' && !c.is_whitespace())
-                .collect();
-            if !name.is_empty() && !available_sizes.contains(&name) {
-                available_sizes.push(name);
-            }
-        }
-    }
+    let (declared_default, available_sizes) = parse_ppd_pagesizes(ppd_content);
 
     if available_sizes.is_empty() {
         return None;
@@ -436,13 +422,24 @@ pub fn resolve_default_pagesize_from_ppd(ppd_content: &str) -> Option<String> {
 pub fn resolve_default_pagesize_from_lpoptions(lpoptions_output: &str) -> Option<String> {
     for line in lpoptions_output.lines() {
         if line.starts_with("PageSize/") || line.starts_with("PageSize:") {
-            let (_, choices) = line.split_once(':')?;
+            let Some((_, choices)) = line.split_once(':') else {
+                continue;
+            };
             let mut available_sizes = Vec::new();
+            let mut active_default = None;
             for choice in choices.split_whitespace() {
+                if let Some(active) = choice.strip_prefix('*') {
+                    if !active.is_empty() {
+                        active_default = Some(active.to_owned());
+                    }
+                }
                 let name = choice.trim_start_matches('*');
                 if !name.is_empty() && !available_sizes.contains(&name.to_owned()) {
                     available_sizes.push(name.to_owned());
                 }
+            }
+            if let Some(active) = active_default {
+                return Some(active);
             }
             if available_sizes.is_empty() {
                 return None;
@@ -978,6 +975,30 @@ mod tests {
         assert_eq!(
             extract_valid_default_pagesize_from_ppd(ppd),
             Some("A4".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_default_pagesize_from_lpoptions() {
+        let lpoptions_with_active = r#"Resolution/Output Resolution: *300dpi 600dpi
+PageSize/Media Size: 4x6.Borderless *Letter.Borderless A4.Borderless
+Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble"#;
+
+        assert_eq!(
+            resolve_default_pagesize_from_lpoptions(lpoptions_with_active),
+            Some("Letter.Borderless".to_string()),
+            "must prioritize active choice marked with *"
+        );
+
+        let lpoptions_unselected = r#"Resolution/Output Resolution: *300dpi 600dpi
+MalformedLineWithoutColon
+PageSize/Media Size: 4x6.Borderless A4.Borderless Letter.Borderless
+Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble"#;
+
+        assert_eq!(
+            resolve_default_pagesize_from_lpoptions(lpoptions_unselected),
+            Some("A4.Borderless".to_string()),
+            "must fall back to candidate when no active choice is set and ignore malformed lines"
         );
     }
 
