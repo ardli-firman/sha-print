@@ -90,8 +90,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bash packaging/linux/deb/build-deb.sh
-          bash packaging/linux/rpm/build-rpm.sh || true
+          ALMALINUX_MAJOR=10 bash packaging/linux/rpm/build-rpm.sh
+          (
+            cd apps/desktop/src-tauri/target/rpm
+            for f in *.rpm; do
+              [ -f "$f" ] && sha256sum "$f" > "${f}.sha256"
+            done
+          )
           gh release upload "${{ env.RELEASE_TAG }}" \
             apps/desktop/src-tauri/target/deb/*.deb \
             apps/desktop/src-tauri/target/rpm/*.rpm \
-            --clobber || true
+            apps/desktop/src-tauri/target/rpm/*.sha256 \
+            --clobber
