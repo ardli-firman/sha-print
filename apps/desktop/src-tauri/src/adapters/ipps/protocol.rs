@@ -129,6 +129,7 @@ struct Attribute {
     name: String,
     tag: u8,
     values: Vec<Vec<u8>>,
+    value_tags: Vec<u8>,
 }
 
 impl Attribute {
@@ -186,6 +187,7 @@ impl<'a> Request<'a> {
             if name.is_empty() {
                 if let Some(previous) = request.attributes.last_mut() {
                     previous.values.push(value);
+                    previous.value_tags.push(value_tag);
                     continue;
                 }
                 return Err(ParseError::NotText);
@@ -194,6 +196,7 @@ impl<'a> Request<'a> {
                 name,
                 tag: value_tag,
                 values: vec![value],
+                value_tags: vec![value_tag],
             });
         }
         Ok(request)
@@ -278,65 +281,129 @@ impl<'a> Request<'a> {
         }
     }
 
-    /// Returns the requested media size, checking both `media` keyword and `media-col` collection.
-    pub fn media(&self) -> Option<String> {
+    /// Returns requested media, rejecting malformed or out-of-bounds collections before submission.
+    pub fn media(&self) -> Result<Option<String>, Status> {
         if let Some(media) = self.value("media") {
-            return Some(media.to_owned());
+            return Ok(Some(media.to_owned()));
         }
-        let media_col = self
-            .attributes
-            .iter()
-            .find(|attr| attr.name == "media-col")?;
-
-        for (idx, val) in media_col.values.iter().enumerate() {
-            if val.as_slice() == b"media-size-name" {
-                if let Some(next_val) = media_col.values.get(idx + 1) {
-                    if let Ok(name) = std::str::from_utf8(next_val) {
-                        return Some(name.trim_end_matches('\0').to_owned());
+        let Some(collection) = self.attributes.iter().find(|attr| attr.name == "media-col") else {
+            return Ok(None);
+        };
+        let invalid = Status::AttributesOrValuesNotSupported;
+        if collection.tag != tag::BEG_COLLECTION || !collection.values[0].is_empty() {
+            return Err(invalid);
+        }
+        // Retain collection paths and value tags; raw byte matching alone can mistake a value
+        // for a member name or read dimensions from an unrelated nested collection.
+        let mut path: Vec<&[u8]> = vec![b"media-col"];
+        let mut member = None;
+        let mut name = None;
+        let mut media_size_seen = false;
+        let mut x = None;
+        let mut y = None;
+        for (&value_tag, value) in collection.value_tags.iter().zip(&collection.values).skip(1) {
+            if path.is_empty() {
+                return Err(invalid);
+            }
+            match value_tag {
+                tag::MEMBER_ATTR_NAME => {
+                    if member.is_some() || value.is_empty() {
+                        return Err(invalid);
+                    }
+                    member = Some(value.as_slice());
+                }
+                tag::BEG_COLLECTION => {
+                    if !value.is_empty() || path.len() >= 16 {
+                        return Err(invalid);
+                    }
+                    let key = member.take().ok_or(invalid)?;
+                    if path.len() == 1 && key == b"media-size" {
+                        if media_size_seen {
+                            return Err(invalid);
+                        }
+                        media_size_seen = true;
+                    }
+                    path.push(key);
+                }
+                tag::END_COLLECTION => {
+                    if member.is_some() || !value.is_empty() {
+                        return Err(invalid);
+                    }
+                    path.pop();
+                }
+                _ => {
+                    let key = member.take().ok_or(invalid)?;
+                    if path.len() == 1 && key == b"media-size-name" {
+                        if !matches!(value_tag, tag::KEYWORD | tag::NAME) || name.is_some() {
+                            return Err(invalid);
+                        }
+                        let text = std::str::from_utf8(value)
+                            .map_err(|_| invalid)?
+                            .trim_end_matches('\0');
+                        if text.contains('\0') {
+                            return Err(invalid);
+                        }
+                        if !text.is_empty() {
+                            name = Some(text.to_owned());
+                        }
+                    } else if path.as_slice() == [b"media-col".as_slice(), b"media-size".as_slice()]
+                        && matches!(key, b"x-dimension" | b"y-dimension")
+                    {
+                        if value_tag != tag::INTEGER {
+                            return Err(invalid);
+                        }
+                        let bytes = value.as_slice().try_into().map_err(|_| invalid)?;
+                        let dimension = i32::from_be_bytes(bytes);
+                        // Check before narrowing and before the i16 arithmetic used by matching.
+                        if !(5000..=45000).contains(&dimension) {
+                            return Err(invalid);
+                        }
+                        let target = if key == b"x-dimension" {
+                            &mut x
+                        } else {
+                            &mut y
+                        };
+                        if target.replace(dimension).is_some() {
+                            return Err(invalid);
+                        }
                     }
                 }
             }
         }
-
-        let mut x_dim = None;
-        let mut y_dim = None;
-        for (idx, val) in media_col.values.iter().enumerate() {
-            if val.as_slice() == b"x-dimension" {
-                if let Some(next_val) = media_col.values.get(idx + 1) {
-                    if let Ok(bytes) = next_val.as_slice().try_into() {
-                        x_dim = Some(i32::from_be_bytes(bytes));
-                    }
-                }
-            } else if val.as_slice() == b"y-dimension" {
-                if let Some(next_val) = media_col.values.get(idx + 1) {
-                    if let Ok(bytes) = next_val.as_slice().try_into() {
-                        y_dim = Some(i32::from_be_bytes(bytes));
-                    }
-                }
-            }
+        if !path.is_empty() || member.is_some() {
+            return Err(invalid);
         }
-
-        if let (Some(x), Some(y)) = (x_dim, y_dim) {
-            let short_tenths = (x.min(y) / 10) as i16;
-            let long_tenths = (x.max(y) / 10) as i16;
-            if let Some(spec) =
-                crate::adapters::printers::media::media_for_dimensions(short_tenths, long_tenths)
-            {
-                return Some(spec.keyword.to_owned());
+        let dimensions = match (x, y) {
+            (Some(x), Some(y)) => {
+                if x.min(y) > 33020 {
+                    return Err(invalid);
+                }
+                let short = i16::try_from(x.min(y) / 10).map_err(|_| invalid)?;
+                let long = i16::try_from(x.max(y) / 10).map_err(|_| invalid)?;
+                if !crate::adapters::printers::media::custom_dimensions_are_supported(short, long) {
+                    return Err(invalid);
+                }
+                Some((short, long))
             }
-            if crate::adapters::printers::media::custom_dimensions_are_supported(
-                short_tenths,
-                long_tenths,
-            ) {
-                return Some(format!(
+            (None, None) if !media_size_seen => None,
+            _ => return Err(invalid),
+        };
+        if let Some(name) = name {
+            return Ok(Some(name));
+        }
+        let Some((short, long)) = dimensions else {
+            return Ok(None);
+        };
+        let media = crate::adapters::printers::media::media_for_dimensions(short, long)
+            .map(|spec| spec.keyword.to_owned())
+            .unwrap_or_else(|| {
+                format!(
                     "custom_{:.1}x{:.1}mm",
-                    f64::from(short_tenths) / 10.0,
-                    f64::from(long_tenths) / 10.0
-                ));
-            }
-        }
-
-        None
+                    f64::from(short) / 10.0,
+                    f64::from(long) / 10.0
+                )
+            });
+        Ok(Some(media))
     }
 }
 
@@ -1103,98 +1170,56 @@ fn write_media_col_database(
     specs: &[crate::adapters::printers::media::MediaSpec],
 ) {
     for (index, spec) in specs.iter().enumerate() {
-        out.push(tag::BEG_COLLECTION);
-        write_name_and_value(out, if index == 0 { "media-col-database" } else { "" }, &[]);
-
-        out.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(out, "", b"media-size");
-        out.push(tag::BEG_COLLECTION);
-        write_name_and_value(out, "", &[]);
-        out.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(out, "", b"x-dimension");
-        out.push(tag::INTEGER);
-        write_name_and_value(out, "", &((spec.short_tenths_mm as i32) * 10).to_be_bytes());
-        out.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(out, "", b"y-dimension");
-        out.push(tag::INTEGER);
-        write_name_and_value(out, "", &((spec.long_tenths_mm as i32) * 10).to_be_bytes());
-        out.push(tag::END_COLLECTION);
-        write_name_and_value(out, "", &[]);
-
-        out.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(out, "", b"media-size-name");
-        out.push(tag::KEYWORD);
-        write_name_and_value(out, "", spec.keyword.as_bytes());
-
-        out.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(out, "", b"media-bottom-margin");
-        out.push(tag::INTEGER);
-        write_name_and_value(out, "", &0i32.to_be_bytes());
-
-        out.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(out, "", b"media-top-margin");
-        out.push(tag::INTEGER);
-        write_name_and_value(out, "", &0i32.to_be_bytes());
-
-        out.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(out, "", b"media-left-margin");
-        out.push(tag::INTEGER);
-        write_name_and_value(out, "", &0i32.to_be_bytes());
-
-        out.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(out, "", b"media-right-margin");
-        out.push(tag::INTEGER);
-        write_name_and_value(out, "", &0i32.to_be_bytes());
-
-        out.push(tag::END_COLLECTION);
-        write_name_and_value(out, "", &[]);
+        write_media_collection(
+            out,
+            if index == 0 { "media-col-database" } else { "" },
+            spec,
+        );
     }
 }
 
 fn write_media_col_default(out: &mut Vec<u8>, spec: &crate::adapters::printers::media::MediaSpec) {
-    out.push(tag::BEG_COLLECTION);
-    write_name_and_value(out, "media-col-default", &[]);
+    write_media_collection(out, "media-col-default", spec);
+}
 
-    out.push(tag::MEMBER_ATTR_NAME);
-    write_name_and_value(out, "", b"media-size");
+fn write_media_collection(
+    out: &mut Vec<u8>,
+    name: &str,
+    spec: &crate::adapters::printers::media::MediaSpec,
+) {
     out.push(tag::BEG_COLLECTION);
-    write_name_and_value(out, "", &[]);
-    out.push(tag::MEMBER_ATTR_NAME);
-    write_name_and_value(out, "", b"x-dimension");
-    out.push(tag::INTEGER);
-    write_name_and_value(out, "", &((spec.short_tenths_mm as i32) * 10).to_be_bytes());
-    out.push(tag::MEMBER_ATTR_NAME);
-    write_name_and_value(out, "", b"y-dimension");
-    out.push(tag::INTEGER);
-    write_name_and_value(out, "", &((spec.long_tenths_mm as i32) * 10).to_be_bytes());
+    write_name_and_value(out, name, &[]);
+    write_text(out, tag::MEMBER_ATTR_NAME, "", "media-size");
+    write_media_size(out, "", spec);
+    write_text(out, tag::MEMBER_ATTR_NAME, "", "media-size-name");
+    write_text(out, tag::KEYWORD, "", spec.keyword);
+    for margin in [
+        "media-bottom-margin",
+        "media-top-margin",
+        "media-left-margin",
+        "media-right-margin",
+    ] {
+        write_text(out, tag::MEMBER_ATTR_NAME, "", margin);
+        write_integers(out, tag::INTEGER, "", &[0]);
+    }
     out.push(tag::END_COLLECTION);
     write_name_and_value(out, "", &[]);
+}
 
-    out.push(tag::MEMBER_ATTR_NAME);
-    write_name_and_value(out, "", b"media-size-name");
-    out.push(tag::KEYWORD);
-    write_name_and_value(out, "", spec.keyword.as_bytes());
-
-    out.push(tag::MEMBER_ATTR_NAME);
-    write_name_and_value(out, "", b"media-bottom-margin");
-    out.push(tag::INTEGER);
-    write_name_and_value(out, "", &0i32.to_be_bytes());
-
-    out.push(tag::MEMBER_ATTR_NAME);
-    write_name_and_value(out, "", b"media-top-margin");
-    out.push(tag::INTEGER);
-    write_name_and_value(out, "", &0i32.to_be_bytes());
-
-    out.push(tag::MEMBER_ATTR_NAME);
-    write_name_and_value(out, "", b"media-left-margin");
-    out.push(tag::INTEGER);
-    write_name_and_value(out, "", &0i32.to_be_bytes());
-
-    out.push(tag::MEMBER_ATTR_NAME);
-    write_name_and_value(out, "", b"media-right-margin");
-    out.push(tag::INTEGER);
-    write_name_and_value(out, "", &0i32.to_be_bytes());
-
+fn write_media_size(
+    out: &mut Vec<u8>,
+    name: &str,
+    spec: &crate::adapters::printers::media::MediaSpec,
+) {
+    out.push(tag::BEG_COLLECTION);
+    write_name_and_value(out, name, &[]);
+    for (member, dimension) in [
+        ("x-dimension", spec.short_tenths_mm),
+        ("y-dimension", spec.long_tenths_mm),
+    ] {
+        write_text(out, tag::MEMBER_ATTR_NAME, "", member);
+        write_integers(out, tag::INTEGER, "", &[i32::from(dimension) * 10]);
+    }
     out.push(tag::END_COLLECTION);
     write_name_and_value(out, "", &[]);
 }
@@ -1204,29 +1229,15 @@ fn write_media_size_supported(
     specs: &[crate::adapters::printers::media::MediaSpec],
 ) {
     for (index, spec) in specs.iter().enumerate() {
-        out.push(tag::BEG_COLLECTION);
-        write_name_and_value(
+        write_media_size(
             out,
             if index == 0 {
                 "media-size-supported"
             } else {
                 ""
             },
-            &[],
+            spec,
         );
-
-        out.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(out, "", b"x-dimension");
-        out.push(tag::INTEGER);
-        write_name_and_value(out, "", &((spec.short_tenths_mm as i32) * 10).to_be_bytes());
-
-        out.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(out, "", b"y-dimension");
-        out.push(tag::INTEGER);
-        write_name_and_value(out, "", &((spec.long_tenths_mm as i32) * 10).to_be_bytes());
-
-        out.push(tag::END_COLLECTION);
-        write_name_and_value(out, "", &[]);
     }
 }
 
@@ -1460,7 +1471,10 @@ mod tests {
             &[("media", "om_folio_210x330mm")],
         );
         let parsed = Request::parse(&flat_req).expect("parsed");
-        assert_eq!(parsed.media().as_deref(), Some("om_folio_210x330mm"));
+        assert_eq!(
+            parsed.media().unwrap().as_deref(),
+            Some("om_folio_210x330mm")
+        );
 
         // media-col with media-size-name
         let mut col_bytes = vec![2, 0, 0, 2, 0, 0, 0, 2, tag::OPERATION_ATTRIBUTES];
@@ -1474,25 +1488,136 @@ mod tests {
         write_name_and_value(&mut col_bytes, "", &[]);
         col_bytes.push(tag::END_OF_ATTRIBUTES);
         let parsed_col = Request::parse(&col_bytes).expect("parsed col");
-        assert_eq!(parsed_col.media().as_deref(), Some("om_folio_210x330mm"));
+        assert_eq!(
+            parsed_col.media().unwrap().as_deref(),
+            Some("om_folio_210x330mm")
+        );
 
-        // media-col with dimensions
-        let mut dim_bytes = vec![2, 0, 0, 2, 0, 0, 0, 3, tag::OPERATION_ATTRIBUTES];
-        dim_bytes.push(tag::BEG_COLLECTION);
-        write_name_and_value(&mut dim_bytes, "media-col", &[]);
-        dim_bytes.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(&mut dim_bytes, "", b"x-dimension");
-        dim_bytes.push(tag::INTEGER);
-        write_name_and_value(&mut dim_bytes, "", &21000i32.to_be_bytes());
-        dim_bytes.push(tag::MEMBER_ATTR_NAME);
-        write_name_and_value(&mut dim_bytes, "", b"y-dimension");
-        dim_bytes.push(tag::INTEGER);
-        write_name_and_value(&mut dim_bytes, "", &33000i32.to_be_bytes());
-        dim_bytes.push(tag::END_COLLECTION);
-        write_name_and_value(&mut dim_bytes, "", &[]);
-        dim_bytes.push(tag::END_OF_ATTRIBUTES);
+        // media-col with nested media-size dimensions.
+        let dim_bytes = dimension_request(21000, 33000, tag::INTEGER);
         let parsed_dim = Request::parse(&dim_bytes).expect("parsed dim");
-        assert_eq!(parsed_dim.media().as_deref(), Some("om_folio_210x330mm"));
+        assert_eq!(
+            parsed_dim.media().unwrap().as_deref(),
+            Some("om_folio_210x330mm")
+        );
+    }
+
+    fn dimension_request(x: i32, y: i32, dimension_tag: u8) -> Vec<u8> {
+        let mut bytes = vec![2, 0, 0, 2, 0, 0, 0, 3, tag::JOB_ATTRIBUTES];
+        bytes.push(tag::BEG_COLLECTION);
+        write_name_and_value(&mut bytes, "media-col", &[]);
+        bytes.push(tag::MEMBER_ATTR_NAME);
+        write_name_and_value(&mut bytes, "", b"media-size");
+        bytes.push(tag::BEG_COLLECTION);
+        write_name_and_value(&mut bytes, "", &[]);
+        for (name, value) in [("x-dimension", x), ("y-dimension", y)] {
+            bytes.push(tag::MEMBER_ATTR_NAME);
+            write_name_and_value(&mut bytes, "", name.as_bytes());
+            bytes.push(dimension_tag);
+            write_name_and_value(&mut bytes, "", &value.to_be_bytes());
+        }
+        for _ in 0..2 {
+            bytes.push(tag::END_COLLECTION);
+            write_name_and_value(&mut bytes, "", &[]);
+        }
+        bytes.push(tag::END_OF_ATTRIBUTES);
+        bytes
+    }
+
+    #[test]
+    fn collection_media_rejects_invalid_dimensions_and_types() {
+        for (x, y, value_tag) in [
+            (676360, 685060, tag::INTEGER), // Would wrap to A4 through an i16 cast.
+            (-327680, 29700, tag::INTEGER), // Would overflow dimension matching.
+            (0, 29700, tag::INTEGER),
+            (21000, 45001, tag::INTEGER),
+            (33021, 45000, tag::INTEGER),
+            (21000, 33000, tag::KEYWORD),
+        ] {
+            let bytes = dimension_request(x, y, value_tag);
+            let parsed = Request::parse(&bytes).expect("parsed");
+            assert_eq!(
+                parsed.media(),
+                Err(Status::AttributesOrValuesNotSupported),
+                "invalid dimensions {x}, {y}"
+            );
+        }
+    }
+
+    #[test]
+    fn collection_media_reads_nested_dimensions() {
+        for (x, y, expected) in [
+            (21000, 33000, "om_folio_210x330mm"),
+            (33000, 21000, "om_folio_210x330mm"),
+            (12300, 23400, "custom_123.0x234.0mm"),
+        ] {
+            let bytes = dimension_request(x, y, tag::INTEGER);
+            let parsed = Request::parse(&bytes).expect("parsed");
+            assert_eq!(parsed.media().unwrap().as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn collection_media_rejects_unclosed_or_unrelated_collections() {
+        let mut unclosed = dimension_request(21000, 33000, tag::INTEGER);
+        unclosed.drain(unclosed.len() - 6..unclosed.len() - 1);
+        let mut unrelated = dimension_request(21000, 33000, tag::INTEGER);
+        let start = unrelated
+            .windows(10)
+            .position(|value| value == b"media-size")
+            .unwrap();
+        unrelated[start..start + 10].copy_from_slice(b"other-size");
+        let mut wrong_tag = dimension_request(21000, 33000, tag::INTEGER);
+        wrong_tag[9] = tag::KEYWORD;
+        let parsed = Request::parse(&unrelated).expect("valid unrelated collection");
+        assert_eq!(parsed.media(), Ok(None));
+        for bytes in [unclosed, wrong_tag] {
+            let parsed = Request::parse(&bytes).expect("attribute framing remains valid");
+            assert_eq!(parsed.media(), Err(Status::AttributesOrValuesNotSupported));
+        }
+    }
+
+    #[test]
+    fn collection_media_falls_back_to_dimensions_when_size_name_is_empty() {
+        for name in ["", "\0"] {
+            let mut bytes = dimension_request(21000, 33000, tag::INTEGER);
+            bytes.truncate(bytes.len() - 6);
+            write_text(&mut bytes, tag::MEMBER_ATTR_NAME, "", "media-size-name");
+            write_text(&mut bytes, tag::KEYWORD, "", name);
+            bytes.push(tag::END_COLLECTION);
+            write_name_and_value(&mut bytes, "", &[]);
+            bytes.push(tag::END_OF_ATTRIBUTES);
+            let parsed = Request::parse(&bytes).expect("valid collection");
+            assert_eq!(
+                parsed.media().unwrap().as_deref(),
+                Some("om_folio_210x330mm")
+            );
+        }
+    }
+
+    #[test]
+    fn collection_with_only_margins_keeps_the_default_media() {
+        let mut bytes = vec![2, 0, 0, 2, 0, 0, 0, 3, tag::JOB_ATTRIBUTES];
+        bytes.push(tag::BEG_COLLECTION);
+        write_name_and_value(&mut bytes, "media-col", &[]);
+        write_text(&mut bytes, tag::MEMBER_ATTR_NAME, "", "media-top-margin");
+        write_integers(&mut bytes, tag::INTEGER, "", &[0]);
+        bytes.push(tag::END_COLLECTION);
+        write_name_and_value(&mut bytes, "", &[]);
+        bytes.push(tag::END_OF_ATTRIBUTES);
+        let parsed = Request::parse(&bytes).expect("valid collection");
+        assert_eq!(parsed.media(), Ok(None));
+    }
+
+    #[test]
+    fn advertised_media_collections_round_trip_every_catalog_entry() {
+        for spec in crate::adapters::printers::media::MEDIA_CATALOG {
+            let mut bytes = vec![2, 0, 0, 2, 0, 0, 0, 3, tag::JOB_ATTRIBUTES];
+            write_media_collection(&mut bytes, "media-col", spec);
+            bytes.push(tag::END_OF_ATTRIBUTES);
+            let parsed = Request::parse(&bytes).expect("valid collection");
+            assert_eq!(parsed.media().unwrap().as_deref(), Some(spec.keyword));
+        }
     }
 
     fn integers(attributes: &[Decoded], name: &str) -> Vec<i32> {
