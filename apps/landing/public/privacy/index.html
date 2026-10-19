@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>ShaPrint Privacy Policy | Android app and website</title>
+    <meta
+      name="description"
+      content="ShaPrint privacy policy for the Android app and website: documents, network printing, local storage, permissions, retention, deletion, and privacy contact."
+    />
+    <link rel="canonical" href="https://sha-print.pages.dev/privacy/" />
+    <link rel="icon" href="/assets/brand.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header wrap">
+      <a class="wordmark" href="/" aria-label="ShaPrint home"
+        ><img src="/assets/brand.svg" width="30" height="34" alt="" /><span
+          >Sha<span class="wordmark-print">Print</span></span
+        ></a
+      >
+      <nav aria-label="Main navigation">
+        <a href="/guide/">Setup guide</a><a href="/#download">Downloads</a>
+      </nav>
+    </header>
+    <main id="main" class="privacy-content wrap">
+      <p class="section-kicker">ShaPrint Android app and website</p>
+      <h1>Privacy policy</h1>
+      <p class="privacy-date">Last updated: <time datetime="2026-10-19">19 October 2026</time></p>
+      <p class="privacy-intro">ShaPrint connects your Android device to printers shared by a server you choose. This policy explains what the app accesses, where that information goes, and the choices you have. It also covers this website.</p>
+      <aside class="privacy-summary" aria-label="Policy at a glance">
+        <p>At a glance</p>
+        <ul>
+          <li>No ShaPrint account, advertising, or in-app analytics.</li>
+          <li>Documents are processed on your device and sent to the server you select for printing.</li>
+          <li>Trusted Servers and connection settings are stored on your device. Android backup settings may apply.</li>
+          <li>Website visit and download measurements are separate from the app.</li>
+        </ul>
+      </aside>
+      <nav class="privacy-nav" aria-label="Privacy policy contents">
+        <a href="#scope">Scope and contact</a><a href="#app-data">App data</a><a href="#recipients">Data recipients</a><a href="#permissions">Permissions</a><a href="#security">Security and backup</a><a href="#retention">Retention and deletion</a><a href="#website">Website</a><a href="#requests">Privacy requests</a>
+      </nav>
+      <section id="scope" aria-labelledby="scope-title">
+        <h2 id="scope-title">Scope and contact</h2>
+        <p>This policy applies to the ShaPrint Android app, package <code>io.shaprint.client</code>, and the website at <a href="https://sha-print.pages.dev/">sha-print.pages.dev</a>. ShaPrint is maintained by the developer of the <a href="https://github.com/ardli-firman/sha-print">ardli-firman/sha-print project</a>.</p>
+        <p>For privacy questions or requests, email <a href="mailto:ardlifirman17@gmail.com">ardlifirman17@gmail.com</a>. Please do not send passwords, Network Channel values, certificate keys, or the contents of private documents.</p>
+        <p>Your chosen server, its operating system, and the printer are operated by you or your organization. Their handling of submitted print jobs is also subject to that operator's policies.</p>
+      </section>
+      <section id="app-data" aria-labelledby="app-data-title">
+        <h2 id="app-data-title">Information the Android app uses</h2>
+        <dl class="privacy-data">
+          <dt>Documents and print job details</dt>
+          <dd>The app reads a PDF or image that you select through Android's document picker, or a print document provided by Android's printing system. It uses the document content, file or print job name, selected printer, page choices, and print settings to show a preview, prepare printable data, and submit the print job. Copies and rendered print data may be written to temporary local files. A print job's name and printer name may appear in a printing notification, including on your lock screen depending on your notification settings.</dd>
+          <dt>Server and printer information</dt>
+          <dd>Network discovery and connections use network addresses, ports, server names, advertised shared printer names, printer capabilities, connection status, and TLS certificate fingerprints. You can also enter a server address yourself. Discovery broadcasts and responses can be visible to other devices on the same network.</dd>
+          <dt>Trusted Servers and Network Channel</dt>
+          <dd>When you trust a server, the app saves its connection information and certificate fingerprint in private app storage. If you provide a Network Channel, the app encrypts that value using an Android Keystore key, stores the encrypted value locally, and uses it to authorize requests to that server. Server addresses and certificate fingerprints are not encrypted by that same mechanism.</dd>
+        </dl>
+        <p>The Android app does not require a ShaPrint account, sell personal information, display advertising, or include an analytics or advertising SDK. It does not request access to your contacts, microphone, camera, or GPS location. Selecting a file does not give ShaPrint general access to all files on your device.</p>
+      </section>
+      <section id="recipients" aria-labelledby="recipients-title">
+        <h2 id="recipients-title">Where information goes</h2>
+        <p>When you print, the Android app sends the prepared document content, print job name, print settings, and any configured Network Channel to your selected ShaPrint server over an encrypted IPPS connection. The server can also see the connection's source network address. Printing may use your local network, a routed network, or another server address that you choose.</p>
+        <p>The server and its printing system process the job and send it to the printer. Its operator may have access to document content, job records, spool files, and printed pages. Only connect to servers you are authorized to use and whose operator you trust.</p>
+        <p>ShaPrint's developer does not operate a cloud print relay and does not receive your print jobs through the website. Android's print service and your selected document provider may also process information when you use those services. Android backup is described below.</p>
+        <p>If you email us for support or a privacy request, we receive your email address, message, and any attachments you choose to send. We use that correspondence to respond to the request. Our email provider, Google/Gmail, processes it to deliver and store messages under <a href="https://policies.google.com/privacy">Google's privacy policy</a>. Public GitHub issues are visible to others; use email for private inquiries.</p>
+      </section>
+      <section id="permissions" aria-labelledby="permissions-title">
+        <h2 id="permissions-title">Device access and permissions</h2>
+        <ul>
+          <li><strong>Network access:</strong> connects to selected servers, checks network availability, and listens for network discovery messages.</li>
+          <li><strong>Selected documents:</strong> Android's document picker grants access to files you choose. The app may retain permission to read a selected document and keep a local cached copy for previewing or printing.</li>
+          <li><strong>Notifications and foreground processing:</strong> keep print preparation and transmission running and show printing status. You control notification visibility in Android settings.</li>
+          <li><strong>Android printing:</strong> if you enable ShaPrint as a system print service, Android provides the print document and settings for jobs you send through that service. You can disable the service in Android's printing settings.</li>
+        </ul>
+      </section>
+      <section id="security" aria-labelledby="security-title">
+        <h2 id="security-title">Security and device backup</h2>
+        <p>Connections to a Trusted Server use TLS encryption and check the server certificate against its saved SHA-256 fingerprint. Review the server identity before trusting it. Local Network Channel values are encrypted with an Android Keystore key; other saved server information is held in the app's private storage. These protections do not control the security or retention practices of the receiving server or printer.</p>
+        <p>The Android app allows operating-system backup. Depending on your device, Android version, backup provider, and settings, eligible app preferences may be backed up or transferred to another device, including saved server information and encrypted Network Channel entries. Cache files are excluded from standard Android Auto Backup. Backup and restoration are controlled by Android and your backup provider, rather than a ShaPrint developer-operated service.</p>
+        <p>You can manage backup and device-transfer settings in Android. Deleting local app data does not itself guarantee that an existing system backup has been removed. Consult <a href="https://developer.android.com/identity/data/autobackup">Android's backup documentation</a> and your device or backup provider for its controls.</p>
+      </section>
+      <section id="retention" aria-labelledby="retention-title">
+        <h2 id="retention-title">Retention and deletion</h2>
+        <ul>
+          <li><strong>Saved server information:</strong> remains in the app's storage until you forget that server, clear app storage, or uninstall the app. In the app's Servers screen, use <em>Forget</em> to remove a saved server and its stored Network Channel entry from this installation.</li>
+          <li><strong>Document caches and temporary print files:</strong> are used for previewing and printing. Some temporary files are deleted when their operation finishes; selected-document caches may remain until replaced, cleared by Android, or removed by you. The app does not promise that every local copy is deleted immediately after a print job, particularly if an operation is interrupted.</li>
+          <li><strong>Clear local data:</strong> open Android Settings, find ShaPrint under Apps, then use Storage &amp; cache to clear the cache or clear storage. Labels vary by device. Clearing storage resets saved servers and app data. Uninstalling removes this installation's local app data; eligible data may return if you later restore an Android backup.</li>
+          <li><strong>Original and remote copies:</strong> clearing ShaPrint does not delete the original file from your document provider, Android's separate print spooler data, data retained by the receiving server or printer, or printed pages. Manage those copies with the relevant provider or administrator.</li>
+          <li><strong>Support correspondence:</strong> is retained as needed to respond to your request, handle follow-up, and meet any applicable recordkeeping obligations. Email us to request deletion of information you sent us.</li>
+        </ul>
+        <p>There is no ShaPrint account to delete. For data stored on a server you or your organization operates, contact its administrator. We do not have access to delete those copies remotely.</p>
+      </section>
+      <section id="website" aria-labelledby="website-title">
+        <h2 id="website-title">Website hosting, visits, and downloads</h2>
+        <p>Cloudflare hosts this website and processes network requests to deliver and protect it. Requests expose information such as your IP address and browser request details to the hosting provider. When enabled for this site, Cloudflare Web Analytics measures page views, visits, referring sites, and page performance. See <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a> and <a href="https://www.cloudflare.com/web-analytics/">its Web Analytics explanation</a>.</p>
+        <p>When you click a package download link, the website sends the package identifier to its download measurement endpoint. If configured, a daily aggregate counter is incremented. Its database stores only the UTC date, package identifier, and count, not an IP address, user identifier, browser profile, or referring URL. Aggregate counts indicate interest, not unique people, successful downloads, or installations. There is no fixed automatic expiry for these aggregate counts.</p>
+        <p>This counter does not set cookies or use local storage. Its click reporting is skipped when the browser sends Do Not Track or Global Privacy Control signals. These signals apply to this counter; they do not prevent network requests needed to serve the website or change an external provider's policies.</p>
+        <p>Package files are downloaded from GitHub under <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub's privacy statement</a>. Cloudflare and GitHub apply their own operational retention policies. Download links remain usable when the counter is unavailable or blocked. The website does not receive print documents, print job content, or Network Channel values from the app.</p>
+      </section>
+      <section id="requests" aria-labelledby="requests-title">
+        <h2 id="requests-title">Privacy questions and requests</h2>
+        <p>Email <a href="mailto:ardlifirman17@gmail.com">ardlifirman17@gmail.com</a> to ask about this policy or request access, correction, or deletion of personal information you have sent to the developer. Describe the request without including document contents or connection secrets. We may ask for information needed to verify and handle your request.</p>
+        <p>Because the website's download counter stores no visitor identifier, it cannot identify or retrieve an individual visitor's click history. Local app data is controlled through the app and Android settings; server-side records are controlled by the server's operator.</p>
+        <h2 id="children">Children</h2>
+        <p>ShaPrint is a network printing tool intended for general and workplace use, not a service directed to children under 13. If you believe a child has sent personal information to the developer, contact us so we can address the request.</p>
+        <h2 id="changes">Changes to this policy</h2>
+        <p>We will update this page when ShaPrint's data practices change and revise the date above. Please review the policy for the version of the app and services you use.</p>
+      </section>
+    </main>
+    <footer class="site-footer wrap">
+      <a class="wordmark" href="/" aria-label="ShaPrint home"
+        ><img src="/assets/brand.svg" width="25" height="28" alt="" /><span
+          >Sha<span class="wordmark-print">Print</span></span
+        ></a
+      >
+      <nav aria-label="Footer navigation">
+        <a href="/guide/">Setup guide</a
+        ><a href="https://github.com/ardli-firman/sha-print/issues">Help</a
+        ><a href="/privacy/">Privacy policy</a>
+      </nav>
+    </footer>
+  </body>
+</html>

@@ -164,6 +164,26 @@ cd apps/android
 
 ---
 
+### Landing page (`apps/landing`)
+
+The English landing page and setup guide target Cloudflare Pages at
+`sha-print.pages.dev`. To preview them with the local download counter:
+
+```bash
+make landing-dev     # http://localhost:8788
+make landing-build   # Build only
+make landing-deploy  # Refresh releases, validate, and publish with local Wrangler login
+```
+
+See [the landing page README](apps/landing/README.md) for release-link refresh,
+Cloudflare deployment, and analytics setup. Root frontend checks include the
+landing package.
+
+[Product Hunt launch copy](docs/launch/product-hunt.md) is available as a draft
+for the maker to review before submission.
+
+---
+
 ## 📦 Building Releases
 
 ### Desktop Application (Windows & Linux)

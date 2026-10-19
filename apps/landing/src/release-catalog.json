@@ -1,0 +1,14 @@
+{
+  "desktopVersion": "3.4.4",
+  "androidVersion": "1.0.3",
+  "desktopRelease": "https://github.com/ardli-firman/sha-print/releases/tag/v3.4.4",
+  "packages": {
+    "windows-exe": "https://github.com/ardli-firman/sha-print/releases/download/v3.4.4/ShaPrint_3.4.4_x64-setup.exe",
+    "windows-msi": "https://github.com/ardli-firman/sha-print/releases/download/v3.4.4/ShaPrint_3.4.4_x64_en-US.msi",
+    "linux-deb": "https://github.com/ardli-firman/sha-print/releases/download/v3.4.4/shaprint_3.4.4-1_amd64.deb",
+    "linux-rpm": "https://github.com/ardli-firman/sha-print/releases/download/v3.4.4/shaprint-3.4.4-1.x86_64.rpm",
+    "linux-rpm-el10": "https://github.com/ardli-firman/sha-print/releases/download/v3.4.4/shaprint-3.4.4-1.el10.x86_64.rpm",
+    "linux-appimage": "https://github.com/ardli-firman/sha-print/releases/download/v3.4.4/ShaPrint_3.4.4_amd64.AppImage",
+    "android-apk": "https://github.com/ardli-firman/sha-print/releases/download/android-v1.0.3/shaprint-client-android-v1.0.3.apk"
+  }
+}

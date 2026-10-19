@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://sha-print.pages.dev/sitemap.xml

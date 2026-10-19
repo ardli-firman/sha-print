@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <title>ShaPrint: share your existing USB printer through a server computer</title>
+  <rect width="1200" height="630" fill="#fcfdfb"/><rect x="790" width="410" height="630" fill="#deebe8"/>
+  <g transform="translate(83 49) scale(.24)"><path fill="#126b73" d="M46 38H121V218C88.5 204 46 167 46 120Z"/><path fill="#1b292b" fill-rule="evenodd" d="M135 38H166L210 82V120C210 167 167.5 204 135 218ZM160 48V88H200Z"/></g>
+  <g font-family="DejaVu Sans,sans-serif" fill="#1b292b">
+    <text x="150" y="92" font-size="30" font-weight="700">ShaPrint</text>
+    <g font-size="65" font-weight="600" letter-spacing="-3"><text x="90" y="240">Your office printer.</text><text x="90" y="325">Shared with</text><text x="90" y="410">the whole team.</text></g>
+    <text x="92" y="493" font-size="22" fill="#526668">Share an existing USB printer over your local network.</text>
+    <text x="92" y="531" font-size="18" fill="#526668">Windows and Linux, with an Android client.</text>
+    <text x="92" y="582" font-size="18" fill="#126b73">sha-print.pages.dev</text>
+  </g>
+  <g transform="translate(830 66)" fill="none" stroke="#1b292b" stroke-width="3" stroke-linejoin="round">
+    <path d="M92 61V15H238V61" fill="#fcfdfb"/>
+    <path d="M112 30H208M112 42H183" stroke="#b4c8c3"/>
+    <rect x="61" y="60" width="208" height="91" rx="13" fill="#b8d2cb"/>
+    <path d="M61 91H269"/>
+    <path d="M95 121H235V181H95Z" fill="#fcfdfb"/>
+    <path d="M112 139H217M112 153H190" stroke="#b8d2cb"/>
+    <circle cx="246" cy="77" r="4" fill="#126b73" stroke="none"/>
+    <path d="M165 182V229" stroke="#126b73"/>
+    <rect x="94" y="232" width="142" height="89" rx="6" fill="#fcfdfb"/>
+    <rect x="101" y="239" width="128" height="72" rx="2" fill="#126b73" stroke="none"/>
+    <path d="M153 321V334H177V321M140 337H190"/>
+    <path d="M165 338V405H76V441M165 405H254V441" stroke="#126b73"/>
+    <circle cx="165" cy="405" r="4" fill="#126b73" stroke="none"/>
+    <rect x="29" y="442" width="94" height="60" rx="5" fill="#fcfdfb"/>
+    <rect x="207" y="442" width="94" height="60" rx="5" fill="#fcfdfb"/>
+    <path d="M37 450H115V493H37ZM215 450H293V493H215Z" fill="#b8d2cb" stroke="none"/>
+  </g>
+  <g fill="#fcfdfb" transform="translate(830 66)"><path d="M148 251H162V294C154 290 148 279 148 271Z"/><path fill-rule="evenodd" d="M168 251H174L185 262V271C185 280 176 290 168 294ZM172 255V267H181Z"/></g>
+  <rect x="917" y="407" width="156" height="32" rx="5" fill="#deebe8"/>
+  <g font-family="DejaVu Sans,sans-serif" font-size="14" fill="#126b73" text-anchor="middle"><text x="1014" y="273">USB</text><text x="995" y="429">Server stays on</text><text x="995" y="607">Clients on your local network</text></g>
+</svg>

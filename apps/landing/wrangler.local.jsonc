@@ -1,0 +1,14 @@
+// Local preview only. Production bindings are configured in Cloudflare Pages.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sha-print-local",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-10-17",
+  "d1_databases": [
+    {
+      "binding": "DOWNLOAD_METRICS",
+      "database_name": "shaprint-landing-metrics-local",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+    },
+  ],
+}
