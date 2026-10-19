@@ -1,7 +1,12 @@
-.PHONY: help keys release-nightly release-patch release-minor release-major release-android-patch release-android-minor release-android-major test test-android build-android-debug apk-debug build-android-release build-android-apk build-rpm build-deb publish-linux-repo smoke-rpm-almalinux9 smoke-rpm-almalinux10 smoke-deb-ubuntu2204 smoke-deb-ubuntu2404 smoke-deb-debian11 smoke-deb-debian12 smoke-channel-switch typecheck check lint
+.PHONY: landing-dev landing-refresh landing-check landing-build landing-deploy help keys release-nightly release-patch release-minor release-major release-android-patch release-android-minor release-android-major test test-android build-android-debug apk-debug build-android-release build-android-apk build-rpm build-deb publish-linux-repo smoke-rpm-almalinux9 smoke-rpm-almalinux10 smoke-deb-ubuntu2204 smoke-deb-ubuntu2404 smoke-deb-debian11 smoke-deb-debian12 smoke-channel-switch typecheck check lint
 
 help:
 	@echo "Available commands in ShaPrint:"
+	@echo "  make landing-dev           - Preview the landing page locally"
+	@echo "  make landing-refresh       - Refresh Stable/Android versions and verify all download links"
+	@echo "  make landing-check         - Run landing typecheck and tests"
+	@echo "  make landing-build         - Build landing from the current release catalog (no upload)"
+	@echo "  make landing-deploy        - Refresh, verify, test, build, and publish to Cloudflare Pages production"
 	@echo "  make keys                  - Generate Minisign signing key pair for Tauri updater"
 	@echo "  make release-nightly       - Trigger manual Nightly release from main (optional: SHA=<sha> SETTINGS_RISK=true)"
 	@echo "  make release-patch         - Bump desktop patch version (x.y.Z+1), commit, and create git tag"
@@ -117,3 +122,23 @@ lint:
 	cd apps/desktop/src-tauri && cargo clippy --all-targets -- -D warnings
 
 check: typecheck lint test
+
+# Keep publish stages sequential even when make is invoked with -j.
+landing-dev:
+	bun run landing:dev
+
+landing-refresh:
+	bun run --cwd apps/landing refresh:releases
+	bun run --cwd apps/landing verify:downloads
+
+landing-check:
+	bun run --cwd apps/landing typecheck
+	bun run --cwd apps/landing test
+
+landing-build:
+	bun run landing:build
+
+landing-deploy:
+	$(MAKE) landing-refresh
+	$(MAKE) landing-check
+	bun run --cwd apps/landing deploy

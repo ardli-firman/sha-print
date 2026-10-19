@@ -1,0 +1,22 @@
+{
+  "name": "shaprint-landing",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run build && bun run db:local && wrangler pages dev dist --d1 DOWNLOAD_METRICS=00000000-0000-0000-0000-000000000001 --compatibility-date 2026-10-17 --port 8788",
+    "db:local": "wrangler d1 execute shaprint-landing-metrics-local --local --config wrangler.local.jsonc --file migrations/0001_download_counts.sql",
+    "build": "bun scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests",
+    "refresh:releases": "bun scripts/refresh-releases.ts",
+    "deploy": "bun run build && wrangler pages deploy dist --project-name sha-print --branch main --commit-dirty=true",
+    "verify:downloads": "bun scripts/verify-release-links.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261016.1",
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.151.1"
+  }
+}

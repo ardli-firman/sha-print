@@ -9,10 +9,12 @@
     "dev": "bun --filter shaprint-desktop dev",
     "build": "bun --filter shaprint-desktop build",
     "preview": "bun --filter shaprint-desktop preview",
-    "typecheck": "bun --filter shaprint-desktop typecheck",
-    "test": "bun --filter shaprint-desktop test",
+    "typecheck": "bun --filter shaprint-desktop typecheck && bun --filter shaprint-landing typecheck",
+    "test": "bun --filter shaprint-desktop test && bun --filter shaprint-landing test",
     "test:watch": "bun --filter shaprint-desktop test:watch",
-    "tauri": "bun --filter shaprint-desktop tauri"
+    "tauri": "bun --filter shaprint-desktop tauri",
+    "landing:dev": "bun --filter shaprint-landing dev",
+    "landing:build": "bun --filter shaprint-landing build"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2"

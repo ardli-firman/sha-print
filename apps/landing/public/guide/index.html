@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    {{seoHead}}
+    <meta name="theme-color" content="#126b73" />
+    <link rel="icon" href="/assets/brand.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header wrap">
+      <a class="wordmark" href="/" aria-label="ShaPrint home"
+        ><img src="/assets/brand.svg" width="30" height="34" alt="" /><span
+          >Sha<span class="wordmark-print">Print</span></span
+        ></a
+      >
+      <nav aria-label="Main navigation">
+        <a href="/#how-it-works">How it works</a
+        ><a href="https://github.com/ardli-firman/sha-print">GitHub</a>
+      </nav>
+      <a class="button button-small" href="/#download">Get ShaPrint</a>
+    </header>
+    <div class="guide-shell wrap">
+      <nav class="guide-nav" aria-label="Guide contents">
+        <strong>Setup guide</strong
+        ><a href="#before-you-start">Before you start</a
+        ><a href="#server">Set up the server</a
+        ><a href="#clients">Connect desktop clients</a
+        ><a href="#linux">Linux packages</a><a href="#android">Android client</a
+        ><a href="#network">Networks &amp; VLANs</a
+        ><a href="#troubleshooting">Troubleshooting</a>
+      </nav>
+      <main id="main" class="guide-content">
+      <nav class="page-breadcrumb" aria-label="Breadcrumb"><ol><li><a href="/">ShaPrint</a></li><li aria-current="page">Setup guide</li></ol></nav>
+        <p class="section-kicker">From USB to shared printer</p>
+        <h1>Set up USB printer sharing with ShaPrint.</h1>
+        <p class="lead">
+          Get one server and one client printing first. Then add the rest of
+          your team.
+        </p>
+        <h2 id="before-you-start">Before you start</h2>
+        <ul>
+          <li>
+            A printer connected to a Windows or Linux computer that can already
+            print locally with its working driver. That computer will be your
+            <strong>server</strong>.
+          </li>
+          <li>
+            A supported computer to use as the first <strong>client</strong>,
+            connected to a network that can reach the server.
+          </li>
+          <li>
+            ShaPrint installed on both computers. Download the
+            <a href="/#download">Stable packages</a> for their operating
+            systems.
+          </li>
+          <li>
+            Permission to install a client queue and, where needed, allow
+            inbound network access on the server.
+          </li>
+        </ul>
+        <aside aria-label="Server availability">
+          The server must stay on, connected, and running ShaPrint with sharing
+          enabled while clients print. ShaPrint does not give a USB printer its
+          own independent network connection.
+        </aside>
+        <h2 id="server">Set up the server</h2>
+        <ol>
+          <li>
+            <strong>Print locally first.</strong> Connect the printer and
+            install the appropriate driver. Print a test page directly from the
+            server. Keep that working local printer queue installed.
+          </li>
+          <li>
+            <strong>Open ShaPrint.</strong> Configure a Network Channel. This is
+            a shared secret that authorizes print jobs between your server and
+            clients. Keep it private.
+          </li>
+          <li>
+            <strong>Select your shared printer.</strong> Open the Share printers
+            page and choose the local printer you want clients to use. Enable
+            sharing if it is not already running.
+          </li>
+          <li>
+            <strong>Allow the required setup.</strong> On Windows, starting
+            sharing can request administrator approval to add missing inbound
+            firewall rules. If you decline, sharing remains stopped until access
+            is configured. On Linux, follow the package's system-daemon and
+            authorization setup.
+          </li>
+          <li>
+            <strong>Review the server identity.</strong> Have the server's
+            certificate fingerprint available through a trusted means so you can
+            compare it on the client.
+          </li>
+        </ol>
+        <h2 id="clients">Connect a desktop client</h2>
+        <ol>
+          <li>
+            Open ShaPrint on the client and configure the same Network Channel
+            as the server.
+          </li>
+          <li>
+            Add a printer. Choose a nearby server, or enter the server's
+            hostname or IP address if it does not appear.
+          </li>
+          <li>
+            Compare the certificate fingerprint with the server's identity
+            through a trusted means. Approve the server only when they match.
+            Discovery alone does not establish trust.
+          </li>
+          <li>
+            Select a shared printer and install its client queue. Windows can
+            request administrator approval for queue installation.
+          </li>
+          <li>
+            Open a familiar application and print a test document through the
+            new ShaPrint client queue. Check the physical output, paper size,
+            color, and duplex settings you need.
+          </li>
+        </ol>
+        <aside aria-label="Server identity changes">
+          If a Trusted server's identity changes, verify the change with whoever
+          manages the server before approving the new fingerprint.
+        </aside>
+        <h2 id="linux">Choose the right Linux package</h2>
+        <p>
+          Use a DEB or RPM system package for a server or a managed client.
+          These install the <code>shaprintd</code> system daemon and desktop
+          application. The AppImage is a desktop GUI option; do not assume it
+          installs the system daemon.
+        </p>
+        <table>
+          <caption>
+            Documented distribution targets
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Distribution</th>
+              <th scope="col">Package</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Debian 11 &amp; 12; Ubuntu 22.04 &amp; 24.04</td>
+              <td>amd64 DEB</td>
+            </tr>
+            <tr>
+              <td>AlmaLinux 9</td>
+              <td>x86_64 RPM</td>
+            </tr>
+            <tr>
+              <td>AlmaLinux 10</td>
+              <td>el10 x86_64 RPM</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          Start by making sure the printer works in CUPS on the server. Install
+          the downloaded system package with your distribution's package
+          manager, which resolves its dependencies:
+        </p>
+        <h3>Debian / Ubuntu</h3>
+        <pre tabindex="0" role="region" aria-label="Debian and Ubuntu installation command"><code>sudo apt install ./shaprint_&lt;version&gt;-1_amd64.deb</code></pre>
+        <h3>AlmaLinux</h3>
+        <pre tabindex="0" role="region" aria-label="RPM installation command"><code>sudo dnf install ./shaprint-&lt;version&gt;-1.x86_64.rpm</code></pre>
+        <p>
+          On AlmaLinux 10, use the <code>.el10.x86_64.rpm</code> asset instead.
+          In these examples, replace the filename with the package you
+          downloaded.
+        </p>
+        <p>
+          Use the maintained
+          <a
+            href="https://github.com/ardli-firman/sha-print/tree/main/packaging/linux/deb"
+            >DEB repository instructions</a
+          >
+          or
+          <a
+            href="https://github.com/ardli-firman/sha-print/tree/main/packaging/linux/rpm"
+            >RPM repository instructions</a
+          >
+          for signed repositories, service setup, and distribution
+          prerequisites. Other distributions and printer configurations need
+          their own checks.
+        </p>
+        <h2 id="android">Connect the Android client</h2>
+        <p>
+          The Android app is a client, not a printer server. It needs Android
+          8.0 or later and access to a running ShaPrint server.
+        </p>
+        <ol>
+          <li>
+            Download the APK from the
+            <a href="/#download">Android download link</a>. Android may ask you
+            to allow this installation source. Follow your organization's device
+            policy.
+          </li>
+          <li>
+            Configure the same Network Channel and find or enter the server
+            address.
+          </li>
+          <li>
+            Review the server fingerprint against its identity before trusting
+            it, then choose a shared printer.
+          </li>
+          <li>
+            Use the app's document flow, or enable ShaPrint in Android's
+            printing settings to use it from applications that support system
+            printing.
+          </li>
+        </ol>
+        <p>
+          See the
+          <a
+            href="https://github.com/ardli-firman/sha-print/tree/main/apps/android"
+            >Android client documentation</a
+          >
+          for its current setup and supported document flow.
+        </p>
+        <h2 id="network">Networks and cross-VLAN printing</h2>
+        <p>
+          Clients must be able to reach the server. Different VLANs are
+          supported when routing and firewall policy allow the connection.
+          ShaPrint does not create a VPN or bypass an isolated network.
+        </p>
+        <table>
+          <caption>
+            Default ShaPrint network ports
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Service</th>
+              <th scope="col">Port</th>
+              <th scope="col">Where</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>IPPS sharing</td>
+              <td>TCP 48631</td>
+              <td>Server, reachable by clients</td>
+            </tr>
+            <tr>
+              <td>Discovery</td>
+              <td>UDP 48633</td>
+              <td>Server, reachable by discovery queries</td>
+            </tr>
+            <tr>
+              <td>Client proxy</td>
+              <td>TCP 48632</td>
+              <td>Client loopback only</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          Automatic discovery across subnets needs multicast routing or mDNS
+          reflection. If no nearby server appears, enter the server's hostname
+          or IP address manually. If your network uses a non-default endpoint,
+          enter <code>host:port</code> as configured by its administrator. A
+          missing discovery result does not necessarily mean the server is
+          offline.
+        </p>
+        <h2 id="troubleshooting">If the test page doesn't print</h2>
+        <ol>
+          <li>
+            <strong>Check the printer locally.</strong> If it cannot print
+            directly from the server, resolve the printer, driver, or
+            CUPS/spooler issue first.
+          </li>
+          <li>
+            <strong>Check the server.</strong> Keep it awake, connected, and
+            running ShaPrint with that printer selected for sharing.
+          </li>
+          <li>
+            <strong>Check reachability.</strong> Try the server address
+            manually. Confirm that network policy allows access to the IPPS
+            port.
+          </li>
+          <li>
+            <strong>Check trust and authorization.</strong> Verify the server
+            identity and make sure both installations have the intended Network
+            Channel. Do not share its value in an issue or screenshot.
+          </li>
+          <li>
+            <strong>Read the reported error.</strong> Follow ShaPrint's
+            suggested recovery action. For cached paper-size problems on Windows
+            client queues, use the app's Repair paper sizes action where
+            available.
+          </li>
+          <li>
+            <strong>Inspect the printed page.</strong> A completed spooler job
+            alone does not prove the document printed correctly. Compare a local
+            print with a client print using the same document and settings.
+          </li>
+        </ol>
+        <p>
+          If you still need help,
+          <a href="https://github.com/ardli-firman/sha-print/issues"
+            >check or open an issue on GitHub</a
+          >. Include the operating systems, printer model, ShaPrint version, and
+          error code. Leave out Network Channel values, private addresses, and
+          document content.
+        </p>
+        <a class="button" href="/#download">Choose your download</a>
+      </main>
+    </div>
+    <footer class="site-footer wrap">
+      <a class="wordmark" href="/" aria-label="ShaPrint home"
+        ><img src="/assets/brand.svg" width="25" height="28" alt="" /><span
+          >Sha<span class="wordmark-print">Print</span></span
+        ></a
+      >
+      <p>Printer sharing over your local network.</p>
+      <nav aria-label="Footer navigation">
+        <a href="/guide/">Setup guide</a
+        ><a href="https://github.com/ardli-firman/sha-print/issues">Help</a
+        ><a href="/privacy/">Privacy policy</a>
+      </nav>
+    </footer>
+  </body>
+</html>

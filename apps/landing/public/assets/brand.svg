@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="38 30 180 196" width="256" height="256">
+  <title>ShaPrint Favicon</title>
+  <path fill="#126b73" d="
+    M 46 38
+    H 121
+    V 218
+    C 88.5 204 46 167 46 120
+    Z
+  "/>
+  <path fill="#1b292b" fill-rule="evenodd" d="
+    M 135 38
+    H 166
+    L 210 82
+    V 120
+    C 210 167 167.5 204 135 218
+    Z
+    M 160 48
+    V 88
+    H 200
+    Z
+  "/>
+</svg>

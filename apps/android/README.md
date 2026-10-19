@@ -87,5 +87,13 @@ When uploading the `.aab` to Google Play Console for the first time:
    - ShaPrint implements `android.printservice.PrintService` (`ShaPrintSystemPrintService`). This integrates ShaPrint directly into Android's native system print dialog.
 
 3. **Data Safety**:
-   - The app communicates exclusively on the local network (LAN / IPPS port `48631` and mDNS port `48633`).
-   - No user data, documents, or credentials are sent to external third-party cloud servers.
+   - Printing connects directly to the user's selected ShaPrint server over IPPS (`48631`), with mDNS discovery (`48633`). A manually entered server can be reachable across routed networks; do not claim that every connection is confined to the local Wi-Fi network.
+   - The developer does not operate a cloud print relay. The selected server and printer receive document content and print job information to fulfill the user's request.
+   - The manifest permits Android system backup. Eligible saved preferences may be backed up or transferred according to device settings, including server metadata and encrypted Network Channel entries. Do not promise that all app data always stays exclusively on the device.
+   - Keep the Play Console Data safety answers consistent with the app version, user-directed print transfers, backups, and this policy. The website's separate analytics are not an in-app analytics SDK.
+
+4. **Privacy policy**:
+   - Intended listing URL: `https://sha-print.pages.dev/privacy/`. The policy explicitly covers ShaPrint (`io.shaprint.client`) and the website, with the developer-approved privacy contact `ardlifirman17@gmail.com`.
+   - Publish with `make landing-deploy` and verify that the URL is publicly reachable before adding it in Play Console. Local build success alone does not establish public availability.
+   - Google Play also requires the policy link or text within the app. The current Android UI does not yet expose a policy link; that remains a release-readiness item. This website change does not add an in-app link.
+   - Capture and retention details are documented in `docs/launch/privacy-policy-review.md`.
