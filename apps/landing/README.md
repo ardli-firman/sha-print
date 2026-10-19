@@ -235,3 +235,40 @@ Use `https://sha-print.pages.dev/privacy/` in Play Console after publishing via
 The website policy does not add the separately required in-app privacy link or
 complete the Play Console Data safety form. Update policy wording alongside any
 future change to SDKs, backup, retention, permissions, or data destinations.
+
+## SEO and sharing metadata
+
+`src/seo.ts` owns the production origin and metadata for the home page, setup
+guide, and privacy policy. The build renders unique titles/descriptions, canonical
+URLs, Open Graph and Twitter cards, and inline JSON-LD into the served HTML. Search
+and sharing metadata does not depend on browser JavaScript. Serve `dist`, not the
+unbuilt `public` templates.
+
+The home graph describes the WebSite and the desktop/Android applications. App
+versions and download URLs come from the same release catalog as the visible
+package links, so `make landing-deploy` refreshes both together. Guide/privacy
+breadcrumbs match visible navigation. No price, offer, review, rating, search
+endpoint, or organization is invented. This factual graph does not assert Google
+software-app rich-result eligibility; the product has no published price/review
+data to support those fields.
+
+The same page registry generates `dist/sitemap.xml` and `dist/robots.txt`. It lists
+only the three public canonical content URLs; the API is excluded from crawling,
+and the missing-page response remains HTTP 404 with `noindex`. No artificial
+`lastmod` timestamps or unsupported language variants are added. Robots directives
+are crawl hints, not access controls.
+
+JSON-LD is escaped to prevent a closing-script string from creating executable
+markup. Build-time SHA-256 hashes are inserted into `dist/_headers` for the exact
+JSON-LD bodies. The source `_headers` placeholder must be processed by the build;
+`unsafe-inline` is not enabled. Local browser checks verify the served hashes and
+metadata without JavaScript, plus correct 404 behavior.
+
+After manual production deployment, verify the public URLs and submit
+`https://sha-print.pages.dev/sitemap.xml` in the site's Google Search Console
+property. Account verification, Google crawling/indexing, ranking, and rich-result
+display have not been performed or guaranteed by this implementation.
+
+References: [Google site-name guidance](https://developers.google.com/search/docs/appearance/site-names),
+[software-app structured data](https://developers.google.com/search/docs/appearance/structured-data/software-app),
+[breadcrumb structured data](https://developers.google.com/search/docs/appearance/structured-data/breadcrumb).

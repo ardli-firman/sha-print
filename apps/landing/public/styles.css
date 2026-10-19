@@ -1311,3 +1311,11 @@ nav a {
 .privacy-content code { overflow-wrap: anywhere; }
 .privacy-content a { overflow-wrap: anywhere; }
 @media (max-width: 520px) { .privacy-summary { padding: 20px; } }
+
+.page-breadcrumb { margin-bottom: 24px; font-size: .85rem; color: var(--muted); }
+.page-breadcrumb ol { display: flex; flex-wrap: wrap; gap: 10px; list-style: none; padding: 0; margin: 0; }
+.page-breadcrumb li { display: inline-flex; align-items: center; gap: 10px; }
+.page-breadcrumb li + li::before { content: "/"; color: var(--muted); }
+.page-breadcrumb a { display: inline-flex; align-items: center; min-height: 44px; }
+
+.guide-content pre:focus-visible { outline: 3px solid var(--teal); outline-offset: 4px; }

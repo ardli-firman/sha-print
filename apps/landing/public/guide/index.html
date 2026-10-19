@@ -3,13 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Setup guide | ShaPrint</title>
-    <meta
-      name="description"
-      content="Set up a ShaPrint server and clients, share an existing USB printer, and check Windows, Linux, and cross-VLAN requirements."
-    />
+    {{seoHead}}
     <meta name="theme-color" content="#126b73" />
-    <link rel="canonical" href="https://sha-print.pages.dev/guide/" />
     <link rel="icon" href="/assets/brand.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -38,8 +33,9 @@
         ><a href="#troubleshooting">Troubleshooting</a>
       </nav>
       <main id="main" class="guide-content">
+      <nav class="page-breadcrumb" aria-label="Breadcrumb"><ol><li><a href="/">ShaPrint</a></li><li aria-current="page">Setup guide</li></ol></nav>
         <p class="section-kicker">From USB to shared printer</p>
-        <h1>Start with a printer that already works.</h1>
+        <h1>Set up USB printer sharing with ShaPrint.</h1>
         <p class="lead">
           Get one server and one client printing first. Then add the rest of
           your team.
@@ -167,9 +163,9 @@
           manager, which resolves its dependencies:
         </p>
         <h3>Debian / Ubuntu</h3>
-        <pre><code>sudo apt install ./shaprint_&lt;version&gt;-1_amd64.deb</code></pre>
+        <pre tabindex="0" role="region" aria-label="Debian and Ubuntu installation command"><code>sudo apt install ./shaprint_&lt;version&gt;-1_amd64.deb</code></pre>
         <h3>AlmaLinux</h3>
-        <pre><code>sudo dnf install ./shaprint-&lt;version&gt;-1.x86_64.rpm</code></pre>
+        <pre tabindex="0" role="region" aria-label="RPM installation command"><code>sudo dnf install ./shaprint-&lt;version&gt;-1.x86_64.rpm</code></pre>
         <p>
           On AlmaLinux 10, use the <code>.el10.x86_64.rpm</code> asset instead.
           In these examples, replace the filename with the package you

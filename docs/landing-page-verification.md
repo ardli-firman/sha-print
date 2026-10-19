@@ -315,3 +315,39 @@ in this session, and an in-app privacy link remains a separate readiness item.
 No breaking changes; Stable ↔ Nightly printing and settings/state downgrade
 compatibility remain unchanged. Android source, permissions, backup, and data
 handling were inspected but not modified.
+
+## SEO enhancement
+
+Added a single SEO registry and build-time rendering for all three public content
+pages. Unique titles/descriptions, canonicals, complete sharing metadata, WebSite /
+WebPage / software-app graphs, and secondary-page breadcrumb graphs are static in
+the generated HTML. Application versions and download targets use the existing
+catalog. The build generates sitemap/robots from the same route list and adds CSP
+hashes for escaped JSON-LD, without `unsafe-inline`. No offer, price, review, or
+rating was fabricated, and no Google rich-result eligibility is claimed.
+
+Observed verification:
+
+- `bun run typecheck && bun run test && make landing-build`: both typechecks, 84
+  desktop tests, 24 landing tests, and build passed. Five SEO tests cover catalog
+  version coupling, closing-script escaping, unsupported commercial claims,
+  breadcrumb destinations, and crawl-route consistency.
+- Local Chrome/Playwright with JavaScript disabled checked HTTP 200, exactly one
+  document title/description and H1, unique metadata per page, canonical/OG URLs,
+  matching sharing titles, valid JSON graphs, and all seven schema download links
+  matching visible downloads. The three JSON-LD hashes matched the CSP response
+  headers. The PNG share image was 1200 × 630.
+- Sitemap contained exactly `/`, `/guide/`, and `/privacy/` at the production
+  origin. Robots disallowed `/api/`. An unknown page returned HTTP 404 and `noindex`.
+- With JavaScript enabled, all three pages had no horizontal overflow at 1440,
+  390, or 320 px. axe found zero violations at 390 px on each page. Two overflowing
+  guide command blocks were made keyboard-focusable with labels and focus styles.
+  No browser page or console errors, including CSP violations, were observed.
+- Guide and phone-width privacy screenshots were visually inspected after adding
+  visible breadcrumbs and the descriptive guide heading.
+
+This checks local implementation, not a Google Search Console property or a public
+crawler. Production publication, sitemap submission, indexing, rankings, and Google
+rich-result validation/display remain unverified. Publication stays manual through
+Makefile. No breaking changes: Stable ↔ Nightly printing compatibility and persisted
+settings/state downgrade compatibility remain unchanged.
