@@ -136,6 +136,32 @@ fn remove_marker(name: &str) {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+#[tokio::test]
+async fn selected_queue_diagnostics_are_passive_machine_reads_with_a_bounded_snapshot() {
+    let machine = Machine::launch(
+        "desktop-local-troubleshooting",
+        "echo invoked >> {{root}}/pkexec-was-run; exit 99",
+    )
+    .await;
+    let snapshot = machine
+        .control
+        .inspect_local_client_queue(shaprint_desktop::ipc::dto::RecognisedClientQueueDto {
+            queue_name: "shaprint_missing_queue".to_owned(),
+            server_address: "192.0.2.10:48631".to_owned(),
+            printer_name: "Office".to_owned(),
+        })
+        .await
+        .expect("returns classified local checks over the daemon socket");
+    assert_eq!(snapshot.target.queue_name, "shaprint_missing_queue");
+    assert_eq!(snapshot.checks.len(), 4);
+    assert!(!snapshot.queue_empty);
+    assert!(!snapshot.test_print_enabled);
+    assert!(!snapshot.repair_enabled);
+    assert!(snapshot.attempted_actions.is_empty());
+    assert!(!machine.root.join("pkexec-was-run").exists());
+    machine.stop().await;
+}
+
 fn service_state(status: &shaprint_desktop::ipc::dto::RuntimeStatusDto, id: &str) -> String {
     status
         .services

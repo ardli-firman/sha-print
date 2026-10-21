@@ -84,6 +84,23 @@ pub trait SpoolerReader: Send + Sync + 'static {
 /// implementations (ADR 0002).
 #[async_trait]
 pub trait LocalPrinterCatalog: Send + Sync + 'static {
+    /// Passive native inspection. Unsupported adapters must never imply an empty queue.
+    async fn inspect_client_queue(
+        &self,
+        _target: &RecognisedClientQueue,
+    ) -> Result<super::LocalQueueInspection, AppError> {
+        Err(AppError::unsupported(
+            "native queue inspection is unavailable",
+        ))
+    }
+
+    /// Job count when the initial native queue observation could not supply one.
+    async fn pending_client_jobs(&self, _target: &RecognisedClientQueue) -> Result<u32, AppError> {
+        Err(AppError::unsupported(
+            "pending print jobs could not be inspected",
+        ))
+    }
+
     /// Every eligible local, Windows-managed queue, ordered by name.
     /// Recognised client queues and ambiguous records are excluded.
     async fn local_printers(&self) -> Result<Vec<PrinterName>, AppError>;

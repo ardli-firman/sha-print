@@ -1,7 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 
 import App from "./App";
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import * as discovery from "./api/discovery";
 import * as ipc from "./api/ipc";
 import * as legacyApi from "./api/legacyImport";
@@ -198,6 +200,136 @@ beforeEach(() => {
     queues_need_reselection: false,
   });
   vi.mocked(legacyApi.onLegacyImport).mockResolvedValue(() => {});
+});
+
+it("opens passive troubleshooting for an installed Client queue without offering mutations", async () => {
+  const target = {
+    queue_name: "Office (ShaPrint 192.0.2.10-48631)",
+    server_address: "192.0.2.10:48631", printer_name: "Office",
+  };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(invoke).mockResolvedValue({
+    target, version: "3.4.4", queue_empty: false, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [],
+    checks: [
+      { check: "spooler", status: "passed", detail: "The native print spooler responded." },
+      { check: "client-queue", status: "passed", detail: "The installed Client queue matches the selected Server and shared printer." },
+      { check: "pending-jobs", status: "failed", detail: "Print jobs are pending. Wait for them to finish or inspect the native queue before testing or repairing." },
+      { check: "client-proxy", status: "passed", detail: "The client proxy reports running." },
+    ],
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: `Troubleshoot ${target.queue_name}` }));
+  const dialog = await screen.findByRole("dialog", { name: "Troubleshoot printer" });
+  expect(await within(dialog).findByText(/Print jobs are pending/)).toBeTruthy();
+  expect(within(dialog).getByText(target.server_address)).toBeTruthy();
+  expect(within(dialog).getByRole("button", { name: "Check again" })).toBeTruthy();
+  expect(within(dialog).queryByRole("button", { name: /test print|repair|start/i })).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual(["inspect_local_client_queue"]);
+});
+
+it.each(["success", "failure"] as const)("finalizes inconclusive results at the UI deadline and ignores late %s", async (outcome) => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  let finishLate: (value: unknown) => void = () => {};
+  vi.mocked(invoke).mockImplementation(() => new Promise((resolve, reject) => {
+    finishLate = (value) => outcome === "success" ? resolve(value) : reject(new Error("native-driver-detail"));
+  }));
+  render(<App />);
+  const open = await screen.findByRole("button", { name: "Troubleshoot Office" });
+  vi.useFakeTimers();
+  try {
+    fireEvent.click(open);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    const dialog = screen.getByRole("dialog", { name: "Troubleshoot printer" });
+    expect(within(dialog).queryByText(/Checking the local print path/)).toBeNull();
+    expect(within(dialog).getAllByText(/Inconclusive/).length).toBe(4);
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    expect(within(dialog).getByText(/Testing and repair are blocked/)).toBeTruthy();
+    await act(async () => { finishLate({
+      target, version: "3.4.4", queue_empty: true, test_print_enabled: false,
+      repair_enabled: false, attempted_actions: [],
+      checks: [{ check: "pending-jobs", status: "passed", detail: "Too-late empty-queue evidence" }],
+    }); });
+    expect(within(dialog).queryByText("Too-late empty-queue evidence")).toBeNull();
+    expect(within(dialog).getAllByText(/Inconclusive/).length).toBe(4);
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+  } finally { vi.useRealTimers(); }
+});
+
+it("keeps authoritative completed checks when pending-job inspection reaches its backend budget", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(invoke).mockImplementation(() => new Promise((resolve) => {
+    setTimeout(() => resolve({
+      target, version: "3.4.4", queue_empty: false, test_print_enabled: false,
+      repair_enabled: false, attempted_actions: [], checks: [
+        { check: "spooler", status: "passed", detail: "Completed native spooler evidence" },
+        { check: "client-queue", status: "passed", detail: "Completed destination evidence" },
+        { check: "pending-jobs", status: "inconclusive", detail: "Pending work remains unknown" },
+        { check: "client-proxy", status: "passed", detail: "Completed proxy evidence" },
+      ],
+    }), 14_000);
+  }));
+  render(<App />);
+  const open = await screen.findByRole("button", { name: "Troubleshoot Office" });
+  vi.useFakeTimers();
+  try {
+    fireEvent.click(open);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    const dialog = screen.getByRole("dialog", { name: "Troubleshoot printer" });
+    expect(within(dialog).getByText("Completed native spooler evidence")).toBeTruthy();
+    expect(within(dialog).getByText("Completed destination evidence")).toBeTruthy();
+    expect(within(dialog).getByText("Pending work remains unknown")).toBeTruthy();
+    expect(within(dialog).getAllByText(/Inconclusive/).length).toBe(1);
+  } finally { vi.useRealTimers(); }
+});
+
+it("discards closed-session results and requires a choice before switching Client queues", async () => {
+  const office = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  const label = { queue_name: "Labels", server_address: "192.0.2.11:48631", printer_name: "Labels" };
+  const result = (target: typeof office, detail: string) => ({
+    target, version: "3.4.4", queue_empty: false, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [],
+    checks: [{ check: "pending-jobs", status: "inconclusive", detail }],
+  });
+  let finishOld: (value: ReturnType<typeof result>) => void = () => {};
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([office, label]);
+  vi.mocked(invoke).mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+    .mockResolvedValue(result(label, "Current queue evidence"));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(screen.getByRole("button", { name: "Troubleshoot Labels" }));
+  const switchDialog = screen.getByRole("alertdialog", { name: "Switch troubleshooting printer" });
+  expect(screen.getByRole("dialog", { name: "Troubleshoot printer" }).textContent).toContain(office.server_address);
+  fireEvent.click(within(switchDialog).getByRole("button", { name: "Close and switch" }));
+  expect(await screen.findByText("Current queue evidence")).toBeTruthy();
+  await act(async () => { finishOld(result(office, "Stale evidence")); });
+  expect(screen.queryByText("Stale evidence")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Close troubleshooting" }));
+  expect(screen.queryByRole("dialog", { name: "Troubleshoot printer" })).toBeNull();
+});
+
+it("reruns local checks and ignores results from a superseded run", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  const snapshot = (detail: string) => ({
+    target, version: "3.4.4", queue_empty: true, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [],
+    checks: [{ check: "pending-jobs", status: "passed", detail }],
+  });
+  let finishOld: (value: ReturnType<typeof snapshot>) => void = () => {};
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(invoke).mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+    .mockResolvedValue(snapshot("Fresh queue evidence"));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+  expect(await screen.findByText("Fresh queue evidence")).toBeTruthy();
+  await act(async () => { finishOld(snapshot("Superseded evidence")); });
+  expect(screen.queryByText("Superseded evidence")).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
+    "inspect_local_client_queue", "inspect_local_client_queue",
+  ]);
 });
 
 /** A computer that had the previous .NET app installed. */

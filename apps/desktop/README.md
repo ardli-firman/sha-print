@@ -18,6 +18,13 @@ application as the product path and lives beside the .NET projects while the tra
   Network Channel value or document could travel in, the server reports only failures observed after
   authorization, and a print path that is not running names its recovery action beside Start
   (ADR 0008).
+- Local troubleshooting (#172): **My printers > Troubleshoot** inspects the selected native
+  Client queue, pending print jobs, local spooler, and client proxy on Windows and Linux. Passive
+  runs return available evidence within 15 seconds, distinguish failed checks from inconclusive
+  or inapplicable checks, and can be rerun. Closing discards the session; late results cannot
+  replace a new session. Pending or unreadable job state blocks eligibility, and this first slice
+  exposes no test-print or repair action. Server diagnostics and guided recovery remain separate
+  follow-up work under #171.
 - Moving from the previous .NET app: the import reads `%LOCALAPPDATA%\ShaPrint` read-only and takes
   the Network Channel where the user set one. Printer queues are selected again in this app, no
   certificate approval is imported, and a second start changes nothing (ADR 0007).

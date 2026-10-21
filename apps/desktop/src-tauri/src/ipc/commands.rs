@@ -26,6 +26,22 @@ use crate::ipc::dto::{
 /// The latest failed print attempt, as the window reports it.
 pub type SharedPrintFailures = Arc<PrintFailures>;
 
+/// Reads local queue evidence only. Errors carry a stable code and no native raw text.
+#[tauri::command]
+pub async fn inspect_local_client_queue(
+    control: State<'_, SharedControl>,
+    target: crate::ipc::dto::RecognisedClientQueueDto,
+) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppErrorDto> {
+    control
+        .inspect_local_client_queue(target)
+        .await
+        .map_err(|error| AppErrorDto {
+            code: error.code_str().to_owned(),
+            message: "Local queue checks could not be completed. Check ShaPrint and try again."
+                .to_owned(),
+        })
+}
+
 /// Whether ShaPrint starts with Windows, and the one action that changes it.
 pub type SharedStartup = Arc<Startup>;
 

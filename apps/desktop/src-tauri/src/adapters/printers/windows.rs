@@ -58,6 +58,32 @@ impl WindowsPrinterCatalog {
 
 #[async_trait]
 impl LocalPrinterCatalog for WindowsPrinterCatalog {
+    async fn inspect_client_queue(
+        &self,
+        target: &RecognisedClientQueue,
+    ) -> Result<crate::application::LocalQueueInspection, AppError> {
+        let target = target.clone();
+        tokio::task::spawn_blocking(move || {
+            use crate::application::LocalQueueInspection;
+            let records = enumerate_queue_details()?;
+            let Some((record, pending)) = records.into_iter().find(|(record, _)| {
+                record
+                    .name()
+                    .eq_ignore_ascii_case(target.queue_name().as_str())
+            }) else {
+                return Ok(LocalQueueInspection::Missing);
+            };
+            Ok(LocalQueueInspection::from_record(
+                record,
+                &target,
+                &format!("127.0.0.1:{}", crate::adapters::CLIENT_PROXY_DEFAULT_PORT),
+                Some(pending),
+            ))
+        })
+        .await
+        .map_err(|_| AppError::queue_unavailable("native spooler inspection did not finish"))?
+    }
+
     async fn local_printers(&self) -> Result<Vec<PrinterName>, AppError> {
         self.inner.local_printers().await
     }
@@ -72,6 +98,13 @@ impl LocalPrinterCatalog for WindowsPrinterCatalog {
 const PRINTER_ENUM_FLAGS: u32 = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
 
 fn enumerate_local_records() -> Result<Vec<SpoolerRecord>, AppError> {
+    Ok(enumerate_queue_details()?
+        .into_iter()
+        .map(|(record, _)| record)
+        .collect())
+}
+
+fn enumerate_queue_details() -> Result<Vec<(SpoolerRecord, u32)>, AppError> {
     let needed = required_bytes()?;
     if needed == 0 {
         return Ok(Vec::new());
@@ -98,7 +131,7 @@ fn enumerate_local_records() -> Result<Vec<SpoolerRecord>, AppError> {
     if listed == 0 {
         // Safety: no pointers are involved.
         let code = unsafe { GetLastError() };
-        return Err(AppError::internal(format!(
+        return Err(AppError::queue_unavailable(format!(
             "cannot read the local printer queues (Windows error {code})"
         )));
     }
@@ -110,7 +143,7 @@ fn enumerate_local_records() -> Result<Vec<SpoolerRecord>, AppError> {
         // Safety: the spooler points at NUL-terminated strings inside the buffer it filled.
         let name = unsafe { wide_string(entry.pPrinterName) };
         let port = unsafe { wide_string(entry.pPortName) };
-        records.push(SpoolerRecord::new(name, port));
+        records.push((SpoolerRecord::new(name, port), entry.cJobs));
     }
 
     Ok(records)
@@ -141,7 +174,7 @@ fn required_bytes() -> Result<u32, AppError> {
     // Safety: no pointers are involved.
     let code = unsafe { GetLastError() };
     if code != ERROR_INSUFFICIENT_BUFFER {
-        return Err(AppError::internal(format!(
+        return Err(AppError::queue_unavailable(format!(
             "cannot reach the local print spooler (Windows error {code})"
         )));
     }

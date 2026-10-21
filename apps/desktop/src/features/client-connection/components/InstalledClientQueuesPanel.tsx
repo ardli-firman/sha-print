@@ -20,12 +20,14 @@ interface InstalledClientQueuesPanelProps {
   clientQueues: UseRecognisedClientQueues;
   onAddPrinter: () => void;
   onReverifyServer?: (serverAddress: string) => void;
+  onTroubleshoot?: (queue: RecognisedClientQueue) => void;
 }
 
 export function InstalledClientQueuesPanel({
   clientQueues,
   onAddPrinter,
   onReverifyServer,
+  onTroubleshoot,
 }: InstalledClientQueuesPanelProps) {
   const { queues, loading, error, refresh } = clientQueues;
   const [copiedQueue, setCopiedQueue] = useState<string | null>(null);
@@ -254,6 +256,10 @@ export function InstalledClientQueuesPanel({
                   </div>
 
                   <div className="flex items-center gap-2 self-end sm:self-auto">
+                    {onTroubleshoot ? <Button type="button" variant="outline" size="sm"
+                      onClick={() => onTroubleshoot(queue)} aria-label={`Troubleshoot ${queue.queue_name}`}>
+                      Troubleshoot
+                    </Button> : null}
                     {identityChanged && onReverifyServer ? (
                       <Button
                         type="button"
