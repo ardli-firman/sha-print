@@ -250,13 +250,16 @@ impl Shell {
         // Installing a client queue reuses the client trust store for its precondition and the same
         // elevation path as the firewall rule, so a queue is only ever created for an approved
         // server while the proxy that carries its jobs is running (ADR 0005).
-        let queue_installation = Arc::new(QueueInstallation::new(
-            Arc::clone(&setup),
-            Arc::clone(&client_connections) as Arc<dyn TrustedServerPrinters>,
-            installer,
-            Arc::clone(&runtime) as Arc<dyn ClientProxyState>,
-            Arc::clone(&network_channel) as Arc<dyn application::ChannelState>,
-        ));
+        let queue_installation = Arc::new(
+            QueueInstallation::new(
+                Arc::clone(&setup),
+                Arc::clone(&client_connections) as Arc<dyn TrustedServerPrinters>,
+                installer,
+                Arc::clone(&runtime) as Arc<dyn ClientProxyState>,
+                Arc::clone(&network_channel) as Arc<dyn application::ChannelState>,
+            )
+            .with_catalog(Arc::clone(&printer_catalog)),
+        );
 
         Ok(Self {
             runtime,

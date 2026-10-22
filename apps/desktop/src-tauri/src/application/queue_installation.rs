@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::application::{RuntimeCoordinator, Setup};
+use crate::application::{LocalPrinterCatalog, LocalQueueInspection, RuntimeCoordinator, Setup};
 use crate::domain::{
-    AppError, ClientQueueName, ClientQueueRequest, PrinterName, ServiceId, ServiceState,
-    SetupFailure,
+    AppError, ClientQueueName, ClientQueueRequest, PrinterName, RecognisedClientQueue, ServiceId,
+    ServiceState, SetupFailure,
 };
 
 /// The shared printers of a server the user explicitly approved.
@@ -102,6 +102,7 @@ pub struct QueueInstallation {
     installer: Arc<dyn QueueInstaller>,
     proxy: Arc<dyn ClientProxyState>,
     channel: Arc<dyn ChannelState>,
+    catalog: Option<Arc<dyn LocalPrinterCatalog>>,
 }
 
 impl QueueInstallation {
@@ -118,7 +119,13 @@ impl QueueInstallation {
             installer,
             proxy,
             channel,
+            catalog: None,
         }
+    }
+
+    pub fn with_catalog(mut self, catalog: Arc<dyn LocalPrinterCatalog>) -> Self {
+        self.catalog = Some(catalog);
+        self
     }
 
     /// Installs the native queue for `printer`, shared by the trusted server at `server_address`.
@@ -147,6 +154,7 @@ impl QueueInstallation {
         printer: &str,
     ) -> Result<ClientQueue, AppError> {
         let (request, uri) = self.request_for(server_address, printer).await?;
+        self.recheck_repair_prerequisites(&request).await?;
         self.repair_elevated(&request).await?;
         log::info!(
             "repaired native client queue={} server={}",
@@ -154,6 +162,51 @@ impl QueueInstallation {
             request.server_address()
         );
         Ok(ClientQueue::new(request, uri))
+    }
+
+    async fn recheck_repair_prerequisites(
+        &self,
+        request: &ClientQueueRequest,
+    ) -> Result<(), AppError> {
+        if let Some(catalog) = &self.catalog {
+            let target = RecognisedClientQueue::new(
+                request.queue_name().clone(),
+                request.server_address().to_owned(),
+                request.printer().clone(),
+            );
+            match catalog.inspect_client_queue(&target).await {
+                Ok(LocalQueueInspection::Matching {
+                    pending_jobs: Some(0),
+                }) => Ok(()),
+                Ok(LocalQueueInspection::Matching {
+                    pending_jobs: Some(n),
+                }) => Err(AppError::invalid_state(format!(
+                    "print jobs are pending in the Client queue ({n} jobs). Wait for them to finish before repairing."
+                ))),
+                Ok(LocalQueueInspection::Matching { pending_jobs: None }) => {
+                    match catalog.pending_client_jobs(&target).await {
+                        Ok(0) => Ok(()),
+                        Ok(n) => Err(AppError::invalid_state(format!(
+                            "print jobs are pending in the Client queue ({n} jobs). Wait for them to finish before repairing."
+                        ))),
+                        Err(e) => Err(AppError::invalid_state(format!(
+                            "pending print jobs could not be read: {e}. Repair remains blocked until the queue is known to be empty."
+                        ))),
+                    }
+                }
+                Ok(LocalQueueInspection::Missing) => {
+                    Err(AppError::queue_unavailable("the Client queue is not installed."))
+                }
+                Ok(LocalQueueInspection::Mismatched) => Err(AppError::invalid_state(
+                    "the Client queue destination does not match the selected server and printer.",
+                )),
+                Err(e) => Err(AppError::invalid_state(format!(
+                    "the Client queue state could not be inspected: {e}. Repair remains blocked until the queue is known to be empty."
+                ))),
+            }
+        } else {
+            Ok(())
+        }
     }
 
     async fn request_for(
@@ -650,5 +703,233 @@ mod tests {
         assert_eq!(broker.installed().len(), 0);
         assert_eq!(installer.installs(), 0);
         assert_eq!(servers.queries(), 0);
+    }
+
+    struct FakeCatalog {
+        inspection: Result<LocalQueueInspection, ErrorCode>,
+        pending: Result<u32, ErrorCode>,
+    }
+
+    #[async_trait]
+    impl LocalPrinterCatalog for FakeCatalog {
+        async fn local_printers(&self) -> Result<Vec<PrinterName>, AppError> {
+            unreachable!()
+        }
+        async fn inspect_client_queue(
+            &self,
+            _target: &RecognisedClientQueue,
+        ) -> Result<LocalQueueInspection, AppError> {
+            match self.inspection {
+                Ok(ref inspection) => Ok(inspection.clone()),
+                Err(code) => Err(AppError::new(code, "test failure")),
+            }
+        }
+        async fn pending_client_jobs(
+            &self,
+            _target: &RecognisedClientQueue,
+        ) -> Result<u32, AppError> {
+            match self.pending {
+                Ok(count) => Ok(count),
+                Err(code) => Err(AppError::new(code, "test failure")),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn repair_rechecks_queue_state_and_succeeds_when_empty() {
+        let broker = Arc::new(RecordingBroker::default());
+        let servers = FakeServers::sharing("10.0.0.5:8631", &["Office Printer"]);
+        let installer = FakeInstaller::new();
+        let catalog = Arc::new(FakeCatalog {
+            inspection: Ok(LocalQueueInspection::Matching {
+                pending_jobs: Some(0),
+            }),
+            pending: Ok(0),
+        });
+        let installation = installation(
+            Arc::clone(&broker),
+            Arc::clone(&servers),
+            Arc::clone(&installer),
+            true,
+        )
+        .with_catalog(catalog);
+
+        let repaired = installation
+            .repair("10.0.0.5:8631", "Office Printer")
+            .await
+            .expect("repair succeeds");
+
+        assert_eq!(
+            repaired.name().as_str(),
+            "Office Printer (ShaPrint 10.0.0.5-8631)"
+        );
+        assert_eq!(broker.repaired().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn repair_is_blocked_before_elevation_when_queue_has_pending_jobs() {
+        let broker = Arc::new(RecordingBroker::default());
+        let servers = FakeServers::sharing("10.0.0.5:8631", &["Office Printer"]);
+        let installer = FakeInstaller::new();
+        let catalog = Arc::new(FakeCatalog {
+            inspection: Ok(LocalQueueInspection::Matching {
+                pending_jobs: Some(2),
+            }),
+            pending: Ok(2),
+        });
+        let installation = installation(
+            Arc::clone(&broker),
+            Arc::clone(&servers),
+            Arc::clone(&installer),
+            true,
+        )
+        .with_catalog(catalog);
+
+        let error = installation
+            .repair("10.0.0.5:8631", "Office Printer")
+            .await
+            .expect_err("repair must be blocked");
+
+        assert_eq!(error.code(), ErrorCode::InvalidState);
+        assert!(error.message().contains("pending"));
+        // Never prompt elevation when pending jobs exist
+        assert_eq!(broker.repaired().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn repair_is_blocked_before_elevation_when_pending_jobs_cannot_be_read() {
+        let broker = Arc::new(RecordingBroker::default());
+        let servers = FakeServers::sharing("10.0.0.5:8631", &["Office Printer"]);
+        let installer = FakeInstaller::new();
+        let catalog = Arc::new(FakeCatalog {
+            inspection: Ok(LocalQueueInspection::Matching { pending_jobs: None }),
+            pending: Err(ErrorCode::Timeout),
+        });
+        let installation = installation(
+            Arc::clone(&broker),
+            Arc::clone(&servers),
+            Arc::clone(&installer),
+            true,
+        )
+        .with_catalog(catalog);
+
+        let error = installation
+            .repair("10.0.0.5:8631", "Office Printer")
+            .await
+            .expect_err("repair must be blocked");
+
+        assert_eq!(error.code(), ErrorCode::InvalidState);
+        assert!(error.message().contains("could not be read"));
+        assert_eq!(broker.repaired().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn repair_is_blocked_before_elevation_when_queue_is_missing() {
+        let broker = Arc::new(RecordingBroker::default());
+        let servers = FakeServers::sharing("10.0.0.5:8631", &["Office Printer"]);
+        let installer = FakeInstaller::new();
+        let catalog = Arc::new(FakeCatalog {
+            inspection: Ok(LocalQueueInspection::Missing),
+            pending: Ok(0),
+        });
+        let installation = installation(
+            Arc::clone(&broker),
+            Arc::clone(&servers),
+            Arc::clone(&installer),
+            true,
+        )
+        .with_catalog(catalog);
+
+        let error = installation
+            .repair("10.0.0.5:8631", "Office Printer")
+            .await
+            .expect_err("repair must be blocked");
+
+        assert_eq!(error.code(), ErrorCode::QueueUnavailable);
+        assert!(error.message().contains("not installed"));
+        assert_eq!(broker.repaired().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn repair_is_blocked_before_elevation_when_queue_is_mismatched() {
+        let broker = Arc::new(RecordingBroker::default());
+        let servers = FakeServers::sharing("10.0.0.5:8631", &["Office Printer"]);
+        let installer = FakeInstaller::new();
+        let catalog = Arc::new(FakeCatalog {
+            inspection: Ok(LocalQueueInspection::Mismatched),
+            pending: Ok(0),
+        });
+        let installation = installation(
+            Arc::clone(&broker),
+            Arc::clone(&servers),
+            Arc::clone(&installer),
+            true,
+        )
+        .with_catalog(catalog);
+
+        let error = installation
+            .repair("10.0.0.5:8631", "Office Printer")
+            .await
+            .expect_err("repair must be blocked");
+
+        assert_eq!(error.code(), ErrorCode::InvalidState);
+        assert!(error.message().contains("destination does not match"));
+        assert_eq!(broker.repaired().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn repair_handles_concurrent_queue_busy_during_elevation() {
+        let broker = RecordingBroker::refusing(SetupFailureKind::QueueBusy);
+        let servers = FakeServers::sharing("10.0.0.5:8631", &["Office Printer"]);
+        let installer = FakeInstaller::new();
+        let catalog = Arc::new(FakeCatalog {
+            inspection: Ok(LocalQueueInspection::Matching {
+                pending_jobs: Some(0),
+            }),
+            pending: Ok(0),
+        });
+        let installation = installation(
+            Arc::clone(&broker),
+            Arc::clone(&servers),
+            Arc::clone(&installer),
+            true,
+        )
+        .with_catalog(catalog);
+
+        let error = installation
+            .repair("10.0.0.5:8631", "Office Printer")
+            .await
+            .expect_err("repair must fail when busy concurrently");
+
+        assert_eq!(error.code(), ErrorCode::InvalidState);
+        assert!(error.message().contains("pending jobs"));
+    }
+
+    #[tokio::test]
+    async fn repair_handles_declined_elevation() {
+        let broker = RecordingBroker::refusing(SetupFailureKind::PermissionDenied);
+        let servers = FakeServers::sharing("10.0.0.5:8631", &["Office Printer"]);
+        let installer = FakeInstaller::new();
+        let catalog = Arc::new(FakeCatalog {
+            inspection: Ok(LocalQueueInspection::Matching {
+                pending_jobs: Some(0),
+            }),
+            pending: Ok(0),
+        });
+        let installation = installation(
+            Arc::clone(&broker),
+            Arc::clone(&servers),
+            Arc::clone(&installer),
+            true,
+        )
+        .with_catalog(catalog);
+
+        let error = installation
+            .repair("10.0.0.5:8631", "Office Printer")
+            .await
+            .expect_err("repair must fail when elevation is denied");
+
+        assert_eq!(error.code(), ErrorCode::Unsupported);
+        assert!(error.message().contains("administrator permission"));
     }
 }
