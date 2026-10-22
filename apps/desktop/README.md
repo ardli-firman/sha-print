@@ -23,8 +23,12 @@ application as the product path and lives beside the .NET projects while the tra
   runs return available evidence within 15 seconds, distinguish failed checks from inconclusive
   or inapplicable checks, and can be rerun. Closing discards the session; late results cannot
   replace a new session. Pending or unreadable job state blocks eligibility, and this first slice
-  exposes no test-print or repair action. Server diagnostics and guided recovery remain separate
-  follow-up work under #171.
+  inspects the selected Trusted Server identity and shared printer through existing operations.
+  On Windows, an explicit **Send test print** rechecks prerequisites and default Requested media,
+  then draws one diagnostic page through the installed native Client queue. Submission acceptance
+  and uncertainty remain separate from the user's physical-output confirmation. Closing does not
+  cancel submitted work; retries require fresh checks. Linux has no send action until #176.
+  See [the verification record](../../docs/test-print-troubleshooting-175-verification.md) for evidence and open native checks.
 - Moving from the previous .NET app: the import reads `%LOCALAPPDATA%\ShaPrint` read-only and takes
   the Network Channel where the user set one. Printer queues are selected again in this app, no
   certificate approval is imported, and a second start changes nothing (ADR 0007).

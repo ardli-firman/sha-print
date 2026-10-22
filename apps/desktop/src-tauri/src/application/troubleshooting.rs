@@ -1,4 +1,4 @@
-//! Passive inspection of one installed Client queue. No print or mutation port is available.
+//! Passive inspection of one installed Client queue. Inspection never prints or mutates state.
 use std::{sync::Arc, time::Duration};
 
 use crate::domain::{AppError, ErrorCode, RecognisedClientQueue, ServiceId, ServiceState};
@@ -152,6 +152,7 @@ pub trait ObservedAuthorization: Send + Sync + 'static {
     fn is_rejected(&self, printer_name: &str) -> bool;
 }
 
+#[derive(Clone)]
 pub struct LocalTroubleshootingSnapshot {
     pub target: RecognisedClientQueue,
     pub checks: Vec<LocalFinding>,
@@ -206,13 +207,61 @@ impl LocalTroubleshooting {
         self
     }
 
-    pub async fn inspect(&self, target: RecognisedClientQueue) -> LocalTroubleshootingSnapshot {
-        let deadline = tokio::time::Instant::now() + LOCAL_INSPECTION_BUDGET;
-        let proxy = match self.runtime.status().service(ServiceId::ClientProxy) {
+    fn proxy_finding(&self) -> LocalFinding {
+        match self.runtime.status().service(ServiceId::ClientProxy) {
             Some(service) if service.state() == ServiceState::Running => LocalFinding::ProxyRunning,
             Some(_) => LocalFinding::ProxyStopped,
             None => LocalFinding::ProxyUnknown,
-        };
+        }
+    }
+
+    fn channel_finding(&self, target: &RecognisedClientQueue) -> LocalFinding {
+        if self
+            .authorization
+            .as_ref()
+            .is_some_and(|auth| auth.is_rejected(target.printer_name().as_str()))
+        {
+            LocalFinding::ChannelAuthorizationRejected
+        } else if self
+            .channel
+            .as_ref()
+            .is_some_and(|channel| channel.is_configured())
+        {
+            LocalFinding::ChannelConfiguredUnobserved
+        } else {
+            LocalFinding::ChannelUnconfigured
+        }
+    }
+
+    /// Runtime and local authorization can change while native media or TLS reads await.
+    /// Refresh these immediately before the final submission decision.
+    pub(super) fn refresh_live_prerequisites(&self, snapshot: &mut LocalTroubleshootingSnapshot) {
+        use LocalFinding::*;
+        snapshot
+            .checks
+            .retain(|check| !matches!(check, ProxyRunning | ProxyStopped | ProxyUnknown));
+        snapshot.checks.push(self.proxy_finding());
+        if snapshot.checks.iter().any(|check| {
+            matches!(
+                check,
+                ChannelConfiguredUnobserved | ChannelUnconfigured | ChannelAuthorizationRejected
+            )
+        }) {
+            snapshot.checks.retain(|check| {
+                !matches!(
+                    check,
+                    ChannelConfiguredUnobserved
+                        | ChannelUnconfigured
+                        | ChannelAuthorizationRejected
+                )
+            });
+            snapshot.checks.push(self.channel_finding(&snapshot.target));
+        }
+    }
+
+    pub async fn inspect(&self, target: RecognisedClientQueue) -> LocalTroubleshootingSnapshot {
+        let deadline = tokio::time::Instant::now() + LOCAL_INSPECTION_BUDGET;
+        let proxy = self.proxy_finding();
         let result =
             tokio::time::timeout_at(deadline, self.catalog.inspect_client_queue(&target)).await;
         use LocalFinding::*;
@@ -263,17 +312,6 @@ impl LocalTroubleshooting {
             )
             .await;
 
-            let auth_rejected = self
-                .authorization
-                .as_ref()
-                .map(|a| a.is_rejected(target.printer_name().as_str()))
-                .unwrap_or(false);
-            let channel_configured = self
-                .channel
-                .as_ref()
-                .map(|c| c.is_configured())
-                .unwrap_or(false);
-
             match server_res {
                 Ok(Ok(ServerInspection::Reachable {
                     identity,
@@ -288,13 +326,7 @@ impl LocalTroubleshooting {
                                 Some(false) => checks.push(LocalFinding::PrinterNotShared),
                                 None => checks.push(LocalFinding::PrinterAvailabilityUnknown),
                             }
-                            if auth_rejected {
-                                checks.push(LocalFinding::ChannelAuthorizationRejected);
-                            } else if channel_configured {
-                                checks.push(LocalFinding::ChannelConfiguredUnobserved);
-                            } else {
-                                checks.push(LocalFinding::ChannelUnconfigured);
-                            }
+                            checks.push(self.channel_finding(&target));
                         }
                         ServerIdentityInspection::NotTrusted => {
                             checks.push(LocalFinding::ServerNotTrusted);

@@ -163,6 +163,10 @@ async fn selected_queue_diagnostics_are_passive_machine_reads_with_a_bounded_sna
     assert!(!snapshot.test_print_enabled);
     assert!(!snapshot.repair_enabled);
     assert!(snapshot.attempted_actions.is_empty());
+    assert_eq!(
+        machine.control.send_test_print(1).await.unwrap_err().code(),
+        shaprint_desktop::domain::ErrorCode::Unsupported
+    );
     assert!(!machine.root.join("pkexec-was-run").exists());
     machine.stop().await;
 }

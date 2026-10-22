@@ -39,7 +39,10 @@ fn paper_id_dimensions_tenths_mm(paper_id: i16) -> Option<(i16, i16)> {
     }
 }
 
-fn loaded_media_dimensions_tenths_mm(dev_mode: &[u8], fields: u32) -> Option<(i16, i16)> {
+pub(super) fn loaded_media_dimensions_tenths_mm(
+    dev_mode: &[u8],
+    fields: u32,
+) -> Option<(i16, i16)> {
     if fields & (DM_PAPERLENGTH | DM_PAPERWIDTH) == (DM_PAPERLENGTH | DM_PAPERWIDTH) {
         let length = i16::from_ne_bytes(dev_mode[80..82].try_into().ok()?);
         let width = i16::from_ne_bytes(dev_mode[82..84].try_into().ok()?);

@@ -208,7 +208,7 @@ if ((Get-Printer -Name $name -ErrorAction SilentlyContinue) -or
         "{:?}",
         healthy.checks
     );
-    assert!(healthy.queue_empty && !healthy.test_print_enabled && healthy.repair_enabled);
+    assert!(healthy.queue_empty && healthy.repair_enabled);
     assert!(healthy.attempted_actions.is_empty());
     println!("[native-diagnostics] matching empty queue, spooler and proxy: passed");
 

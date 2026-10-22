@@ -2376,3 +2376,87 @@ describe("system diagnostics and readiness", () => {
     expect(dialog.textContent).not.toContain("secret-token");
   });
 });
+
+it("sends one explicit native test print and asks for its physical result", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const ready = {
+    target, version: CLIENT_VERSION, queue_empty: true, test_print_enabled: true,
+    repair_enabled: false, attempted_actions: [], checks: [], session_id: 7,
+    requested_media: "iso_a4_210x297mm", submission: "not-sent", physical_result: "unconfirmed",
+  };
+  let finishSend: (value: unknown) => void = () => {};
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "send_test_print") return new Promise((resolve) => { finishSend = resolve; });
+    if (command === "confirm_test_print") return Promise.resolve({ ...ready, test_print_enabled: false, submission: "accepted", physical_result: "correct" });
+    return Promise.resolve(ready);
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  const send = await screen.findByRole("button", { name: "Send test print" });
+  expect(screen.getByText(/Requested media: iso_a4_210x297mm/)).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "send_test_print")).toBe(false);
+  fireEvent.click(send); fireEvent.click(send);
+  expect(send.hasAttribute("disabled")).toBe(true);
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "send_test_print")).toHaveLength(1);
+  await act(async () => { finishSend({ ...ready, submission: "accepted", test_print_enabled: false }); });
+  expect(screen.getByText(/Physical output is unconfirmed/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Printed correctly" }));
+  expect(await screen.findByText(/You confirmed correct physical output/)).toBeTruthy();
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith("confirm_test_print", { sessionId: 7, result: "correct" });
+});
+
+it.each(["accepted", "uncertain", "rejected"])("keeps %s submission separate from physical results and requires fresh checks to retry", async (submission) => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const ready = { target, version: CLIENT_VERSION, queue_empty: true, test_print_enabled: true,
+    repair_enabled: false, attempted_actions: [], checks: [], session_id: 9,
+    requested_media: "iso_a4_210x297mm", submission: "not-sent", physical_result: "unconfirmed" };
+  const sent = { ...ready, submission, test_print_enabled: false, attempted_actions: [{ action: "send-test-print", outcome: submission }] };
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "send_test_print") return Promise.resolve(sent);
+    if (command === "refresh_test_print_session") return Promise.resolve({ ...sent, test_print_enabled: true });
+    if (command === "confirm_test_print") return Promise.resolve({ ...sent, physical_result: (args as { result: string }).result });
+    return Promise.resolve(ready);
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Send test print" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Check again" }).hasAttribute("disabled")).toBe(false));
+  expect(screen.getByRole("button", { name: "Send test print" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByText(/Earlier work may still print downstream/)).toBeTruthy();
+  if (submission === "rejected") {
+    expect(screen.queryByRole("button", { name: "Printed correctly" })).toBeNull();
+  } else {
+    fireEvent.click(screen.getByRole("button", { name: "No output" }));
+    expect(await screen.findByText(/You reported no output/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Incorrect output" }));
+    const symptoms = await screen.findByRole("combobox", { name: "Observed symptom" });
+    fireEvent.change(symptoms, { target: { value: "clipping" } });
+    expect(screen.getByText(/Compare the Requested media above with the Loaded media/)).toBeTruthy();
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send test print" }).hasAttribute("disabled")).toBe(false));
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "send_test_print")).toHaveLength(1);
+});
+
+it("discards a late send callback after closure and reopening", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const ready = { target, version: CLIENT_VERSION, queue_empty: true, test_print_enabled: true,
+    repair_enabled: false, attempted_actions: [], checks: [], session_id: 10,
+    requested_media: "iso_a4_210x297mm", submission: "not-sent", physical_result: "unconfirmed" };
+  let finish: (value: unknown) => void = () => {};
+  vi.mocked(invoke).mockImplementation((command) => command === "send_test_print"
+    ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve(ready));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Send test print" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close troubleshooting" }));
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith("close_test_print_session", { sessionId: 10 });
+  fireEvent.click(screen.getByRole("button", { name: "Troubleshoot Office" }));
+  await screen.findByRole("button", { name: "Send test print" });
+  await act(async () => { finish({ ...ready, submission: "accepted", test_print_enabled: false }); });
+  expect(screen.queryByRole("button", { name: "Printed correctly" })).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "send_test_print")).toHaveLength(1);
+});

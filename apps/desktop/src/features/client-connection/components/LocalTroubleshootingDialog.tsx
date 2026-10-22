@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { startService } from "@/api/ipc";
 import { repairPrinterQueue } from "@/api/serverConnections";
-import { inspectLocalClientQueue, type LocalTroubleshootingSnapshot } from "@/api/troubleshooting";
+import { closeTestPrintSession, confirmTestPrint, refreshTestPrintSession, sendTestPrint, inspectLocalClientQueue, type LocalTroubleshootingSnapshot } from "@/api/troubleshooting";
 import type { RecognisedClientQueue } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -26,6 +26,7 @@ const STATUS_LABELS: Record<string, string> = {
 const ACTION_LABELS: Record<string, string> = {
   "start-client-proxy": "Start client proxy",
   "repair-client-queue": "Repair Client queue",
+  "send-test-print": "Send test print",
 };
 
 const OUTCOME_LABELS: Record<string, string> = {
@@ -33,6 +34,8 @@ const OUTCOME_LABELS: Record<string, string> = {
   denied: "Authorization denied",
   failed: "Failed",
   partial: "Partially completed",
+  accepted: "Accepted by the native spooler", rejected: "Rejected before submission",
+  uncertain: "Submission uncertain", blocked: "Blocked by fresh checks",
 };
 
 function classifyActionOutcome(error: unknown): "denied" | "failed" | "partial" {
@@ -68,6 +71,14 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
   const [isExecutingAction, setIsExecutingAction] = useState(false);
   const attemptedActionsRef = useRef<{ action: string; outcome: string }[]>([]);
   const activeRef = useRef(true);
+  const sessionIdRef = useRef<number | undefined>(undefined);
+  const actionBusyRef = useRef(false);
+  const [testError, setTestError] = useState(false);
+  const [testActionPending, setTestActionPending] = useState(false);
+  const [symptom, setSymptom] = useState("");
+  useEffect(() => () => {
+    if (sessionIdRef.current !== undefined) void closeTestPrintSession(sessionIdRef.current).catch(() => {});
+  }, [target]);
 
   useEffect(() => {
     activeRef.current = true;
@@ -88,14 +99,21 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
         })),
       });
     }, 15_000);
-    void inspectLocalClientQueue(target).then(
+    const sessionId = sessionIdRef.current;
+    const opening = sessionId === undefined;
+    const checking = sessionId === undefined ? inspectLocalClientQueue(target) : refreshTestPrintSession(sessionId);
+    void checking.then(
       (result) => {
-        if (!active || settled) return;
+        if (!active || settled) {
+          if (opening && result.session_id !== undefined) void closeTestPrintSession(result.session_id).catch(() => {});
+          return;
+        }
+        sessionIdRef.current = result.session_id;
         settled = true;
         window.clearTimeout(timer);
         setSnapshot({
           ...result,
-          attempted_actions: [...attemptedActionsRef.current],
+          attempted_actions: [...attemptedActionsRef.current, ...result.attempted_actions],
         });
       },
       () => {
@@ -111,6 +129,29 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
       window.clearTimeout(timer);
     };
   }, [target, run]);
+
+  const handleTestAction = async (result?: "correct" | "no-output" | "incorrect") => {
+    const id = sessionIdRef.current;
+    if (id === undefined || actionBusyRef.current) return;
+    actionBusyRef.current = true;
+    setTestActionPending(true);
+    setIsExecutingAction(true);
+    setTestError(false);
+    if (!result) setSnapshot((current) => current ? { ...current, test_print_enabled: false, submission: "checking", physical_result: "unconfirmed" } : current);
+    try {
+      const next = result ? await confirmTestPrint(id, result) : await sendTestPrint(id);
+      if (!activeRef.current || sessionIdRef.current !== id) return;
+      setSnapshot({ ...next, attempted_actions: [...attemptedActionsRef.current, ...next.attempted_actions] });
+    } catch {
+      if (!activeRef.current) return;
+      // A transport failure does not establish whether the spooler accepted work.
+      if (!result) setSnapshot((current) => current ? { ...current, test_print_enabled: false, submission: "uncertain", physical_result: "unconfirmed" } : current);
+      setTestError(true);
+    } finally {
+      actionBusyRef.current = false;
+      if (activeRef.current) { setIsExecutingAction(false); setTestActionPending(false); }
+    }
+  };
 
   const handleStartProxy = async () => {
     if (isExecutingAction) return;
@@ -237,6 +278,40 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
               </li>
             ))}
           </ul>
+          {snapshot.session_id !== undefined ? (
+            <section className="mt-4 space-y-3 rounded-md border p-3 text-sm" aria-label="Guided test print">
+              <p>Requested media: {snapshot.requested_media ?? "Unavailable"}</p>
+              <p>One page, one copy, grayscale, one-sided. Saved queue defaults stay unchanged.</p>
+              {snapshot.attempted_actions.some((action) => action.action === "send-test-print") || snapshot.submission === "uncertain" ? <p>Before another send, check again and confirm the Client queue is empty. Earlier work may still print downstream even when this queue is empty. A retry sends another page.</p> : null}
+              <Button type="button" disabled={!snapshot.test_print_enabled || isExecutingAction} onClick={() => void handleTestAction()}>Send test print</Button>
+              {testActionPending ? <p role="status">Checking prerequisites and submitting. Do not send again.</p> : null}
+              {testError ? <p role="alert">The result could not be confirmed. Inspect the native queue before checking again. No automatic retry was sent.</p> : null}
+              {snapshot.submission === "accepted" ? <p>The native spooler accepted the test print. Physical output is unconfirmed until you respond.</p> : null}
+              {snapshot.submission === "uncertain" ? <p>Submission is uncertain. The print job may still print. Physical output is unconfirmed until you respond. Do not assume that a timeout cancelled it.</p> : null}
+              {snapshot.submission === "rejected" ? <p>The test print was rejected before a document was submitted. Inspect the native queue and its printing preferences, then check again.</p> : null}
+              {snapshot.submission === "blocked" ? <p>Prerequisites changed. No test print was sent. Review the fresh checks and Requested media, then check again.</p> : null}
+              {snapshot.submission === "accepted" || snapshot.submission === "uncertain" ? <>
+                <p>What happened to the diagnostic page? Wait for delayed output before answering.</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" disabled={isExecutingAction} onClick={() => void handleTestAction("correct")}>Printed correctly</Button>
+                  <Button type="button" variant="outline" disabled={isExecutingAction} onClick={() => void handleTestAction("no-output")}>No output</Button>
+                  <Button type="button" variant="outline" disabled={isExecutingAction} onClick={() => void handleTestAction("incorrect")}>Incorrect output</Button>
+                </div>
+              </> : null}
+              {snapshot.physical_result === "correct" ? <p>You confirmed correct physical output.</p> : null}
+              {snapshot.physical_result === "no-output" ? <p>You reported no output. Inspect the native Client queue for pending work, then check ShaPrint on the Server and the printer itself. Local acceptance does not establish where downstream work stopped.</p> : null}
+              {snapshot.physical_result === "incorrect" ? <>
+                <label className="block">Observed symptom
+                  <select aria-label="Observed symptom" value={symptom} onChange={(event) => setSymptom(event.target.value)} className="block border rounded p-2">
+                    <option value="">Choose a symptom</option>
+                    <option value="clipping">Clipping</option><option value="shifted">Shifted position</option>
+                    <option value="size">Incorrect size</option><option value="blank">Blank output</option>
+                  </select>
+                </label>
+                {symptom ? <p>{symptom === "blank" ? "Check the printer's supplies and try its native test page on the Server. " : "Compare the Requested media above with the Loaded media in the tray and the Server queue. Inspect page scaling and the alignment and clipping patterns. "}This symptom guides investigation and does not prove a remote cause.</p> : null}
+              </> : null}
+            </section>
+          ) : null}
           {!snapshot.queue_empty ? <p className="mt-3 text-sm">Testing and repair are blocked until this Client queue is known to be empty.</p> : null}
           <p className="mt-3 text-sm text-muted-foreground">To inspect pending work, open Windows Settings &gt; Printers &amp; scanners &gt; your printer &gt; Open print queue, or your Linux desktop&apos;s printer queue. Wait for jobs to finish or manage them there.</p>
           {snapshot.attempted_actions.length > 0 ? (
@@ -255,14 +330,14 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
               </p>
             </div>
           ) : null}
-          {isExecutingAction ? (
+          {isExecutingAction && !testActionPending ? (
             <p className="mt-2 text-xs text-muted-foreground" role="status">
               Performing recovery action...
             </p>
           ) : null}
         </> : null}
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">These local checks do not verify the Server or physical output. Closing discards this session and does not cancel existing print jobs.</p>
+      <p className="mt-3 text-xs text-muted-foreground">Checks show only observed evidence and do not confirm physical output. Closing discards this session and does not cancel submitted print jobs. Manage cancellation in the native OS queue. Local cancellation may not stop work already forwarded to the Server or printer.</p>
       <div className="flex justify-end gap-2 mt-4">
         <Button
           type="button"

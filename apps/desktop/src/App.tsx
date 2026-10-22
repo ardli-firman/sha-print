@@ -320,6 +320,7 @@ function App() {
         controlMode={controlMode}
       />
       {troubleshootingTarget ? <LocalTroubleshootingDialog
+        key={JSON.stringify(troubleshootingTarget)}
         target={troubleshootingTarget}
         onClose={() => { setTroubleshootingTarget(null); setRequestedTroubleshootingTarget(null); }}
         onReviewServer={(serverAddress) => {

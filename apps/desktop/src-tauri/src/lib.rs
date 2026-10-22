@@ -69,6 +69,7 @@ pub struct Shell {
     print_failures: Arc<PrintFailures>,
     job_tracker: Arc<PrintJobTracker>,
     queue_installation: Arc<QueueInstallation>,
+    test_print: Arc<application::GuidedTestPrint>,
 }
 
 /// Listener ports configured for a [`Shell`] runtime instance.
@@ -261,6 +262,24 @@ impl Shell {
             .with_catalog(Arc::clone(&printer_catalog)),
         );
 
+        #[cfg(windows)]
+        let native_test_print: Option<Arc<dyn application::NativeTestPrint>> =
+            Some(Arc::new(adapters::printers::WindowsNativeTestPrint));
+        #[cfg(not(windows))]
+        let native_test_print = None;
+        let test_print = Arc::new(application::GuidedTestPrint::new(
+            application::LocalTroubleshooting::new(
+                Arc::clone(&printer_catalog),
+                Arc::clone(&runtime),
+            )
+            .with_server_inspection(
+                client_connections.clone(),
+                network_channel.clone(),
+                print_failures.clone(),
+            ),
+            native_test_print,
+        ));
+
         Ok(Self {
             runtime,
             sharing,
@@ -274,6 +293,7 @@ impl Shell {
             print_failures,
             job_tracker,
             queue_installation,
+            test_print,
         })
     }
 
@@ -283,6 +303,10 @@ impl Shell {
 
     pub fn sharing(&self) -> Arc<Sharing> {
         Arc::clone(&self.sharing)
+    }
+
+    pub fn test_print(&self) -> Arc<application::GuidedTestPrint> {
+        Arc::clone(&self.test_print)
     }
 
     pub fn printer_catalog(&self) -> Arc<dyn application::LocalPrinterCatalog> {
@@ -428,6 +452,10 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ipc::commands::shutdown_daemon,
             ipc::commands::get_diagnostics,
             ipc::commands::inspect_local_client_queue,
+            ipc::commands::refresh_test_print_session,
+            ipc::commands::send_test_print,
+            ipc::commands::confirm_test_print,
+            ipc::commands::close_test_print_session,
             ipc::commands::get_print_failures,
             ipc::commands::dismiss_print_failure,
             ipc::commands::list_local_printers,
