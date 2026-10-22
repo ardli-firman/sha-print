@@ -580,11 +580,18 @@ impl ControlPlane {
                     server_address: parsed_address.normalized.clone(),
                     printer_name: printer.to_owned(),
                 };
-                if let Ok(inspection) = machine.client.inspect_local_client_queue(target).await {
-                    if !inspection.queue_empty {
-                        return Err(AppError::invalid_state(
-                            "print jobs are pending or the Client queue state could not be verified; cancel or wait for them to finish before repairing",
-                        ));
+                match machine.client.inspect_local_client_queue(target).await {
+                    Ok(inspection) => {
+                        if !inspection.queue_empty {
+                            return Err(AppError::invalid_state(
+                                "print jobs are pending or the Client queue state could not be verified; cancel or wait for them to finish before repairing",
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        return Err(AppError::invalid_state(format!(
+                            "the Client queue state could not be inspected: {err}; repair remains blocked until the queue is known to be empty",
+                        )));
                     }
                 }
                 match machine

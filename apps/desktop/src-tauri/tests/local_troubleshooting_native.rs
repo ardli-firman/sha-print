@@ -133,7 +133,7 @@ async fn real_native_queue_checks_preserve_pending_work_and_classify_missing_or_
         .unwrap();
     assert!(healthy.queue_empty, "{:?}", healthy.checks);
     assert!(healthy.checks.iter().all(|check| check.status == "passed"));
-    assert!(!healthy.test_print_enabled && !healthy.repair_enabled);
+    assert!(!healthy.test_print_enabled && healthy.repair_enabled);
 
     // Generate held work at runtime; no document content or stored fixture is committed.
     let mut job = Command::new("/usr/bin/lp")

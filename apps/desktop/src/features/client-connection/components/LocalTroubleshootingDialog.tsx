@@ -36,24 +36,22 @@ const OUTCOME_LABELS: Record<string, string> = {
 };
 
 function classifyActionOutcome(error: unknown): "denied" | "failed" | "partial" {
-  if (error && typeof error === "object") {
-    const err = error as { code?: string; message?: string };
-    const code = err.code?.toLowerCase() ?? "";
-    const msg = err.message?.toLowerCase() ?? "";
-    if (code === "partial" || msg.includes("partial")) {
-      return "partial";
-    }
-    if (
-      code === "not-authorized" ||
-      msg.includes("permission was not granted") ||
-      msg.includes("administrator permission") ||
-      msg.includes("authentication was not granted") ||
-      msg.includes("authentication was dismissed") ||
-      msg.includes("not authorized") ||
-      msg.includes("denied")
-    ) {
-      return "denied";
-    }
+  const errObj = error && typeof error === "object" ? (error as { code?: string; message?: string }) : null;
+  const code = errObj?.code?.toLowerCase() ?? "";
+  const msg = (typeof error === "string" ? error : errObj?.message ?? "").toLowerCase();
+  if (code === "partial" || msg.includes("partial")) {
+    return "partial";
+  }
+  if (
+    code === "not-authorized" ||
+    msg.includes("permission was not granted") ||
+    msg.includes("administrator permission") ||
+    msg.includes("authentication was not granted") ||
+    msg.includes("authentication was dismissed") ||
+    msg.includes("not authorized") ||
+    msg.includes("denied")
+  ) {
+    return "denied";
   }
   return "failed";
 }
@@ -266,16 +264,6 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
       </div>
       <p className="mt-3 text-xs text-muted-foreground">These local checks do not verify the Server or physical output. Closing discards this session and does not cancel existing print jobs.</p>
       <div className="flex justify-end gap-2 mt-4">
-        {snapshot?.repair_enabled ? (
-          <Button
-            type="button"
-            variant="default"
-            disabled={isExecutingAction}
-            onClick={() => void handleRepairQueue()}
-          >
-            Repair Client queue
-          </Button>
-        ) : null}
         <Button
           type="button"
           variant="outline"
