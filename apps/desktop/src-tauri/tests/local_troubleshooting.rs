@@ -164,6 +164,217 @@ async fn unreadable_pending_work_is_inconclusive_without_exposing_native_error_t
         .contains("untrusted native diagnostic text"));
 }
 
+struct MockServerInspector {
+    inspection: shaprint_desktop::application::ServerInspection,
+}
+
+#[async_trait]
+impl shaprint_desktop::application::ServerInspector for MockServerInspector {
+    async fn inspect_server(
+        &self,
+        _server_address: &str,
+        _printer_name: &str,
+    ) -> Result<shaprint_desktop::application::ServerInspection, AppError> {
+        Ok(self.inspection.clone())
+    }
+}
+
+struct MockChannel {
+    configured: bool,
+}
+
+impl shaprint_desktop::application::ChannelState for MockChannel {
+    fn is_configured(&self) -> bool {
+        self.configured
+    }
+}
+
+struct MockAuthorization {
+    rejected: bool,
+}
+
+impl shaprint_desktop::application::ObservedAuthorization for MockAuthorization {
+    fn is_rejected(&self, _printer_name: &str) -> bool {
+        self.rejected
+    }
+}
+
+#[tokio::test]
+async fn reachable_server_with_matching_identity_and_shared_printer_passes_checks() {
+    use shaprint_desktop::application::{ServerIdentityInspection, ServerInspection};
+    let diagnostics = LocalTroubleshooting::new(
+        Arc::new(NativeSpooler),
+        Arc::new(RuntimeCoordinator::new(Vec::new())),
+    )
+    .with_server_inspection(
+        Arc::new(MockServerInspector {
+            inspection: ServerInspection::Reachable {
+                identity: ServerIdentityInspection::Matching,
+                printer_shared: Some(true),
+            },
+        }),
+        Arc::new(MockChannel { configured: true }),
+        Arc::new(MockAuthorization { rejected: false }),
+    );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    let check = |id: &str| {
+        snapshot
+            .checks
+            .iter()
+            .find(|c| c.check == id)
+            .unwrap_or_else(|| panic!("missing check {id}"))
+    };
+
+    assert_eq!(check("server-reachability").status, "passed");
+    assert_eq!(check("server-identity").status, "passed");
+    assert_eq!(check("shared-printer").status, "passed");
+    // Stored credentials alone must not claim authorized
+    let channel = check("network-channel");
+    assert_eq!(channel.status, "inconclusive");
+    assert!(channel.code.is_none());
+}
+
+#[tokio::test]
+async fn unreachable_server_reports_reachability_failure_without_firewall_diagnosis() {
+    use shaprint_desktop::application::ServerInspection;
+    let diagnostics = LocalTroubleshooting::new(
+        Arc::new(NativeSpooler),
+        Arc::new(RuntimeCoordinator::new(Vec::new())),
+    )
+    .with_server_inspection(
+        Arc::new(MockServerInspector {
+            inspection: ServerInspection::Unreachable,
+        }),
+        Arc::new(MockChannel { configured: true }),
+        Arc::new(MockAuthorization { rejected: false }),
+    );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    let check = |id: &str| snapshot.checks.iter().find(|c| c.check == id).unwrap();
+
+    let reachability = check("server-reachability");
+    assert_eq!(reachability.status, "failed");
+    assert_eq!(reachability.code.as_deref(), Some("server-unavailable"));
+
+    assert_eq!(check("server-identity").status, "not-applicable");
+    assert_eq!(check("shared-printer").status, "not-applicable");
+
+    let firewall = check("firewall");
+    assert_ne!(firewall.status, "failed");
+    assert_eq!(firewall.status, "not-applicable");
+    assert!(firewall.code.is_none());
+}
+
+#[tokio::test]
+async fn server_identity_changed_reports_identity_failure_and_blocks_shared_printer_check() {
+    use shaprint_desktop::application::{ServerIdentityInspection, ServerInspection};
+    let diagnostics = LocalTroubleshooting::new(
+        Arc::new(NativeSpooler),
+        Arc::new(RuntimeCoordinator::new(Vec::new())),
+    )
+    .with_server_inspection(
+        Arc::new(MockServerInspector {
+            inspection: ServerInspection::Reachable {
+                identity: ServerIdentityInspection::Changed,
+                printer_shared: None,
+            },
+        }),
+        Arc::new(MockChannel { configured: true }),
+        Arc::new(MockAuthorization { rejected: false }),
+    );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    let check = |id: &str| snapshot.checks.iter().find(|c| c.check == id).unwrap();
+
+    assert_eq!(check("server-reachability").status, "passed");
+    let identity = check("server-identity");
+    assert_eq!(identity.status, "failed");
+    assert_eq!(identity.code.as_deref(), Some("server-identity-changed"));
+    assert_eq!(check("shared-printer").status, "not-applicable");
+}
+
+#[tokio::test]
+async fn unapproved_server_reports_untrusted_identity_failure() {
+    use shaprint_desktop::application::{ServerIdentityInspection, ServerInspection};
+    let diagnostics = LocalTroubleshooting::new(
+        Arc::new(NativeSpooler),
+        Arc::new(RuntimeCoordinator::new(Vec::new())),
+    )
+    .with_server_inspection(
+        Arc::new(MockServerInspector {
+            inspection: ServerInspection::Reachable {
+                identity: ServerIdentityInspection::NotTrusted,
+                printer_shared: None,
+            },
+        }),
+        Arc::new(MockChannel { configured: false }),
+        Arc::new(MockAuthorization { rejected: false }),
+    );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    let check = |id: &str| snapshot.checks.iter().find(|c| c.check == id).unwrap();
+
+    let identity = check("server-identity");
+    assert_eq!(identity.status, "failed");
+    assert_eq!(identity.code.as_deref(), Some("server-untrusted"));
+    assert_eq!(check("shared-printer").status, "not-applicable");
+}
+
+#[tokio::test]
+async fn unshared_printer_reports_printer_not_shared_failure() {
+    use shaprint_desktop::application::{ServerIdentityInspection, ServerInspection};
+    let diagnostics = LocalTroubleshooting::new(
+        Arc::new(NativeSpooler),
+        Arc::new(RuntimeCoordinator::new(Vec::new())),
+    )
+    .with_server_inspection(
+        Arc::new(MockServerInspector {
+            inspection: ServerInspection::Reachable {
+                identity: ServerIdentityInspection::Matching,
+                printer_shared: Some(false),
+            },
+        }),
+        Arc::new(MockChannel { configured: true }),
+        Arc::new(MockAuthorization { rejected: false }),
+    );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    let check = |id: &str| snapshot.checks.iter().find(|c| c.check == id).unwrap();
+
+    assert_eq!(check("server-reachability").status, "passed");
+    assert_eq!(check("server-identity").status, "passed");
+    let printer = check("shared-printer");
+    assert_eq!(printer.status, "failed");
+    assert_eq!(printer.code.as_deref(), Some("printer-not-shared"));
+}
+
+#[tokio::test]
+async fn observed_authorization_rejection_reports_channel_failure() {
+    use shaprint_desktop::application::{ServerIdentityInspection, ServerInspection};
+    let diagnostics = LocalTroubleshooting::new(
+        Arc::new(NativeSpooler),
+        Arc::new(RuntimeCoordinator::new(Vec::new())),
+    )
+    .with_server_inspection(
+        Arc::new(MockServerInspector {
+            inspection: ServerInspection::Reachable {
+                identity: ServerIdentityInspection::Matching,
+                printer_shared: Some(true),
+            },
+        }),
+        Arc::new(MockChannel { configured: true }),
+        Arc::new(MockAuthorization { rejected: true }),
+    );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    let check = |id: &str| snapshot.checks.iter().find(|c| c.check == id).unwrap();
+
+    let channel = check("network-channel");
+    assert_eq!(channel.status, "failed");
+    assert_eq!(channel.code.as_deref(), Some("not-authorized"));
+}
+
 #[cfg(all(windows, feature = "desktop"))]
 #[tokio::test]
 #[ignore = "requires SHAPRINT_WINDOWS_DIAGNOSTICS_QUEUE naming an installed ShaPrint Client queue"]

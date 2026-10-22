@@ -194,8 +194,17 @@ if ((Get-Printer -Name $name -ErrorAction SilentlyContinue) -or
         .inspect_local_client_queue(target.clone())
         .await
         .unwrap();
+    assert_eq!(outcome(&healthy, "spooler"), "passed");
+    assert_eq!(outcome(&healthy, "client-queue"), "passed");
+    assert_eq!(outcome(&healthy, "pending-jobs"), "passed");
+    assert_eq!(outcome(&healthy, "client-proxy"), "passed");
+    assert_eq!(outcome(&healthy, "server-reachability"), "passed");
+    assert_eq!(outcome(&healthy, "server-identity"), "passed");
+    assert_eq!(outcome(&healthy, "shared-printer"), "passed");
+    assert_eq!(outcome(&healthy, "network-channel"), "inconclusive");
+    assert_eq!(outcome(&healthy, "firewall"), "not-applicable");
     assert!(
-        healthy.checks.iter().all(|check| check.status == "passed"),
+        healthy.checks.iter().all(|check| check.status != "failed"),
         "{:?}",
         healthy.checks
     );

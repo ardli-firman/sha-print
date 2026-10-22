@@ -108,6 +108,9 @@ pub struct PrintFailureDto {
     pub path: String,
     /// Stable code for the condition, for example `server-unavailable`.
     pub code: String,
+    /// The queue the job was for, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub printer: Option<String>,
     /// What happened; never contains the Network Channel or document contents.
     pub message: String,
     /// The one action that resolves the failure.
@@ -121,6 +124,7 @@ impl From<&PrintFailure> for PrintFailureDto {
         Self {
             path: failure.path().as_str().to_owned(),
             code: failure.code().as_str().to_owned(),
+            printer: failure.printer().map(|p| p.as_str().to_owned()),
             message: failure.message().to_owned(),
             recovery: failure.recovery().to_owned(),
             observed_at_ms: failure.observed_at_ms(),
@@ -470,6 +474,7 @@ mod tests {
             serde_json::json!({
                 "path": "server-submission",
                 "code": "queue-unavailable",
+                "printer": "Office Printer",
                 "message": "The job for 'Office Printer' could not be submitted to the Windows printer queue.",
                 "recovery": "Check that the printer is switched on and reachable from this computer, then print again.",
                 "observed_at_ms": failure.observed_at_ms()

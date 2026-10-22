@@ -42,6 +42,7 @@ pub use sharing::{LocalPrinter, Sharing};
 pub use startup::{Startup, StartupRegistration, StartupStatus};
 pub use troubleshooting::{
     LocalFinding, LocalQueueInspection, LocalTroubleshooting, LocalTroubleshootingSnapshot,
+    ObservedAuthorization, ServerIdentityInspection, ServerInspection, ServerInspector,
     LOCAL_DIAGNOSTIC_TIMEOUT,
 };
 pub use updater::{

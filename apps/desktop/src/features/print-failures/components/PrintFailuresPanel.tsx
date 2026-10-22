@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle, Clock, X } from "lucide-react";
 
-import type { PrintFailurePath } from "@/api/types";
+import type { PrintFailurePath, RecognisedClientQueue } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -22,13 +22,19 @@ function observedAt(milliseconds: number): { iso: string; text: string } {
 
 export interface PrintFailuresPanelProps {
   failures: PrintFailuresController;
+  clientQueues?: RecognisedClientQueue[];
+  onTroubleshoot?: (target: RecognisedClientQueue) => void;
 }
 
 /** The shell's explanation of the last failed job and its single recovery action. */
-export function PrintFailuresPanel({ failures }: PrintFailuresPanelProps) {
+export function PrintFailuresPanel({ failures, clientQueues, onTroubleshoot }: PrintFailuresPanelProps) {
   const { failure, error, dismiss } = failures;
   const observed = failure ? observedAt(failure.observed_at_ms) : null;
   const hasProblem = Boolean(failure || error);
+  const identifiedTarget =
+    failure?.path === "client-forwarding" && failure?.printer && clientQueues
+      ? clientQueues.find((q) => q.printer_name === failure.printer)
+      : undefined;
 
   return (
     <Card
@@ -98,6 +104,20 @@ export function PrintFailuresPanel({ failures }: PrintFailuresPanelProps) {
             </strong>
             <p className="text-xs leading-relaxed">{failure.recovery}</p>
           </div>
+
+          {identifiedTarget ? (
+            <div className="failure-actions pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onTroubleshoot?.(identifiedTarget)}
+                className="text-xs h-7"
+              >
+                Troubleshoot printer
+              </Button>
+            </div>
+          ) : null}
 
           <p className="failure-when text-[11px] text-muted-foreground flex items-center gap-1 pt-0.5">
             <Clock size={11} />

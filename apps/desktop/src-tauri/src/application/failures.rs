@@ -52,6 +52,18 @@ impl PrintFailures {
     }
 }
 
+impl super::ObservedAuthorization for PrintFailures {
+    fn is_rejected(&self, printer_name: &str) -> bool {
+        if let Some(failure) = self.latest() {
+            failure.path() == crate::domain::JobPath::ClientForwarding
+                && failure.code() == crate::domain::ErrorCode::NotAuthorized
+                && failure.printer().map(|p| p.as_str()) == Some(printer_name)
+        } else {
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

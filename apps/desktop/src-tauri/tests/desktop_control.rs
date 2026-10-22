@@ -153,7 +153,12 @@ async fn selected_queue_diagnostics_are_passive_machine_reads_with_a_bounded_sna
         .await
         .expect("returns classified local checks over the daemon socket");
     assert_eq!(snapshot.target.queue_name, "shaprint_missing_queue");
-    assert_eq!(snapshot.checks.len(), 4);
+    assert_eq!(snapshot.checks.len(), 9);
+    assert!(snapshot
+        .checks
+        .iter()
+        .any(|c| c.check == "server-reachability"));
+    assert!(snapshot.checks.iter().any(|c| c.check == "firewall"));
     assert!(!snapshot.queue_empty);
     assert!(!snapshot.test_print_enabled);
     assert!(!snapshot.repair_enabled);
