@@ -50,7 +50,7 @@ exercise opening the selected queue, pending-work guidance, the UI deadline,
 explicit rerun, target switching, closing, and rejection of superseded results.
 The troubleshooting panel offers no test-print or repair action in this slice.
 
-## Open runtime criteria
+## Windows native runtime exercise
 
 Desktop CI now explicitly provisions the disposable Windows runner's print
 services and runs `windows_native_diagnostics_are_self_contained` with `--ignored`.
@@ -61,13 +61,30 @@ missing, and unavailable-spooler cases. It asserts no work reaches the fake
 physical printer. Rust cleanup guards and an unconditional CI cleanup step remove
 the uniquely named fixture queue and restore the runner's spooler.
 
-The workflow's existence and successful cross-compilation do not establish a
-passing Windows runtime result. Record the actual PR run before closing #172.
+[Desktop CI run 39700898349](https://github.com/ardli-firman/sha-print/actions/runs/39700898349)
+passed on Windows at commit `eb20ed015e876f4c12bd51e584c6b980e523ed54`.
+The explicit native smoke test reported:
 
-Windows native runtime and a launched Windows desktop UI were not available in
-this Linux workspace. Cross-compilation is not evidence of Windows runtime
-behavior. Keep ticket #172 open until that platform's changed surface is actually
-exercised.
+```text
+[native-diagnostics] matching empty queue, spooler and proxy: passed
+[native-diagnostics] repeated inspection preserves held work: passed
+[native-diagnostics] stopped proxy: passed
+[native-diagnostics] mismatched destination: passed
+[native-diagnostics] missing queue and explicit cleanup: passed
+[native-diagnostics] unavailable spooler and passive-only diagnostics: passed
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.05s
+```
+
+The print-service preparation and unconditional fixture cleanup steps also passed.
+The Windows Rust format, clippy, and ordinary test suite and the frontend job
+passed in the same run. This is native runtime evidence through the public
+ControlPlane; no launched interactive Windows desktop UI is claimed.
+
+## Additional manual qualification
+
+Interactive Windows UI checks remain useful for the broader qualification in
+#179. The rendered application tests cover the visible session behavior for this
+slice; the native CI test exercises the Windows command and print services.
 
 On a Windows machine with an installed ShaPrint Client queue, set
 `SHAPRINT_WINDOWS_DIAGNOSTICS_QUEUE` to its exact queue name and run
@@ -104,5 +121,6 @@ classified public messages, and passive Linux reads without elevation.
 Zero outstanding code findings after reviewing the finalized deadline behavior.
 The backend reserves local IPC delivery time, and the UI ignores late success or
 failure after settlement. Tests cover retained partial evidence, explicit rerun,
-superseded sessions, and late responses. Windows native runtime remains one open
-acceptance-evidence criterion, as described above.
+superseded sessions, and late responses. Windows native runtime passed in the
+linked CI run above. Interactive Windows UI and mixed-version physical
+qualification are not claimed by this record.
