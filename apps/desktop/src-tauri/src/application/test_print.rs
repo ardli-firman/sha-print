@@ -54,6 +54,17 @@ pub enum PhysicalResult {
     Incorrect,
 }
 impl PhysicalResult {
+    pub fn parse(s: &str) -> Result<Self, AppError> {
+        match s {
+            "correct" => Ok(Self::Correct),
+            "no-output" => Ok(Self::NoOutput),
+            "incorrect" => Ok(Self::Incorrect),
+            _ => Err(AppError::invalid_input(
+                "Choose the observed physical result.",
+            )),
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unconfirmed => "unconfirmed",

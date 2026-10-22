@@ -277,6 +277,19 @@ enum ControlRequest {
     InspectLocalClientQueue {
         target: RecognisedClientQueueDto,
     },
+    RefreshTestPrintSession {
+        id: u64,
+    },
+    SendTestPrint {
+        id: u64,
+    },
+    ConfirmTestPrint {
+        id: u64,
+        result: String,
+    },
+    CloseTestPrintSession {
+        id: u64,
+    },
     Status,
     ServerIdentity,
     StartService {
@@ -767,19 +780,32 @@ async fn process_stream(
             ControlRequest::InspectLocalClientQueue { target } => {
                 let target = target.parse_target()?;
                 let shell = require_shell(&shell)?;
-                let snapshot = crate::application::LocalTroubleshooting::new(
-                    shell.printer_catalog(),
-                    shell.runtime(),
-                )
-                .with_server_inspection(
-                    shell.client_connections(),
-                    shell.network_channel(),
-                    shell.print_failures(),
-                )
-                .inspect(target)
-                .await
-                .into();
+                let snapshot = shell.test_print().open(target).await?.into();
                 Ok(ControlResponse::LocalTroubleshooting { snapshot })
+            }
+            ControlRequest::RefreshTestPrintSession { id } => {
+                let shell = require_shell(&shell)?;
+                let snapshot = shell.test_print().refresh(id).await?.into();
+                Ok(ControlResponse::LocalTroubleshooting { snapshot })
+            }
+            ControlRequest::SendTestPrint { id } => {
+                let shell = require_shell(&shell)?;
+                let snapshot = shell.test_print().send(id).await?.into();
+                Ok(ControlResponse::LocalTroubleshooting { snapshot })
+            }
+            ControlRequest::ConfirmTestPrint { id, result } => {
+                use crate::application::PhysicalResult;
+                let physical = PhysicalResult::parse(&result)?;
+                let shell = require_shell(&shell)?;
+                let snapshot = shell.test_print().confirm(id, physical)?.into();
+                Ok(ControlResponse::LocalTroubleshooting { snapshot })
+            }
+            ControlRequest::CloseTestPrintSession { id } => {
+                let resolved_shell = require_shell(&shell)?;
+                resolved_shell.test_print().close(id);
+                Ok(ControlResponse::Ok {
+                    status: runtime_status_dto(&runtime, &shell).await,
+                })
             }
             ControlRequest::Status => Ok(ControlResponse::Ok {
                 status: runtime_status_dto(&runtime, &shell).await,
@@ -1054,6 +1080,56 @@ impl DaemonClient {
             .await?
         {
             ControlResponse::LocalTroubleshooting { snapshot } => Ok(snapshot),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    pub async fn refresh_test_print_session(
+        &self,
+        id: u64,
+    ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
+        match self
+            .send(&ControlRequest::RefreshTestPrintSession { id })
+            .await?
+        {
+            ControlResponse::LocalTroubleshooting { snapshot } => Ok(snapshot),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    pub async fn send_test_print(
+        &self,
+        id: u64,
+    ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
+        match self.send(&ControlRequest::SendTestPrint { id }).await? {
+            ControlResponse::LocalTroubleshooting { snapshot } => Ok(snapshot),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    pub async fn confirm_test_print(
+        &self,
+        id: u64,
+        result: &str,
+    ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
+        match self
+            .send(&ControlRequest::ConfirmTestPrint {
+                id,
+                result: result.to_owned(),
+            })
+            .await?
+        {
+            ControlResponse::LocalTroubleshooting { snapshot } => Ok(snapshot),
+            other => Err(unexpected_response(&other)),
+        }
+    }
+
+    pub async fn close_test_print_session(&self, id: u64) -> Result<(), AppError> {
+        match self
+            .send(&ControlRequest::CloseTestPrintSession { id })
+            .await?
+        {
+            ControlResponse::Ok { .. } => Ok(()),
             other => Err(unexpected_response(&other)),
         }
     }

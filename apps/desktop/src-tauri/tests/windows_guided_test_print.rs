@@ -171,7 +171,7 @@ async fn native_client_queue_reaches_selected_server_without_changing_defaults()
         .await
         .unwrap();
     assert_eq!(before, after, "saved queue defaults must not change");
-    control.close_test_print_session(id).unwrap();
+    control.close_test_print_session(id).await.unwrap();
     shell.runtime().shutdown().await.unwrap();
     server.shutdown().await.unwrap();
     drop(cleanup);

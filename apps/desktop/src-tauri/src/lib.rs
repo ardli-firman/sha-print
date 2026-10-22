@@ -143,6 +143,24 @@ impl Shell {
             )),
             None => default_print_job_submitter(),
         };
+        let proxy_port = if ports.proxy_port == 0 {
+            adapters::CLIENT_PROXY_DEFAULT_PORT
+        } else {
+            ports.proxy_port
+        };
+        let proxy_authority = format!("127.0.0.1:{proxy_port}");
+        let native_test_print: Option<Arc<dyn application::NativeTestPrint>> = match &cups_endpoint
+        {
+            Some(ep) => Some(Arc::new(
+                adapters::printers::LinuxNativeTestPrint::with_endpoint_and_authority(
+                    ep.clone(),
+                    proxy_authority,
+                ),
+            )),
+            None => Some(Arc::new(
+                adapters::printers::LinuxNativeTestPrint::with_authority(proxy_authority),
+            )),
+        };
         let setup = Arc::new(Setup::new(Arc::new(SystemElevation::with_linux_overrides(
             firewall_program,
             cups_endpoint.clone(),
@@ -160,6 +178,7 @@ impl Shell {
             submitter,
             setup,
             installer,
+            native_test_print,
         )
     }
 
@@ -170,6 +189,11 @@ impl Shell {
         credential_file: Option<std::path::PathBuf>,
     ) -> Result<Self, AppError> {
         let proxy_port = ports.proxy_port;
+        #[cfg(windows)]
+        let native_test_print: Option<Arc<dyn application::NativeTestPrint>> =
+            Some(Arc::new(adapters::printers::WindowsNativeTestPrint));
+        #[cfg(not(windows))]
+        let native_test_print = None;
         Self::build_with_adapters(
             data_dir,
             ports,
@@ -178,9 +202,11 @@ impl Shell {
             default_print_job_submitter(),
             Arc::new(Setup::new(Arc::new(SystemElevation::new()))),
             adapters::queue_installation::platform_installer_for_port(proxy_port),
+            native_test_print,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_with_adapters(
         data_dir: &Path,
         ports: RuntimePorts,
@@ -189,6 +215,7 @@ impl Shell {
         submitter: Arc<dyn PrintJobSubmitter>,
         setup: Arc<Setup>,
         installer: Arc<dyn application::QueueInstaller>,
+        native_test_print: Option<Arc<dyn application::NativeTestPrint>>,
     ) -> Result<Self, AppError> {
         let identity = Arc::new(FileIdentityStore::new(data_dir).load_or_create()?);
         let sharing = Arc::new(Sharing::with_persistence(
@@ -262,11 +289,6 @@ impl Shell {
             .with_catalog(Arc::clone(&printer_catalog)),
         );
 
-        #[cfg(windows)]
-        let native_test_print: Option<Arc<dyn application::NativeTestPrint>> =
-            Some(Arc::new(adapters::printers::WindowsNativeTestPrint));
-        #[cfg(not(windows))]
-        let native_test_print = None;
         let test_print = Arc::new(application::GuidedTestPrint::new(
             application::LocalTroubleshooting::new(
                 Arc::clone(&printer_catalog),

@@ -153,20 +153,23 @@ async fn selected_queue_diagnostics_are_passive_machine_reads_with_a_bounded_sna
         .await
         .expect("returns classified local checks over the daemon socket");
     assert_eq!(snapshot.target.queue_name, "shaprint_missing_queue");
-    assert_eq!(snapshot.checks.len(), 9);
+    assert_eq!(snapshot.checks.len(), 10);
     assert!(snapshot
         .checks
         .iter()
         .any(|c| c.check == "server-reachability"));
     assert!(snapshot.checks.iter().any(|c| c.check == "firewall"));
+    assert!(snapshot.checks.iter().any(|c| c.check == "requested-media"));
     assert!(!snapshot.queue_empty);
     assert!(!snapshot.test_print_enabled);
     assert!(!snapshot.repair_enabled);
     assert!(snapshot.attempted_actions.is_empty());
+    assert_eq!(snapshot.session_id, Some(1));
     assert_eq!(
         machine.control.send_test_print(1).await.unwrap_err().code(),
-        shaprint_desktop::domain::ErrorCode::Unsupported
+        shaprint_desktop::domain::ErrorCode::InvalidState
     );
+    machine.control.close_test_print_session(1).await.unwrap();
     assert!(!machine.root.join("pkexec-was-run").exists());
     machine.stop().await;
 }
