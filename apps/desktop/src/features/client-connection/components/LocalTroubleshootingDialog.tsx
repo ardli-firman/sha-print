@@ -97,6 +97,7 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
                 onReviewServer ? (
                   <div className="mt-2">
                     <Button
+                      type="button"
                       size="sm"
                       variant="outline"
                       className="text-xs h-7"
@@ -111,6 +112,7 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
                 onConfigureNetworkChannel ? (
                   <div className="mt-2">
                     <Button
+                      type="button"
                       size="sm"
                       variant="outline"
                       className="text-xs h-7"
@@ -129,8 +131,8 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
       </div>
       <p className="mt-3 text-xs text-muted-foreground">These local checks do not verify the Server or physical output. Closing discards this session and does not cancel existing print jobs.</p>
       <div className="flex justify-end gap-2 mt-4">
-        <Button variant="outline" onClick={() => setRun((value) => value + 1)}>Check again</Button>
-        <Button onClick={onClose}>Close troubleshooting</Button>
+        <Button type="button" variant="outline" onClick={() => setRun((value) => value + 1)}>Check again</Button>
+        <Button type="button" onClick={onClose}>Close troubleshooting</Button>
       </div>
     </Dialog>
   );
