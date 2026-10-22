@@ -210,7 +210,17 @@ function App() {
             onCheck={() => void updates.check()}
             onRestart={() => void updates.restart()}
           />
-          <PrintFailuresPanel failures={failures} />
+          <PrintFailuresPanel
+            failures={failures}
+            clientQueues={clientQueues.queues}
+            onTroubleshoot={(target) => {
+              if (troubleshootingTarget && troubleshootingTarget.queue_name !== target.queue_name) {
+                setRequestedTroubleshootingTarget(target);
+              } else if (!troubleshootingTarget) {
+                setTroubleshootingTarget(target);
+              }
+            }}
+          />
 
           <section className="page-stack" aria-label={pageContent.title}>
             {page === "my-printers" ? (
@@ -312,6 +322,17 @@ function App() {
       {troubleshootingTarget ? <LocalTroubleshootingDialog
         target={troubleshootingTarget}
         onClose={() => { setTroubleshootingTarget(null); setRequestedTroubleshootingTarget(null); }}
+        onReviewServer={(serverAddress) => {
+          setTroubleshootingTarget(null);
+          setRequestedTroubleshootingTarget(null);
+          setAddPrinterOpen(true);
+          void connections.reviewAddress(serverAddress);
+        }}
+        onConfigureNetworkChannel={() => {
+          setTroubleshootingTarget(null);
+          setRequestedTroubleshootingTarget(null);
+          setPage("settings");
+        }}
       /> : null}
       {requestedTroubleshootingTarget ? <div role="alertdialog" aria-label="Switch troubleshooting printer" className="dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/55">
         <div className="rounded-md border bg-card p-6 text-card-foreground">

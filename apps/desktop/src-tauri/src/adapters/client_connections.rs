@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use async_trait::async_trait;
 use rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::{CertificateDer, ServerName, UnixTime},
@@ -31,7 +32,8 @@ use crate::{
         protocol::{self, OPERATION_GET_PRINTERS},
         DEFAULT_PORT,
     },
-    domain::AppError,
+    application::{ServerIdentityInspection, ServerInspection, ServerInspector},
+    domain::{AppError, ErrorCode},
 };
 
 const STORE_FILE: &str = "client-server-trust.json";
@@ -406,6 +408,67 @@ impl ClientConnections {
                 AppError::invalid_state("The print server returned an incomplete IPP response.")
             })?;
         Ok(ipp.to_vec())
+    }
+}
+
+#[async_trait]
+impl ServerInspector for ClientConnections {
+    async fn inspect_server(
+        &self,
+        server_address: &str,
+        printer_name: &str,
+    ) -> Result<ServerInspection, AppError> {
+        let address = match ServerAddress::parse(server_address) {
+            Ok(addr) => addr,
+            Err(_) => return Ok(ServerInspection::Unreachable),
+        };
+        let _approval = self.approval_lock.lock().await;
+        let pinned = match self.refresh_store() {
+            Ok(store) => store
+                .servers
+                .get(&address.normalized)
+                .map(|r| r.fingerprint.clone()),
+            Err(e) => return Err(e),
+        };
+        drop(_approval);
+
+        let (stream, live) = match connect(&address).await {
+            Ok(conn) => conn,
+            Err(e) if e.code() == ErrorCode::Timeout => return Ok(ServerInspection::Timeout),
+            Err(_) => return Ok(ServerInspection::Unreachable),
+        };
+
+        let Some(pinned_fingerprint) = pinned else {
+            return Ok(ServerInspection::Reachable {
+                identity: ServerIdentityInspection::NotTrusted,
+                printer_shared: None,
+            });
+        };
+
+        if live != pinned_fingerprint {
+            return Ok(ServerInspection::Reachable {
+                identity: ServerIdentityInspection::Changed,
+                printer_shared: None,
+            });
+        }
+
+        match query_printers(stream, &address).await {
+            Ok(printers) => {
+                let shared = printers.iter().any(|name| name == printer_name);
+                Ok(ServerInspection::Reachable {
+                    identity: ServerIdentityInspection::Matching,
+                    printer_shared: Some(shared),
+                })
+            }
+            Err(e) if e.code() == ErrorCode::Timeout => Ok(ServerInspection::Reachable {
+                identity: ServerIdentityInspection::Matching,
+                printer_shared: None,
+            }),
+            Err(_) => Ok(ServerInspection::Reachable {
+                identity: ServerIdentityInspection::Matching,
+                printer_shared: None,
+            }),
+        }
     }
 }
 

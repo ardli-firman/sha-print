@@ -243,7 +243,7 @@ it.each(["success", "failure"] as const)("finalizes inconclusive results at the 
     await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
     const dialog = screen.getByRole("dialog", { name: "Troubleshoot printer" });
     expect(within(dialog).queryByText(/Checking the local print path/)).toBeNull();
-    expect(within(dialog).getAllByText(/Inconclusive/).length).toBe(4);
+    expect(within(dialog).getAllByText(/Inconclusive/).length).toBe(9);
     expect(within(dialog).queryByRole("alert")).toBeNull();
     expect(within(dialog).getByText(/Testing and repair are blocked/)).toBeTruthy();
     await act(async () => { finishLate({
@@ -252,7 +252,7 @@ it.each(["success", "failure"] as const)("finalizes inconclusive results at the 
       checks: [{ check: "pending-jobs", status: "passed", detail: "Too-late empty-queue evidence" }],
     }); });
     expect(within(dialog).queryByText("Too-late empty-queue evidence")).toBeNull();
-    expect(within(dialog).getAllByText(/Inconclusive/).length).toBe(4);
+    expect(within(dialog).getAllByText(/Inconclusive/).length).toBe(9);
     expect(within(dialog).queryByRole("alert")).toBeNull();
   } finally { vi.useRealTimers(); }
 });
@@ -330,6 +330,111 @@ it("reruns local checks and ignores results from a superseded run", async () => 
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "inspect_local_client_queue", "inspect_local_client_queue",
   ]);
+});
+
+it("opens troubleshooting from a print failure card when target matches an installed queue", async () => {
+  const target = { queue_name: "Office Queue", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(printFailures.getPrintFailures).mockResolvedValue({
+    path: "client-forwarding",
+    code: "server-unavailable",
+    printer: "Office",
+    message: "could not reach server",
+    recovery: "Check server is running",
+    observed_at_ms: Date.now(),
+  });
+  vi.mocked(invoke).mockResolvedValue({
+    target, version: "3.4.4", queue_empty: true, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [],
+    checks: [
+      { check: "spooler", status: "passed", detail: "Spooler ready" },
+      { check: "server-reachability", status: "failed", code: "server-unavailable", detail: "Server offline" },
+    ],
+  });
+  render(<App />);
+
+  const troubleshootBtn = await screen.findByRole("button", { name: "Troubleshoot printer" });
+  fireEvent.click(troubleshootBtn);
+
+  const dialog = await screen.findByRole("dialog", { name: "Troubleshoot printer" });
+  expect(within(dialog).getByText(target.queue_name)).toBeTruthy();
+  expect(within(dialog).getByText("Server offline")).toBeTruthy();
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith("inspect_local_client_queue", { target });
+});
+
+it("does not offer troubleshooting from a failure card when target cannot be identified", async () => {
+  const target = { queue_name: "Office Queue", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  // Server-submission failure on another printer
+  vi.mocked(printFailures.getPrintFailures).mockResolvedValue({
+    path: "server-submission",
+    code: "queue-unavailable",
+    printer: "Warehouse",
+    message: "could not submit to Windows queue",
+    recovery: "Check printer power",
+    observed_at_ms: Date.now(),
+  });
+  render(<App />);
+
+  expect(await screen.findByText(/could not submit to Windows queue/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Troubleshoot printer" })).toBeNull();
+});
+
+it("provides navigation to server identity review and network channel settings from classified checks", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(invoke).mockResolvedValue({
+    target, version: "3.4.4", queue_empty: true, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [],
+    checks: [
+      { check: "server-reachability", status: "passed", detail: "Server responded over TLS" },
+      { check: "server-identity", status: "failed", code: "server-identity-changed", detail: "Certificate changed" },
+      { check: "shared-printer", status: "not-applicable", detail: "Cannot check unapproved server" },
+      { check: "network-channel", status: "failed", code: "not-authorized", detail: "Channel rejected" },
+      { check: "firewall", status: "not-applicable", detail: "Optional firewall inspection unavailable" },
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  const dialog = await screen.findByRole("dialog", { name: "Troubleshoot printer" });
+
+  expect(within(dialog).getByText(/Certificate changed/)).toBeTruthy();
+  expect(within(dialog).getByText(/Channel rejected/)).toBeTruthy();
+
+  // Test server review navigation
+  const reviewBtn = within(dialog).getByRole("button", { name: "Review server identity" });
+  fireEvent.click(reviewBtn);
+
+  // Dialog closes and server review is opened
+  expect(screen.queryByRole("dialog", { name: "Troubleshoot printer" })).toBeNull();
+  expect(vi.mocked(serverConnections.inspectServerConnection)).toHaveBeenCalledWith(target.server_address);
+});
+
+it("navigates to network channel settings from troubleshooting dialog", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(invoke).mockResolvedValue({
+    target, version: "3.4.4", queue_empty: true, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [],
+    checks: [
+      { check: "server-reachability", status: "passed", detail: "Server responded over TLS" },
+      { check: "server-identity", status: "passed", detail: "Certificate matches" },
+      { check: "shared-printer", status: "passed", detail: "Printer is shared" },
+      { check: "network-channel", status: "failed", code: "not-authorized", detail: "Channel rejected" },
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  const dialog = await screen.findByRole("dialog", { name: "Troubleshoot printer" });
+
+  const channelBtn = within(dialog).getByRole("button", { name: "Network Channel settings" });
+  fireEvent.click(channelBtn);
+
+  // Dialog closes and navigated to settings workspace
+  expect(screen.queryByRole("dialog", { name: "Troubleshoot printer" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy();
 });
 
 /** A computer that had the previous .NET app installed. */

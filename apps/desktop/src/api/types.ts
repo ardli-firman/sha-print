@@ -88,6 +88,8 @@ export interface PrintFailure {
   path: PrintFailurePath;
   /** Stable code for the condition, for example `server-unavailable`. */
   code: ErrorCode;
+  /** The target printer queue if known. */
+  printer?: string | null;
   /** What happened; never contains the Network Channel or document contents. */
   message: string;
   /** The next action for the user. */

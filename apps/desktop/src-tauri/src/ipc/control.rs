@@ -141,6 +141,11 @@ impl ControlPlane {
                 shell.printer_catalog(),
                 shell.runtime(),
             )
+            .with_server_inspection(
+                shell.client_connections(),
+                shell.network_channel(),
+                shell.print_failures(),
+            )
             .inspect(parsed)
             .await
             .into()),

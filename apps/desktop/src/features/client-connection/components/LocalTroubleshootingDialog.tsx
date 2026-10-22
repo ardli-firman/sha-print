@@ -10,14 +10,21 @@ const CHECK_LABELS: Record<string, string> = {
   "client-queue": "Client queue destination",
   "pending-jobs": "Pending print jobs",
   "client-proxy": "Client proxy",
+  "server-reachability": "Server reachability",
+  "server-identity": "Server identity",
+  "shared-printer": "Shared printer availability",
+  "network-channel": "Network Channel authorization",
+  firewall: "Firewall inspection",
 };
 const STATUS_LABELS: Record<string, string> = {
   passed: "Passed", failed: "Failed", inconclusive: "Inconclusive", "not-applicable": "Not applicable",
 };
 
-export function LocalTroubleshootingDialog({ target, onClose }: {
+export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, onConfigureNetworkChannel }: {
   target: RecognisedClientQueue;
   onClose: () => void;
+  onReviewServer?: (serverAddress: string) => void;
+  onConfigureNetworkChannel?: () => void;
 }) {
   const [run, setRun] = useState(0);
   const [snapshot, setSnapshot] = useState<LocalTroubleshootingSnapshot | null>(null);
@@ -76,10 +83,45 @@ export function LocalTroubleshootingDialog({ target, onClose }: {
         {error ? <p role="alert">Local checks could not be completed. The queue state is unknown, so testing and repair remain blocked. Check ShaPrint and try again.</p> : null}
         {snapshot ? <>
           <ul className="space-y-3">
-            {snapshot.checks.map((check) => <li key={check.check} className="rounded-md border p-3 text-sm">
-              <p className="font-semibold">{CHECK_LABELS[check.check] ?? check.check} <span className="font-normal">({STATUS_LABELS[check.status] ?? "Inconclusive"})</span></p>
-              <p>{check.detail}</p>
-            </li>)}
+            {snapshot.checks.map((check) => (
+              <li key={check.check} className="rounded-md border p-3 text-sm">
+                <p className="font-semibold">
+                  {CHECK_LABELS[check.check] ?? check.check}{" "}
+                  <span className="font-normal">
+                    ({STATUS_LABELS[check.status] ?? "Inconclusive"})
+                  </span>
+                </p>
+                <p>{check.detail}</p>
+                {check.check === "server-identity" &&
+                (check.status === "failed" || check.code === "server-identity-changed" || check.code === "server-untrusted") &&
+                onReviewServer ? (
+                  <div className="mt-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-7"
+                      onClick={() => onReviewServer(target.server_address)}
+                    >
+                      Review server identity
+                    </Button>
+                  </div>
+                ) : null}
+                {check.check === "network-channel" &&
+                (check.status === "failed" || check.status === "inconclusive" || check.code === "not-authorized") &&
+                onConfigureNetworkChannel ? (
+                  <div className="mt-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-7"
+                      onClick={onConfigureNetworkChannel}
+                    >
+                      Network Channel settings
+                    </Button>
+                  </div>
+                ) : null}
+              </li>
+            ))}
           </ul>
           {!snapshot.queue_empty ? <p className="mt-3 text-sm">Testing and repair are blocked until this Client queue is known to be empty.</p> : null}
           <p className="mt-3 text-sm text-muted-foreground">To inspect pending work, open Windows Settings &gt; Printers &amp; scanners &gt; your printer &gt; Open print queue, or your Linux desktop&apos;s printer queue. Wait for jobs to finish or manage them there.</p>
