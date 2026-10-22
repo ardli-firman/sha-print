@@ -12,6 +12,8 @@ pub(crate) mod media;
 mod page_settings;
 pub mod raster;
 
+#[cfg(unix)]
+pub mod linux_test_print;
 #[cfg(not(windows))]
 mod unsupported;
 #[cfg(windows)]
@@ -22,6 +24,8 @@ mod windows_render;
 mod windows_test_print;
 #[cfg(unix)]
 pub use cups::{CupsPrintJobSubmitter, CupsPrinterCatalog, CupsSpoolerReader};
+#[cfg(unix)]
+pub use linux_test_print::{generate_diagnostic_pwg_raster, LinuxNativeTestPrint};
 #[cfg(not(windows))]
 pub use unsupported::UnsupportedPrintJobSubmitter;
 #[cfg(windows)]

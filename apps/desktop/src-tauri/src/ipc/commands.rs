@@ -64,22 +64,24 @@ pub async fn send_test_print(
         .map_err(|error| AppErrorDto::from(&error))
 }
 #[tauri::command]
-pub fn confirm_test_print(
+pub async fn confirm_test_print(
     control: State<'_, SharedControl>,
     session_id: u64,
     result: String,
 ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppErrorDto> {
     control
         .confirm_test_print(session_id, &result)
+        .await
         .map_err(|error| AppErrorDto::from(&error))
 }
 #[tauri::command]
-pub fn close_test_print_session(
+pub async fn close_test_print_session(
     control: State<'_, SharedControl>,
     session_id: u64,
 ) -> Result<(), AppErrorDto> {
     control
         .close_test_print_session(session_id)
+        .await
         .map_err(|error| AppErrorDto::from(&error))
 }
 

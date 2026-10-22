@@ -411,3 +411,165 @@ fn read_value(response: &[u8], position: &mut usize) -> Vec<u8> {
     *position += length;
     value
 }
+
+#[cfg(unix)]
+pub struct IsolatedCupsd {
+    pub dir: std::path::PathBuf,
+    pub endpoint: shaprint_desktop::adapters::printers::cups::CupsServerEndpoint,
+    child: std::process::Child,
+}
+
+#[cfg(unix)]
+impl IsolatedCupsd {
+    pub fn is_supported() -> bool {
+        std::path::Path::new("/usr/sbin/cupsd").exists()
+            && std::path::Path::new("/usr/sbin/lpadmin").exists()
+    }
+
+    pub fn start() -> Self {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds ephemeral port");
+        let port = listener.local_addr().expect("reads addr").port();
+        drop(listener);
+
+        let dir = temporary_directory("isolated-cupsd");
+        for sub in [
+            "conf",
+            "spool",
+            "spool/temp",
+            "cache",
+            "state",
+            "state/certs",
+            "logs",
+            "ppd",
+            "serverbin/backend",
+            "serverbin/filter",
+            "serverbin/cgi-bin",
+            "serverbin/daemon",
+            "serverbin/driver",
+            "serverbin/monitor",
+            "serverbin/notifier",
+        ] {
+            std::fs::create_dir_all(dir.join(sub)).expect("creates cups subdirs");
+        }
+        for sub in [
+            "filter", "cgi-bin", "daemon", "driver", "monitor", "notifier",
+        ] {
+            let src = std::path::Path::new("/usr/lib/cups").join(sub);
+            if let Ok(entries) = std::fs::read_dir(&src) {
+                for entry in entries.flatten() {
+                    let _ = std::os::unix::fs::symlink(
+                        entry.path(),
+                        dir.join("serverbin").join(sub).join(entry.file_name()),
+                    );
+                }
+            }
+        }
+        for backend in ["ipp", "usb", "socket", "lpd"] {
+            let src = std::path::Path::new("/usr/lib/cups/backend").join(backend);
+            if src.exists() {
+                let dst = dir.join("serverbin/backend").join(backend);
+                std::fs::copy(&src, &dst).expect("copies backend");
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))
+                    .expect("chmod 0755 backend");
+            }
+        }
+        let _ = std::os::unix::fs::symlink("ipp", dir.join("serverbin/backend/http"));
+        let _ = std::os::unix::fs::symlink("ipp", dir.join("serverbin/backend/ipps"));
+
+        let sock = dir.join("cups.sock");
+        let cupsd_conf = dir.join("conf/cupsd.conf");
+        let cups_files_conf = dir.join("conf/cups-files.conf");
+        std::fs::write(
+            &cupsd_conf,
+            format!(
+                "LogLevel info\nListen 127.0.0.1:{port}\nListen {}\nBrowsing Off\nDefaultAuthType None\n<Location />\n  Order allow,deny\n  Allow all\n</Location>\n<Location /admin>\n  Order allow,deny\n  Allow all\n</Location>\n<Location /admin/conf>\n  Order allow,deny\n  Allow all\n</Location>\n<Policy default>\n  <Limit All>\n    Order allow,deny\n    Allow all\n  </Limit>\n</Policy>\n",
+                sock.display()
+            ),
+        )
+        .expect("writes cupsd.conf");
+        std::fs::write(
+            &cups_files_conf,
+            format!(
+                "FileDevice Yes\nAccessLog {d}/logs/access_log\nErrorLog {d}/logs/error_log\nPageLog {d}/logs/page_log\nRequestRoot {d}/spool\nTempDir {d}/spool/temp\nCacheDir {d}/cache\nStateDir {d}/state\nServerRoot {d}/conf\nDataDir /usr/share/cups\nServerBin {d}/serverbin\n",
+                d = dir.display()
+            ),
+        )
+        .expect("writes cups-files.conf");
+
+        let child = Command::new("/usr/sbin/cupsd")
+            .arg("-f")
+            .arg("-c")
+            .arg(&cupsd_conf)
+            .arg("-s")
+            .arg(&cups_files_conf)
+            .spawn()
+            .expect("spawns cupsd");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if sock.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        Self {
+            dir,
+            endpoint: shaprint_desktop::adapters::printers::cups::CupsServerEndpoint::parse(
+                &format!("127.0.0.1:{port}"),
+            ),
+            child,
+        }
+    }
+
+    pub fn add_printer(
+        &self,
+        name: &str,
+        device_uri: &str,
+        description: &str,
+        options: &[(&str, &str)],
+    ) {
+        use std::process::Command;
+        let host_arg = self.endpoint.lpadmin_host_arg();
+        let mut cmd = Command::new("/usr/sbin/lpadmin");
+        cmd.arg("-h")
+            .arg(&host_arg)
+            .arg("-p")
+            .arg(name)
+            .arg("-E")
+            .arg("-v")
+            .arg(device_uri)
+            .arg("-D")
+            .arg(description);
+        for (k, v) in options {
+            cmd.arg("-o").arg(format!("{k}={v}"));
+        }
+        let status = cmd.status().expect("runs lpadmin");
+        assert!(status.success(), "lpadmin failed to add printer {name}");
+
+        if !options.is_empty() {
+            let mut lpopt_cmd = Command::new("lpoptions");
+            if !host_arg.starts_with('/') {
+                lpopt_cmd.arg("-h").arg(&host_arg);
+            }
+            lpopt_cmd.arg("-p").arg(name);
+            for (k, v) in options {
+                lpopt_cmd.arg("-o").arg(format!("{k}={v}"));
+            }
+            let _ = lpopt_cmd.status();
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for IsolatedCupsd {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}

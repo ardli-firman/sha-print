@@ -22,30 +22,30 @@ use crate::domain::{AppError, PrinterName, RecognisedClientQueue, SpoolerRecord}
 const DEFAULT_CUPS_SOCKET: &str = "/run/cups/cups.sock";
 const DEFAULT_CUPS_PORT: c_int = 631;
 const HTTP_ENCRYPTION_IF_REQUESTED: c_int = 0;
-const HTTP_STATUS_CONTINUE: c_int = 100;
-const IPP_STATUS_OK: c_int = 0x0000;
-const IPP_STATUS_OK_SUBST: c_int = 0x0001;
-const IPP_STATUS_OK_CONFLICT: c_int = 0x0002;
+pub(crate) const HTTP_STATUS_CONTINUE: c_int = 100;
+pub(crate) const IPP_STATUS_OK: c_int = 0x0000;
+pub(crate) const IPP_STATUS_OK_SUBST: c_int = 0x0001;
+pub(crate) const IPP_STATUS_OK_CONFLICT: c_int = 0x0002;
 const IPP_STATUS_ERROR_NOT_FOUND: c_int = 0x0406;
-const IPP_PSTATE_STOPPED: i32 = 5;
-const STREAM_CHUNK_BYTES: usize = 64 * 1024;
+pub(crate) const IPP_PSTATE_STOPPED: i32 = 5;
+pub(crate) const STREAM_CHUNK_BYTES: usize = 64 * 1024;
 
 #[repr(C)]
-struct CupsOption {
-    name: *const c_char,
-    value: *const c_char,
+pub(crate) struct CupsOption {
+    pub(crate) name: *const c_char,
+    pub(crate) value: *const c_char,
 }
 
 #[repr(C)]
-struct CupsDest {
-    name: *const c_char,
-    instance: *const c_char,
-    is_default: c_int,
-    num_options: c_int,
-    options: *const CupsOption,
+pub(crate) struct CupsDest {
+    pub(crate) name: *const c_char,
+    pub(crate) instance: *const c_char,
+    pub(crate) is_default: c_int,
+    pub(crate) num_options: c_int,
+    pub(crate) options: *const CupsOption,
 }
 
-type HttpConnect2Fn = unsafe extern "C" fn(
+pub(crate) type HttpConnect2Fn = unsafe extern "C" fn(
     host: *const c_char,
     port: c_int,
     addrlist: *mut c_void,
@@ -55,29 +55,31 @@ type HttpConnect2Fn = unsafe extern "C" fn(
     msec: c_int,
     cancel: *mut c_int,
 ) -> *mut c_void;
-type HttpCloseFn = unsafe extern "C" fn(http: *mut c_void);
-type CupsGetDests2Fn = unsafe extern "C" fn(http: *mut c_void, dests: *mut *mut CupsDest) -> c_int;
-type CupsGetOptionFn = unsafe extern "C" fn(
+pub(crate) type HttpCloseFn = unsafe extern "C" fn(http: *mut c_void);
+pub(crate) type CupsGetDests2Fn =
+    unsafe extern "C" fn(http: *mut c_void, dests: *mut *mut CupsDest) -> c_int;
+pub(crate) type CupsGetOptionFn = unsafe extern "C" fn(
     name: *const c_char,
     num_options: c_int,
     options: *const CupsOption,
 ) -> *const c_char;
-type CupsFreeDestsFn = unsafe extern "C" fn(num_dests: c_int, dests: *mut CupsDest);
-type CupsAddOptionFn = unsafe extern "C" fn(
+pub(crate) type CupsFreeDestsFn = unsafe extern "C" fn(num_dests: c_int, dests: *mut CupsDest);
+pub(crate) type CupsAddOptionFn = unsafe extern "C" fn(
     name: *const c_char,
     value: *const c_char,
     num_options: c_int,
     options: *mut *mut CupsOption,
 ) -> c_int;
-type CupsFreeOptionsFn = unsafe extern "C" fn(num_options: c_int, options: *mut CupsOption);
-type CupsCreateJobFn = unsafe extern "C" fn(
+pub(crate) type CupsFreeOptionsFn =
+    unsafe extern "C" fn(num_options: c_int, options: *mut CupsOption);
+pub(crate) type CupsCreateJobFn = unsafe extern "C" fn(
     http: *mut c_void,
     name: *const c_char,
     title: *const c_char,
     num_options: c_int,
     options: *const CupsOption,
 ) -> c_int;
-type CupsStartDocumentFn = unsafe extern "C" fn(
+pub(crate) type CupsStartDocumentFn = unsafe extern "C" fn(
     http: *mut c_void,
     name: *const c_char,
     job_id: c_int,
@@ -85,61 +87,63 @@ type CupsStartDocumentFn = unsafe extern "C" fn(
     format: *const c_char,
     last_document: c_int,
 ) -> c_int;
-type CupsWriteRequestDataFn =
+pub(crate) type CupsWriteRequestDataFn =
     unsafe extern "C" fn(http: *mut c_void, buffer: *const c_char, length: usize) -> c_int;
-type CupsFinishDocumentFn = unsafe extern "C" fn(http: *mut c_void, name: *const c_char) -> c_int;
-type CupsCancelJob2Fn = unsafe extern "C" fn(
+pub(crate) type CupsFinishDocumentFn =
+    unsafe extern "C" fn(http: *mut c_void, name: *const c_char) -> c_int;
+pub(crate) type CupsCancelJob2Fn = unsafe extern "C" fn(
     http: *mut c_void,
     name: *const c_char,
     job_id: c_int,
     purge: c_int,
 ) -> c_int;
-type CupsLastErrorFn = unsafe extern "C" fn() -> c_int;
-type CupsLastErrorStringFn = unsafe extern "C" fn() -> *const c_char;
+pub(crate) type CupsLastErrorFn = unsafe extern "C" fn() -> c_int;
+pub(crate) type CupsLastErrorStringFn = unsafe extern "C" fn() -> *const c_char;
 
 #[repr(C)]
-struct CupsJob {
-    id: c_int,
-    dest: *mut c_char,
-    title: *mut c_char,
-    user: *mut c_char,
-    state: c_int,
-    size: c_int,
-    priority: c_int,
-    processing_time: c_long,
-    creation_time: c_long,
-    completion_time: c_long,
-    format: *mut c_char,
+pub(crate) struct CupsJob {
+    pub(crate) id: c_int,
+    pub(crate) dest: *mut c_char,
+    pub(crate) title: *mut c_char,
+    pub(crate) user: *mut c_char,
+    pub(crate) state: c_int,
+    pub(crate) size: c_int,
+    pub(crate) priority: c_int,
+    pub(crate) processing_time: c_long,
+    pub(crate) creation_time: c_long,
+    pub(crate) completion_time: c_long,
+    pub(crate) format: *mut c_char,
 }
 
-type CupsGetJobs2Fn = unsafe extern "C" fn(
+pub(crate) type CupsGetJobs2Fn = unsafe extern "C" fn(
     http: *mut c_void,
     jobs: *mut *mut CupsJob,
     dest: *const c_char,
     myjobs: c_int,
     whichjobs: c_int,
 ) -> c_int;
-type CupsFreeJobsFn = unsafe extern "C" fn(num_jobs: c_int, jobs: *mut CupsJob);
-type CupsGetPPD2Fn = unsafe extern "C" fn(http: *mut c_void, name: *const c_char) -> *const c_char;
+pub(crate) type CupsFreeJobsFn = unsafe extern "C" fn(num_jobs: c_int, jobs: *mut CupsJob);
+pub(crate) type CupsGetPPD2Fn =
+    unsafe extern "C" fn(http: *mut c_void, name: *const c_char) -> *const c_char;
 
-struct LibCups {
-    http_connect2: HttpConnect2Fn,
-    http_close: HttpCloseFn,
-    cups_get_dests2: CupsGetDests2Fn,
-    cups_get_option: CupsGetOptionFn,
-    cups_free_dests: CupsFreeDestsFn,
-    cups_add_option: CupsAddOptionFn,
-    cups_free_options: CupsFreeOptionsFn,
-    cups_create_job: CupsCreateJobFn,
-    cups_start_document: CupsStartDocumentFn,
-    cups_write_request_data: CupsWriteRequestDataFn,
-    cups_finish_document: CupsFinishDocumentFn,
-    cups_cancel_job2: CupsCancelJob2Fn,
-    cups_last_error: CupsLastErrorFn,
-    cups_last_error_string: CupsLastErrorStringFn,
-    cups_get_jobs2: CupsGetJobs2Fn,
-    cups_free_jobs: CupsFreeJobsFn,
-    cups_get_ppd2: CupsGetPPD2Fn,
+pub(crate) struct LibCups {
+    pub(crate) http_connect2: HttpConnect2Fn,
+    pub(crate) http_close: HttpCloseFn,
+    pub(crate) cups_get_dests2: CupsGetDests2Fn,
+    pub(crate) cups_get_option: CupsGetOptionFn,
+    pub(crate) cups_free_dests: CupsFreeDestsFn,
+    pub(crate) cups_add_option: CupsAddOptionFn,
+    pub(crate) cups_free_options: CupsFreeOptionsFn,
+    pub(crate) cups_create_job: CupsCreateJobFn,
+    pub(crate) cups_start_document: CupsStartDocumentFn,
+    pub(crate) cups_write_request_data: CupsWriteRequestDataFn,
+    pub(crate) cups_finish_document: CupsFinishDocumentFn,
+    pub(crate) cups_cancel_job2: CupsCancelJob2Fn,
+    pub(crate) cups_last_error: CupsLastErrorFn,
+    pub(crate) cups_last_error_string: CupsLastErrorStringFn,
+    pub(crate) cups_get_jobs2: CupsGetJobs2Fn,
+    pub(crate) cups_free_jobs: CupsFreeJobsFn,
+    pub(crate) cups_get_ppd2: CupsGetPPD2Fn,
 }
 
 // Safety: `LibCups` holds immutable function pointers resolved from the process-wide `libcups.so.2`.
@@ -153,7 +157,7 @@ extern "C" {
 
 const RTLD_NOW: c_int = 2;
 
-fn libcups() -> Result<&'static LibCups, AppError> {
+pub(crate) fn libcups() -> Result<&'static LibCups, AppError> {
     static LIB: OnceLock<Result<LibCups, String>> = OnceLock::new();
     LIB.get_or_init(load_libcups)
         .as_ref()
@@ -274,13 +278,13 @@ impl CupsServerEndpoint {
     }
 }
 
-struct CupsHttpConnection {
-    lib: &'static LibCups,
-    http: *mut c_void,
+pub(crate) struct CupsHttpConnection {
+    pub(crate) lib: &'static LibCups,
+    pub(crate) http: *mut c_void,
 }
 
 impl CupsHttpConnection {
-    fn connect(endpoint: &CupsServerEndpoint) -> Result<Self, AppError> {
+    pub(crate) fn connect(endpoint: &CupsServerEndpoint) -> Result<Self, AppError> {
         if endpoint.host.starts_with('/') && !Path::new(&endpoint.host).exists() {
             return Err(AppError::queue_unavailable(format!(
                 "cannot connect to the local CUPS service at '{}'",
@@ -782,7 +786,7 @@ fn format_tenths_mm(tenths: i16) -> String {
 
 /// Validates that `document` is a complete, well-formed PWG Raster stream before any bytes are
 /// sent to CUPS.
-fn validate_pwg_raster_stream(document: &[u8]) -> Result<(), AppError> {
+pub(crate) fn validate_pwg_raster_stream(document: &[u8]) -> Result<(), AppError> {
     let mut page_count = 0usize;
     for page in pwg_pages(document)? {
         let _decoded = page?;
