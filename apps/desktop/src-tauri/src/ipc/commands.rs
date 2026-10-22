@@ -42,6 +42,47 @@ pub async fn inspect_local_client_queue(
         })
 }
 
+/// Session actions return only classified evidence, never driver text or page bytes.
+#[tauri::command]
+pub async fn refresh_test_print_session(
+    control: State<'_, SharedControl>,
+    session_id: u64,
+) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppErrorDto> {
+    control
+        .refresh_test_print_session(session_id)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))
+}
+#[tauri::command]
+pub async fn send_test_print(
+    control: State<'_, SharedControl>,
+    session_id: u64,
+) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppErrorDto> {
+    control
+        .send_test_print(session_id)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))
+}
+#[tauri::command]
+pub fn confirm_test_print(
+    control: State<'_, SharedControl>,
+    session_id: u64,
+    result: String,
+) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppErrorDto> {
+    control
+        .confirm_test_print(session_id, &result)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+#[tauri::command]
+pub fn close_test_print_session(
+    control: State<'_, SharedControl>,
+    session_id: u64,
+) -> Result<(), AppErrorDto> {
+    control
+        .close_test_print_session(session_id)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
 /// Whether ShaPrint starts with Windows, and the one action that changes it.
 pub type SharedStartup = Arc<Startup>;
 

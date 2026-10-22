@@ -104,7 +104,7 @@ fn enumerate_local_records() -> Result<Vec<SpoolerRecord>, AppError> {
         .collect())
 }
 
-fn enumerate_queue_details() -> Result<Vec<(SpoolerRecord, u32)>, AppError> {
+pub(super) fn enumerate_queue_details() -> Result<Vec<(SpoolerRecord, u32)>, AppError> {
     let needed = required_bytes()?;
     if needed == 0 {
         return Ok(Vec::new());
@@ -333,34 +333,7 @@ pub(super) fn prepare_dev_mode(
             "the requested copy count is outside the supported range",
         ));
     }
-    let size = unsafe {
-        DocumentPropertiesW(
-            std::ptr::null_mut(),
-            handle,
-            printer_name,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            0,
-        )
-    };
-    if size <= 0 {
-        return Err(spooler_error("cannot read Windows printer settings"));
-    }
-    let mut dev_mode = vec![0u8; size as usize];
-    // SAFETY: `dev_mode` is the buffer size returned by DocumentPropertiesW.
-    let prepared = unsafe {
-        DocumentPropertiesW(
-            std::ptr::null_mut(),
-            handle,
-            printer_name,
-            dev_mode.as_mut_ptr(),
-            std::ptr::null(),
-            2,
-        )
-    };
-    if prepared != 1 || dev_mode.len() < 96 {
-        return Err(spooler_error("cannot prepare Windows printer settings"));
-    }
+    let mut dev_mode = read_default_dev_mode(handle, printer_name)?;
     apply_settings_to_dev_mode(&mut dev_mode, settings)?;
     let requested = dev_mode.clone();
     // SAFETY: both buffers have the size the driver requested and remain alive for this call.
@@ -379,6 +352,42 @@ pub(super) fn prepare_dev_mode(
         return Err(spooler_error("cannot validate Windows printer settings"));
     }
     Ok(Some(dev_mode))
+}
+
+/// Reads current driver defaults without changing the queue or opening a dialog.
+pub(super) fn read_default_dev_mode(
+    handle: *mut std::ffi::c_void,
+    printer_name: *const u16,
+) -> Result<Vec<u8>, AppError> {
+    let size = unsafe {
+        DocumentPropertiesW(
+            std::ptr::null_mut(),
+            handle,
+            printer_name,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    if size <= 0 || size > 1 << 20 {
+        return Err(spooler_error("cannot read Windows printer settings"));
+    }
+    let mut dev_mode = vec![0u8; size as usize];
+    // SAFETY: `dev_mode` is the buffer size returned by DocumentPropertiesW.
+    let prepared = unsafe {
+        DocumentPropertiesW(
+            std::ptr::null_mut(),
+            handle,
+            printer_name,
+            dev_mode.as_mut_ptr(),
+            std::ptr::null(),
+            2,
+        )
+    };
+    if prepared != 1 || dev_mode.len() < 96 {
+        return Err(spooler_error("cannot prepare Windows printer settings"));
+    }
+    Ok(dev_mode)
 }
 
 pub(super) fn spooler_error(message: &str) -> AppError {

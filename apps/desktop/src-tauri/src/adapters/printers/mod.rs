@@ -18,12 +18,16 @@ mod unsupported;
 mod windows;
 #[cfg(windows)]
 mod windows_render;
+#[cfg(windows)]
+mod windows_test_print;
 #[cfg(unix)]
 pub use cups::{CupsPrintJobSubmitter, CupsPrinterCatalog, CupsSpoolerReader};
 #[cfg(not(windows))]
 pub use unsupported::UnsupportedPrintJobSubmitter;
 #[cfg(windows)]
 pub use windows::WindowsPrintJobSubmitter;
+#[cfg(windows)]
+pub use windows_test_print::WindowsNativeTestPrint;
 
 #[cfg(not(windows))]
 pub use unsupported::UnsupportedPrinterCatalog;

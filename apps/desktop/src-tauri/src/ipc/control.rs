@@ -137,6 +137,9 @@ impl ControlPlane {
     ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
         let parsed = target.parse_target()?;
         match self {
+            #[cfg(windows)]
+            Self::Local(shell) => shell.test_print().open(parsed).await.map(Into::into),
+            #[cfg(not(windows))]
             Self::Local(shell) => Ok(crate::application::LocalTroubleshooting::new(
                 shell.printer_catalog(),
                 shell.runtime(),
@@ -152,6 +155,50 @@ impl ControlPlane {
             #[cfg(unix)]
             Self::Machine(machine) => machine.client.inspect_local_client_queue(target).await,
         }
+    }
+
+    fn test_print(&self) -> Result<Arc<crate::application::GuidedTestPrint>, AppError> {
+        match self {
+            Self::Local(shell) => Ok(shell.test_print()),
+            #[cfg(unix)]
+            Self::Machine(_) => Err(AppError::unsupported(
+                "Native test print is not available on Linux yet.",
+            )),
+        }
+    }
+    pub async fn refresh_test_print_session(
+        &self,
+        id: u64,
+    ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
+        self.test_print()?.refresh(id).await.map(Into::into)
+    }
+    pub async fn send_test_print(
+        &self,
+        id: u64,
+    ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
+        self.test_print()?.send(id).await.map(Into::into)
+    }
+    pub fn confirm_test_print(
+        &self,
+        id: u64,
+        result: &str,
+    ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
+        use crate::application::PhysicalResult;
+        let result = match result {
+            "correct" => PhysicalResult::Correct,
+            "no-output" => PhysicalResult::NoOutput,
+            "incorrect" => PhysicalResult::Incorrect,
+            _ => {
+                return Err(AppError::invalid_input(
+                    "Choose the observed physical result.",
+                ))
+            }
+        };
+        self.test_print()?.confirm(id, result).map(Into::into)
+    }
+    pub fn close_test_print_session(&self, id: u64) -> Result<(), AppError> {
+        self.test_print()?.close(id);
+        Ok(())
     }
 
     /// The in-process control plane (Windows and tests).

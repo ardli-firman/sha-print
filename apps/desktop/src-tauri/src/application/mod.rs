@@ -13,7 +13,12 @@ mod runtime;
 mod setup;
 mod sharing;
 mod startup;
+mod test_print;
 mod troubleshooting;
+pub use test_print::{
+    GuidedTestPrint, NativeTestPrint, PhysicalResult, SubmissionOutcome, TestMedia,
+    TestPrintSnapshot,
+};
 mod updater;
 
 pub use coordinator::{RuntimeCoordinator, SHUTDOWN_TIMEOUT, START_TIMEOUT};

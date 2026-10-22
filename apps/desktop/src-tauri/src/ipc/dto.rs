@@ -205,7 +205,7 @@ impl RecognisedClientQueueDto {
     }
 }
 
-/// Session-only local evidence. This slice exposes no enabled mutation or print action.
+/// Session-only evidence. Optional test fields are absent on unsupported platforms.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalTroubleshootingDto {
     pub target: RecognisedClientQueueDto,
@@ -215,6 +215,14 @@ pub struct LocalTroubleshootingDto {
     pub test_print_enabled: bool,
     pub repair_enabled: bool,
     pub attempted_actions: Vec<TroubleshootingActionDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_media: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical_result: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,7 +258,44 @@ impl From<crate::application::LocalTroubleshootingSnapshot> for LocalTroubleshoo
             test_print_enabled: false,
             repair_enabled,
             attempted_actions: Vec::new(),
+            session_id: None,
+            requested_media: None,
+            submission: None,
+            physical_result: None,
         }
+    }
+}
+
+impl From<crate::application::TestPrintSnapshot> for LocalTroubleshootingDto {
+    fn from(snapshot: crate::application::TestPrintSnapshot) -> Self {
+        let enabled = snapshot.can_send();
+        let mut dto = Self::from(snapshot.diagnostics);
+        dto.session_id = Some(snapshot.session_id);
+        dto.requested_media = snapshot
+            .requested_media
+            .map(|media| media.keyword().to_owned());
+        dto.submission = Some(snapshot.submission.as_str().to_owned());
+        dto.physical_result = Some(snapshot.physical_result.as_str().to_owned());
+        dto.test_print_enabled = enabled;
+        dto.attempted_actions = snapshot
+            .attempts
+            .into_iter()
+            .map(|outcome| TroubleshootingActionDto {
+                action: "send-test-print".to_owned(),
+                outcome: outcome.as_str().to_owned(),
+            })
+            .collect();
+        if snapshot.supported {
+            dto.checks.push(DiagnosticCheckDto {
+                check: "requested-media".to_owned(),
+                status: if dto.requested_media.is_some() { "passed" } else { "inconclusive" }.to_owned(),
+                code: if dto.requested_media.is_some() { None } else { Some("unsupported".to_owned()) },
+                detail: if dto.requested_media.is_some() { "The Client queue default Requested media is supported." } else {
+                    "The default Requested media is missing, unsupported, or could not be read. Inspect the native queue printing preferences, choose a supported default size, then check again. No substitute size will be used."
+                }.to_owned(), recovery: None,
+            });
+        }
+        dto
     }
 }
 
