@@ -262,6 +262,10 @@ pub enum SpoolerRecordClassification {
 }
 
 impl SpoolerRecord {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     pub fn new(name: impl Into<String>, port: impl Into<String>) -> Self {
         Self {
             name: name.into(),

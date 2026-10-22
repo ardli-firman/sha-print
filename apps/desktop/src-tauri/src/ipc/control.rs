@@ -130,6 +130,25 @@ pub fn system_control_plane(shell: &Arc<Shell>) -> SharedControl {
 }
 
 impl ControlPlane {
+    /// Passive evidence for a selected native Client queue; never invokes an elevated helper.
+    pub async fn inspect_local_client_queue(
+        &self,
+        target: RecognisedClientQueueDto,
+    ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
+        let parsed = target.parse_target()?;
+        match self {
+            Self::Local(shell) => Ok(crate::application::LocalTroubleshooting::new(
+                shell.printer_catalog(),
+                shell.runtime(),
+            )
+            .inspect(parsed)
+            .await
+            .into()),
+            #[cfg(unix)]
+            Self::Machine(machine) => machine.client.inspect_local_client_queue(target).await,
+        }
+    }
+
     /// The in-process control plane (Windows and tests).
     pub fn local(shell: Arc<Shell>) -> Self {
         Self::Local(shell)

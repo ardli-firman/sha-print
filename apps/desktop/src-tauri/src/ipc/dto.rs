@@ -188,6 +188,67 @@ pub struct RecognisedClientQueueDto {
     pub printer_name: String,
 }
 
+impl RecognisedClientQueueDto {
+    pub fn parse_target(&self) -> Result<crate::domain::RecognisedClientQueue, AppError> {
+        let address =
+            crate::adapters::client_connections::ServerAddress::parse(&self.server_address)?;
+        let printer = crate::domain::PrinterName::parse(&self.printer_name)?;
+        Ok(crate::domain::RecognisedClientQueue::new(
+            crate::domain::ClientQueueName::parse(&self.queue_name)?,
+            address.normalized,
+            printer,
+        ))
+    }
+}
+
+/// Session-only local evidence. This slice exposes no enabled mutation or print action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalTroubleshootingDto {
+    pub target: RecognisedClientQueueDto,
+    pub version: String,
+    pub checks: Vec<DiagnosticCheckDto>,
+    pub queue_empty: bool,
+    pub test_print_enabled: bool,
+    pub repair_enabled: bool,
+    pub attempted_actions: Vec<TroubleshootingActionDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TroubleshootingActionDto {
+    pub action: String,
+    pub outcome: String,
+}
+
+impl From<crate::application::LocalTroubleshootingSnapshot> for LocalTroubleshootingDto {
+    fn from(snapshot: crate::application::LocalTroubleshootingSnapshot) -> Self {
+        let queue_empty = snapshot
+            .checks
+            .contains(&crate::application::LocalFinding::QueueEmpty);
+        Self {
+            target: snapshot.target.into(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            checks: snapshot
+                .checks
+                .into_iter()
+                .map(|finding| {
+                    let (check, status, detail, code) = finding.description();
+                    DiagnosticCheckDto {
+                        check: check.to_owned(),
+                        status: status.to_owned(),
+                        detail: detail.to_owned(),
+                        code: code.map(|code| code.as_str().to_owned()),
+                        recovery: None,
+                    }
+                })
+                .collect(),
+            queue_empty,
+            test_print_enabled: false,
+            repair_enabled: false,
+            attempted_actions: Vec::new(),
+        }
+    }
+}
+
 impl From<crate::domain::RecognisedClientQueue> for RecognisedClientQueueDto {
     fn from(queue: crate::domain::RecognisedClientQueue) -> Self {
         Self {

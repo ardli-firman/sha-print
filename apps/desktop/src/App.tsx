@@ -1,5 +1,7 @@
 import { FlaskConical, Network, Printer, Settings2, ShieldAlert, Wrench } from "lucide-react";
 import { useState } from "react";
+import type { RecognisedClientQueue } from "@/api/types";
+import { LocalTroubleshootingDialog } from "@/features/client-connection/components/LocalTroubleshootingDialog";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,6 +61,8 @@ function App() {
   const [page, setPage] = useState<PageId>("my-printers");
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [addPrinterOpen, setAddPrinterOpen] = useState(false);
+  const [troubleshootingTarget, setTroubleshootingTarget] = useState<RecognisedClientQueue | null>(null);
+  const [requestedTroubleshootingTarget, setRequestedTroubleshootingTarget] = useState<RecognisedClientQueue | null>(null);
 
   const controlMode = useControlMode();
   const runtime = useRuntimeStatus();
@@ -212,6 +216,13 @@ function App() {
             {page === "my-printers" ? (
               <>
                 <InstalledClientQueuesPanel
+                  onTroubleshoot={(target) => {
+                    if (troubleshootingTarget && troubleshootingTarget.queue_name !== target.queue_name) {
+                      setRequestedTroubleshootingTarget(target);
+                    } else if (!troubleshootingTarget) {
+                      setTroubleshootingTarget(target);
+                    }
+                  }}
                   clientQueues={clientQueues}
                   onAddPrinter={() => setAddPrinterOpen(true)}
                   onReverifyServer={(serverAddress) => {
@@ -298,6 +309,20 @@ function App() {
         runtime={runtime}
         controlMode={controlMode}
       />
+      {troubleshootingTarget ? <LocalTroubleshootingDialog
+        target={troubleshootingTarget}
+        onClose={() => { setTroubleshootingTarget(null); setRequestedTroubleshootingTarget(null); }}
+      /> : null}
+      {requestedTroubleshootingTarget ? <div role="alertdialog" aria-label="Switch troubleshooting printer" className="dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/55">
+        <div className="rounded-md border bg-card p-6 text-card-foreground">
+          <p>Close the current troubleshooting session before checking {requestedTroubleshootingTarget.queue_name}?</p>
+          <Button variant="outline" onClick={() => setRequestedTroubleshootingTarget(null)}>Keep current session</Button>
+          <Button onClick={() => {
+            setTroubleshootingTarget(requestedTroubleshootingTarget);
+            setRequestedTroubleshootingTarget(null);
+          }}>Close and switch</Button>
+        </div>
+      </div> : null}
     </div>
   );
 }

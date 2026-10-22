@@ -13,6 +13,7 @@ mod runtime;
 mod setup;
 mod sharing;
 mod startup;
+mod troubleshooting;
 mod updater;
 
 pub use coordinator::{RuntimeCoordinator, SHUTDOWN_TIMEOUT, START_TIMEOUT};
@@ -39,6 +40,10 @@ pub use runtime::{RuntimeService, ServiceContext, ServiceReporter, Shutdown};
 pub use setup::{ElevationBroker, Setup, SetupOutcome};
 pub use sharing::{LocalPrinter, Sharing};
 pub use startup::{Startup, StartupRegistration, StartupStatus};
+pub use troubleshooting::{
+    LocalFinding, LocalQueueInspection, LocalTroubleshooting, LocalTroubleshootingSnapshot,
+    LOCAL_DIAGNOSTIC_TIMEOUT,
+};
 pub use updater::{
     CheckKind, UpdateCoordinator, UpdateInstaller, UpdatePackage, UpdateRelease, UpdateSource,
     UpdateState, UpdateStatus, INITIAL_CHECK_DELAY, RESTART_POLL_INTERVAL, UPDATE_CHECK_INTERVAL,

@@ -390,7 +390,15 @@ pub fn query_cups_active_jobs(
     // myjobs = 0 (all users), whichjobs = 0 (active jobs).
     let count =
         unsafe { (conn.lib.cups_get_jobs2)(conn.http, &mut jobs_ptr, c_name.as_ptr(), 0, 0) };
-    if count < 0 {
+    // cupsGetJobs2 can return zero both for an empty queue and for some IPP errors.
+    // Check the status before treating a zero count as evidence that repair is safe.
+    let status = unsafe { (conn.lib.cups_last_error)() };
+    if count < 0 || status >= 0x0400 {
+        if !jobs_ptr.is_null() && count > 0 {
+            unsafe {
+                (conn.lib.cups_free_jobs)(count, jobs_ptr);
+            }
+        }
         return Err(AppError::queue_unavailable(format!(
             "CUPS refused job listing ({})",
             last_cups_error_message(conn.lib)
@@ -634,6 +642,7 @@ impl SpoolerReader for CupsSpoolerReader {
 /// Lists working local CUPS destinations while excluding ShaPrint-owned Client queues.
 pub struct CupsPrinterCatalog {
     inner: DestinationAwarePrinterCatalog,
+    reader: CupsSpoolerReader,
 }
 
 impl Default for CupsPrinterCatalog {
@@ -644,35 +653,69 @@ impl Default for CupsPrinterCatalog {
 
 impl CupsPrinterCatalog {
     pub fn new() -> Self {
-        Self {
-            inner: DestinationAwarePrinterCatalog::new(Arc::new(CupsSpoolerReader::new())),
-        }
+        Self::from_reader(CupsSpoolerReader::new())
     }
 
     pub fn with_authority(proxy_authority: String) -> Self {
-        Self {
-            inner: DestinationAwarePrinterCatalog::with_authority(
-                Arc::new(CupsSpoolerReader::with_authority(proxy_authority.clone())),
-                proxy_authority,
-            ),
-        }
+        Self::from_reader(CupsSpoolerReader::with_authority(proxy_authority))
     }
 
     pub fn with_endpoint(endpoint: CupsServerEndpoint, proxy_authority: String) -> Self {
+        Self::from_reader(CupsSpoolerReader::with_endpoint_and_authority(
+            endpoint,
+            proxy_authority,
+        ))
+    }
+
+    fn from_reader(reader: CupsSpoolerReader) -> Self {
         Self {
             inner: DestinationAwarePrinterCatalog::with_authority(
-                Arc::new(CupsSpoolerReader::with_endpoint_and_authority(
-                    endpoint,
-                    proxy_authority.clone(),
-                )),
-                proxy_authority,
+                Arc::new(reader.clone()),
+                reader.proxy_authority.clone(),
             ),
+            reader,
         }
     }
 }
 
 #[async_trait]
 impl LocalPrinterCatalog for CupsPrinterCatalog {
+    async fn pending_client_jobs(&self, target: &RecognisedClientQueue) -> Result<u32, AppError> {
+        let endpoint = self.reader.resolve_endpoint();
+        let name = target.queue_name().to_string();
+        tokio::task::spawn_blocking(move || {
+            let count = query_cups_active_jobs(&endpoint, &name)?;
+            u32::try_from(count)
+                .map_err(|_| AppError::queue_unavailable("native job count is unavailable"))
+        })
+        .await
+        .map_err(|_| AppError::queue_unavailable("native job inspection did not finish"))?
+    }
+
+    async fn inspect_client_queue(
+        &self,
+        target: &RecognisedClientQueue,
+    ) -> Result<crate::application::LocalQueueInspection, AppError> {
+        let endpoint = self.reader.resolve_endpoint();
+        let authority = self.reader.proxy_authority.clone();
+        let target = target.clone();
+        tokio::task::spawn_blocking(move || {
+            use crate::application::LocalQueueInspection;
+            let dests = query_cups_destinations(&endpoint)?;
+            let Some(dest) = dests
+                .into_iter()
+                .find(|dest| dest.name == target.queue_name().as_str())
+            else {
+                return Ok(LocalQueueInspection::Missing);
+            };
+            let record = SpoolerRecord::new(dest.name, dest.device_uri);
+            let inspection = LocalQueueInspection::from_record(record, &target, &authority, None);
+            Ok(inspection)
+        })
+        .await
+        .map_err(|_| AppError::queue_unavailable("native CUPS inspection did not finish"))?
+    }
+
     async fn local_printers(&self) -> Result<Vec<PrinterName>, AppError> {
         self.inner.local_printers().await
     }

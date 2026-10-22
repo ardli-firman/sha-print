@@ -274,6 +274,9 @@ pub struct DrainStatusDto {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 enum ControlRequest {
+    InspectLocalClientQueue {
+        target: RecognisedClientQueueDto,
+    },
     Status,
     ServerIdentity,
     StartService {
@@ -324,6 +327,9 @@ enum ControlRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "kebab-case")]
 enum ControlResponse {
+    LocalTroubleshooting {
+        snapshot: crate::ipc::dto::LocalTroubleshootingDto,
+    },
     Ok {
         status: RuntimeStatusDto,
     },
@@ -758,6 +764,18 @@ async fn process_stream(
             .map_err(|_| AppError::not_authorized("cannot verify local peer credentials"))?;
         let req = read_json_line::<ControlRequest>(&mut stream, "control request").await?;
         match req {
+            ControlRequest::InspectLocalClientQueue { target } => {
+                let target = target.parse_target()?;
+                let shell = require_shell(&shell)?;
+                let snapshot = crate::application::LocalTroubleshooting::new(
+                    shell.printer_catalog(),
+                    shell.runtime(),
+                )
+                .inspect(target)
+                .await
+                .into();
+                Ok(ControlResponse::LocalTroubleshooting { snapshot })
+            }
             ControlRequest::Status => Ok(ControlResponse::Ok {
                 status: runtime_status_dto(&runtime, &shell).await,
             }),
@@ -1022,6 +1040,18 @@ pub struct DaemonClient {
 }
 
 impl DaemonClient {
+    pub async fn inspect_local_client_queue(
+        &self,
+        target: RecognisedClientQueueDto,
+    ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
+        match self
+            .send(&ControlRequest::InspectLocalClientQueue { target })
+            .await?
+        {
+            ControlResponse::LocalTroubleshooting { snapshot } => Ok(snapshot),
+            other => Err(unexpected_response(&other)),
+        }
+    }
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
         Self {
             socket_path: socket_path.into(),

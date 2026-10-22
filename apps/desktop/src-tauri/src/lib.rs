@@ -424,6 +424,7 @@ pub fn run(background: bool) -> Result<(), AppError> {
             ipc::commands::stop_service,
             ipc::commands::shutdown_daemon,
             ipc::commands::get_diagnostics,
+            ipc::commands::inspect_local_client_queue,
             ipc::commands::get_print_failures,
             ipc::commands::dismiss_print_failure,
             ipc::commands::list_local_printers,
