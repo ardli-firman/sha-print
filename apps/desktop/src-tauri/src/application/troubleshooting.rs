@@ -157,6 +157,24 @@ pub struct LocalTroubleshootingSnapshot {
     pub checks: Vec<LocalFinding>,
 }
 
+impl LocalTroubleshootingSnapshot {
+    /// Whether the selected Client queue is eligible for repair based on classified findings.
+    pub fn is_repair_eligible(&self) -> bool {
+        self.checks.contains(&LocalFinding::SpoolerReady)
+            && self.checks.contains(&LocalFinding::QueueMatching)
+            && self.checks.contains(&LocalFinding::QueueEmpty)
+            && self.checks.contains(&LocalFinding::ProxyRunning)
+            && self.checks.contains(&LocalFinding::ServerReachable)
+            && self.checks.contains(&LocalFinding::ServerIdentityMatching)
+            && self.checks.contains(&LocalFinding::PrinterShared)
+            && !self
+                .checks
+                .contains(&LocalFinding::ChannelAuthorizationRejected)
+            && !self.checks.contains(&LocalFinding::ChannelUnconfigured)
+            && !self.checks.contains(&LocalFinding::ChannelNotApplicable)
+    }
+}
+
 pub struct LocalTroubleshooting {
     catalog: Arc<dyn LocalPrinterCatalog>,
     runtime: Arc<RuntimeCoordinator>,

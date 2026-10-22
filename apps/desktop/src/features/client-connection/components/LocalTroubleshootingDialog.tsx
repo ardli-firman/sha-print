@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { startService } from "@/api/ipc";
+import { repairPrinterQueue } from "@/api/serverConnections";
 import { inspectLocalClientQueue, type LocalTroubleshootingSnapshot } from "@/api/troubleshooting";
 import type { RecognisedClientQueue } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -16,9 +18,45 @@ const CHECK_LABELS: Record<string, string> = {
   "network-channel": "Network Channel authorization",
   firewall: "Firewall inspection",
 };
+
 const STATUS_LABELS: Record<string, string> = {
   passed: "Passed", failed: "Failed", inconclusive: "Inconclusive", "not-applicable": "Not applicable",
 };
+
+const ACTION_LABELS: Record<string, string> = {
+  "start-client-proxy": "Start client proxy",
+  "repair-client-queue": "Repair Client queue",
+};
+
+const OUTCOME_LABELS: Record<string, string> = {
+  success: "Succeeded",
+  denied: "Authorization denied",
+  failed: "Failed",
+  partial: "Partially completed",
+};
+
+function classifyActionOutcome(error: unknown): "denied" | "failed" | "partial" {
+  if (error && typeof error === "object") {
+    const err = error as { code?: string; message?: string };
+    const code = err.code?.toLowerCase() ?? "";
+    const msg = err.message?.toLowerCase() ?? "";
+    if (code === "partial" || msg.includes("partial")) {
+      return "partial";
+    }
+    if (
+      code === "not-authorized" ||
+      msg.includes("permission was not granted") ||
+      msg.includes("administrator permission") ||
+      msg.includes("authentication was not granted") ||
+      msg.includes("authentication was dismissed") ||
+      msg.includes("not authorized") ||
+      msg.includes("denied")
+    ) {
+      return "denied";
+    }
+  }
+  return "failed";
+}
 
 export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, onConfigureNetworkChannel }: {
   target: RecognisedClientQueue;
@@ -29,8 +67,12 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
   const [run, setRun] = useState(0);
   const [snapshot, setSnapshot] = useState<LocalTroubleshootingSnapshot | null>(null);
   const [error, setError] = useState(false);
+  const [isExecutingAction, setIsExecutingAction] = useState(false);
+  const attemptedActionsRef = useRef<{ action: string; outcome: string }[]>([]);
+  const activeRef = useRef(true);
 
   useEffect(() => {
+    activeRef.current = true;
     let active = true;
     let settled = false;
     setSnapshot(null);
@@ -40,7 +82,8 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
       settled = true;
       setSnapshot({
         target, version: CLIENT_VERSION, queue_empty: false,
-        test_print_enabled: false, repair_enabled: false, attempted_actions: [],
+        test_print_enabled: false, repair_enabled: false,
+        attempted_actions: [...attemptedActionsRef.current],
         checks: Object.keys(CHECK_LABELS).map((check) => ({
           check, status: "inconclusive", code: "timeout",
           detail: "This check could not be completed within 15 seconds. Its result is unknown.",
@@ -52,7 +95,10 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
         if (!active || settled) return;
         settled = true;
         window.clearTimeout(timer);
-        setSnapshot(result);
+        setSnapshot({
+          ...result,
+          attempted_actions: [...attemptedActionsRef.current],
+        });
       },
       () => {
         if (!active || settled) return;
@@ -61,8 +107,48 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
         setError(true);
       },
     );
-    return () => { active = false; window.clearTimeout(timer); };
+    return () => {
+      active = false;
+      activeRef.current = false;
+      window.clearTimeout(timer);
+    };
   }, [target, run]);
+
+  const handleStartProxy = async () => {
+    if (isExecutingAction) return;
+    setIsExecutingAction(true);
+    let outcome: "success" | "denied" | "failed" | "partial" = "success";
+    try {
+      await startService("client-proxy");
+    } catch (err) {
+      outcome = classifyActionOutcome(err);
+    }
+    if (!activeRef.current) return;
+    attemptedActionsRef.current = [
+      ...attemptedActionsRef.current,
+      { action: "start-client-proxy", outcome },
+    ];
+    setIsExecutingAction(false);
+    setRun((v) => v + 1);
+  };
+
+  const handleRepairQueue = async () => {
+    if (isExecutingAction) return;
+    setIsExecutingAction(true);
+    let outcome: "success" | "denied" | "failed" | "partial" = "success";
+    try {
+      await repairPrinterQueue(target.server_address, target.printer_name);
+    } catch (err) {
+      outcome = classifyActionOutcome(err);
+    }
+    if (!activeRef.current) return;
+    attemptedActionsRef.current = [
+      ...attemptedActionsRef.current,
+      { action: "repair-client-queue", outcome },
+    ];
+    setIsExecutingAction(false);
+    setRun((v) => v + 1);
+  };
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}
@@ -92,6 +178,34 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
                   </span>
                 </p>
                 <p>{check.detail}</p>
+                {check.check === "client-proxy" && check.status === "failed" ? (
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-7"
+                      disabled={isExecutingAction}
+                      onClick={() => void handleStartProxy()}
+                    >
+                      Start client proxy
+                    </Button>
+                  </div>
+                ) : null}
+                {check.check === "client-queue" && snapshot.repair_enabled ? (
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-7"
+                      disabled={isExecutingAction}
+                      onClick={() => void handleRepairQueue()}
+                    >
+                      Repair Client queue
+                    </Button>
+                  </div>
+                ) : null}
                 {check.check === "server-identity" &&
                 (check.status === "failed" || check.code === "server-identity-changed" || check.code === "server-untrusted") &&
                 onReviewServer ? (
@@ -127,11 +241,49 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
           </ul>
           {!snapshot.queue_empty ? <p className="mt-3 text-sm">Testing and repair are blocked until this Client queue is known to be empty.</p> : null}
           <p className="mt-3 text-sm text-muted-foreground">To inspect pending work, open Windows Settings &gt; Printers &amp; scanners &gt; your printer &gt; Open print queue, or your Linux desktop&apos;s printer queue. Wait for jobs to finish or manage them there.</p>
+          {snapshot.attempted_actions.length > 0 ? (
+            <div className="mt-4 rounded-md border p-3 text-sm bg-muted/40" aria-label="Attempted recovery actions">
+              <h4 className="font-semibold mb-2">Attempted recovery actions</h4>
+              <ul className="space-y-1">
+                {snapshot.attempted_actions.map((item, idx) => (
+                  <li key={idx} className="flex justify-between items-center text-xs">
+                    <span className="font-medium">{ACTION_LABELS[item.action] ?? item.action}</span>
+                    <span className="text-muted-foreground">{OUTCOME_LABELS[item.outcome] ?? item.outcome}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Attempted recovery actions do not claim physical printing is restored.
+              </p>
+            </div>
+          ) : null}
+          {isExecutingAction ? (
+            <p className="mt-2 text-xs text-muted-foreground" role="status">
+              Performing recovery action...
+            </p>
+          ) : null}
         </> : null}
       </div>
       <p className="mt-3 text-xs text-muted-foreground">These local checks do not verify the Server or physical output. Closing discards this session and does not cancel existing print jobs.</p>
       <div className="flex justify-end gap-2 mt-4">
-        <Button type="button" variant="outline" onClick={() => setRun((value) => value + 1)}>Check again</Button>
+        {snapshot?.repair_enabled ? (
+          <Button
+            type="button"
+            variant="default"
+            disabled={isExecutingAction}
+            onClick={() => void handleRepairQueue()}
+          >
+            Repair Client queue
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          variant="outline"
+          disabled={isExecutingAction}
+          onClick={() => setRun((value) => value + 1)}
+        >
+          Check again
+        </Button>
         <Button type="button" onClick={onClose}>Close troubleshooting</Button>
       </div>
     </Dialog>

@@ -228,6 +228,174 @@ it("opens passive troubleshooting for an installed Client queue without offering
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual(["inspect_local_client_queue"]);
 });
 
+it("offers Start client proxy when proxy check failed and records outcome after refresh", async () => {
+  const target = {
+    queue_name: "Office (ShaPrint 192.0.2.10-48631)",
+    server_address: "192.0.2.10:48631",
+    printer_name: "Office",
+  };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(invoke)
+    .mockResolvedValueOnce({
+      target,
+      version: "3.4.4",
+      queue_empty: true,
+      test_print_enabled: false,
+      repair_enabled: false,
+      attempted_actions: [],
+      checks: [
+        { check: "spooler", status: "passed", detail: "The native print spooler responded." },
+        { check: "client-queue", status: "passed", detail: "The installed Client queue matches the selected Server and shared printer." },
+        { check: "pending-jobs", status: "passed", detail: "No print jobs are waiting in the local queue." },
+        { check: "client-proxy", status: "failed", code: "proxy-stopped", detail: "The client proxy is stopped." },
+      ],
+    })
+    .mockResolvedValueOnce({
+      target,
+      version: "3.4.4",
+      queue_empty: true,
+      test_print_enabled: false,
+      repair_enabled: true,
+      attempted_actions: [],
+      checks: [
+        { check: "spooler", status: "passed", detail: "The native print spooler responded." },
+        { check: "client-queue", status: "passed", detail: "The installed Client queue matches the selected Server and shared printer." },
+        { check: "pending-jobs", status: "passed", detail: "No print jobs are waiting in the local queue." },
+        { check: "client-proxy", status: "passed", detail: "The client proxy reports running." },
+      ],
+    });
+  vi.mocked(ipc.startService).mockResolvedValue({
+    services: {
+      "client-proxy": { state: "running", detail: "running", autostart: true },
+    },
+  } as any);
+
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: `Troubleshoot ${target.queue_name}` }));
+  const dialog = await screen.findByRole("dialog", { name: "Troubleshoot printer" });
+
+  const startProxyBtn = await within(dialog).findByRole("button", { name: "Start client proxy" });
+  expect(startProxyBtn).toBeTruthy();
+
+  fireEvent.click(startProxyBtn);
+
+  expect(ipc.startService).toHaveBeenCalledWith("client-proxy");
+  expect(await within(dialog).findByText("Attempted recovery actions")).toBeTruthy();
+  expect(within(dialog).getByText("Start client proxy")).toBeTruthy();
+  expect(within(dialog).getByText("Succeeded")).toBeTruthy();
+});
+
+it("offers Repair Client queue when repair is eligible and records successful outcome", async () => {
+  const target = {
+    queue_name: "Office (ShaPrint 192.0.2.10-48631)",
+    server_address: "192.0.2.10:48631",
+    printer_name: "Office",
+  };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(invoke)
+    .mockResolvedValueOnce({
+      target,
+      version: "3.4.4",
+      queue_empty: true,
+      test_print_enabled: false,
+      repair_enabled: true,
+      attempted_actions: [],
+      checks: [
+        { check: "spooler", status: "passed", detail: "The native print spooler responded." },
+        { check: "client-queue", status: "passed", detail: "The installed Client queue matches the selected Server and shared printer." },
+        { check: "pending-jobs", status: "passed", detail: "No print jobs are waiting in the local queue." },
+        { check: "client-proxy", status: "passed", detail: "The client proxy reports running." },
+      ],
+    })
+    .mockResolvedValueOnce({
+      target,
+      version: "3.4.4",
+      queue_empty: true,
+      test_print_enabled: false,
+      repair_enabled: true,
+      attempted_actions: [],
+      checks: [
+        { check: "spooler", status: "passed", detail: "The native print spooler responded." },
+        { check: "client-queue", status: "passed", detail: "The installed Client queue matches the selected Server and shared printer." },
+        { check: "pending-jobs", status: "passed", detail: "No print jobs are waiting in the local queue." },
+        { check: "client-proxy", status: "passed", detail: "The client proxy reports running." },
+      ],
+    });
+  vi.mocked(serverConnections.repairPrinterQueue).mockResolvedValue({
+    queue_name: target.queue_name,
+    printer_name: target.printer_name,
+    server_address: target.server_address,
+  } as any);
+
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: `Troubleshoot ${target.queue_name}` }));
+  const dialog = await screen.findByRole("dialog", { name: "Troubleshoot printer" });
+
+  const repairBtns = await within(dialog).findAllByRole("button", { name: "Repair Client queue" });
+  expect(repairBtns.length).toBeGreaterThan(0);
+
+  fireEvent.click(repairBtns[0]);
+
+  expect(serverConnections.repairPrinterQueue).toHaveBeenCalledWith(target.server_address, target.printer_name);
+  const attemptedList = await within(dialog).findByLabelText("Attempted recovery actions");
+  expect(within(attemptedList).getByText("Repair Client queue")).toBeTruthy();
+  expect(within(attemptedList).getByText("Succeeded")).toBeTruthy();
+  expect(within(dialog).getByText(/Attempted recovery actions do not claim physical printing is restored/)).toBeTruthy();
+});
+
+it("records denied outcome when repair elevation prompt is dismissed or rejected", async () => {
+  const target = {
+    queue_name: "Office (ShaPrint 192.0.2.10-48631)",
+    server_address: "192.0.2.10:48631",
+    printer_name: "Office",
+  };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(invoke)
+    .mockResolvedValueOnce({
+      target,
+      version: "3.4.4",
+      queue_empty: true,
+      test_print_enabled: false,
+      repair_enabled: true,
+      attempted_actions: [],
+      checks: [
+        { check: "spooler", status: "passed", detail: "The native print spooler responded." },
+        { check: "client-queue", status: "passed", detail: "The installed Client queue matches the selected Server and shared printer." },
+        { check: "pending-jobs", status: "passed", detail: "No print jobs are waiting in the local queue." },
+        { check: "client-proxy", status: "passed", detail: "The client proxy reports running." },
+      ],
+    })
+    .mockResolvedValueOnce({
+      target,
+      version: "3.4.4",
+      queue_empty: true,
+      test_print_enabled: false,
+      repair_enabled: true,
+      attempted_actions: [],
+      checks: [
+        { check: "spooler", status: "passed", detail: "The native print spooler responded." },
+        { check: "client-queue", status: "passed", detail: "The installed Client queue matches the selected Server and shared printer." },
+        { check: "pending-jobs", status: "passed", detail: "No print jobs are waiting in the local queue." },
+        { check: "client-proxy", status: "passed", detail: "The client proxy reports running." },
+      ],
+    });
+  vi.mocked(serverConnections.repairPrinterQueue).mockRejectedValue({
+    code: "not-authorized",
+    message: "administrator permission was not granted to repair the Client queue",
+  });
+
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: `Troubleshoot ${target.queue_name}` }));
+  const dialog = await screen.findByRole("dialog", { name: "Troubleshoot printer" });
+
+  const repairBtns = await within(dialog).findAllByRole("button", { name: "Repair Client queue" });
+  fireEvent.click(repairBtns[0]);
+
+  const attemptedList = await within(dialog).findByLabelText("Attempted recovery actions");
+  expect(within(attemptedList).getByText("Repair Client queue")).toBeTruthy();
+  expect(within(attemptedList).getByText("Authorization denied")).toBeTruthy();
+});
+
 it.each(["success", "failure"] as const)("finalizes inconclusive results at the UI deadline and ignores late %s", async (outcome) => {
   const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
   vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);

@@ -228,6 +228,7 @@ impl From<crate::application::LocalTroubleshootingSnapshot> for LocalTroubleshoo
         let queue_empty = snapshot
             .checks
             .contains(&crate::application::LocalFinding::QueueEmpty);
+        let repair_enabled = snapshot.is_repair_eligible();
         Self {
             target: snapshot.target.into(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -247,7 +248,7 @@ impl From<crate::application::LocalTroubleshootingSnapshot> for LocalTroubleshoo
                 .collect(),
             queue_empty,
             test_print_enabled: false,
-            repair_enabled: false,
+            repair_enabled,
             attempted_actions: Vec::new(),
         }
     }

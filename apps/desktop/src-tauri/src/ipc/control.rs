@@ -567,16 +567,37 @@ impl ControlPlane {
                 .await
                 .map(|queue| ClientQueueDto::from(&queue)),
             #[cfg(unix)]
-            Self::Machine(machine) => match machine
-                .run_mutation(ElevatedMutation::RepairClientQueue {
-                    address: address.to_owned(),
-                    printer: printer.to_owned(),
-                })
-                .await?
-            {
-                ElevatedOutcome::Queue(queue) => Ok(queue),
-                other => Err(unexpected_outcome("repair the client queue", &other)),
-            },
+            Self::Machine(machine) => {
+                let parsed_address =
+                    crate::adapters::client_connections::ServerAddress::parse(address)?;
+                let parsed_printer = crate::domain::PrinterName::parse(printer)?;
+                let request = crate::domain::ClientQueueRequest::new(
+                    &parsed_address.normalized,
+                    parsed_printer,
+                )?;
+                let target = crate::ipc::dto::RecognisedClientQueueDto {
+                    queue_name: request.queue_name().to_string(),
+                    server_address: parsed_address.normalized.clone(),
+                    printer_name: printer.to_owned(),
+                };
+                if let Ok(inspection) = machine.client.inspect_local_client_queue(target).await {
+                    if !inspection.queue_empty {
+                        return Err(AppError::invalid_state(
+                            "print jobs are pending or the Client queue state could not be verified; cancel or wait for them to finish before repairing",
+                        ));
+                    }
+                }
+                match machine
+                    .run_mutation(ElevatedMutation::RepairClientQueue {
+                        address: address.to_owned(),
+                        printer: printer.to_owned(),
+                    })
+                    .await?
+                {
+                    ElevatedOutcome::Queue(queue) => Ok(queue),
+                    other => Err(unexpected_outcome("repair the client queue", &other)),
+                }
+            }
         }
     }
 }

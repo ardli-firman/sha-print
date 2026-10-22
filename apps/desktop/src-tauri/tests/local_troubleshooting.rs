@@ -373,6 +373,158 @@ async fn observed_authorization_rejection_reports_channel_failure() {
     let channel = check("network-channel");
     assert_eq!(channel.status, "failed");
     assert_eq!(channel.code.as_deref(), Some("not-authorized"));
+    assert!(!snapshot.repair_enabled);
+}
+
+struct TestProxyService;
+
+#[async_trait]
+impl shaprint_desktop::application::RuntimeService for TestProxyService {
+    fn id(&self) -> shaprint_desktop::domain::ServiceId {
+        shaprint_desktop::domain::ServiceId::ClientProxy
+    }
+    fn autostart(&self) -> bool {
+        false
+    }
+    async fn run(
+        &self,
+        context: shaprint_desktop::application::ServiceContext,
+    ) -> Result<(), AppError> {
+        context.reporter().ready()?;
+        context.cancelled().await;
+        Ok(())
+    }
+}
+
+async fn running_proxy_coordinator() -> Arc<RuntimeCoordinator> {
+    let coordinator = Arc::new(RuntimeCoordinator::new(vec![Arc::new(TestProxyService)]));
+    coordinator
+        .start(shaprint_desktop::domain::ServiceId::ClientProxy)
+        .await
+        .expect("starts proxy");
+    coordinator
+}
+
+#[tokio::test]
+async fn repair_is_enabled_when_all_classified_prerequisites_are_healthy() {
+    use shaprint_desktop::application::{ServerIdentityInspection, ServerInspection};
+    let coordinator = running_proxy_coordinator().await;
+    let diagnostics = LocalTroubleshooting::new(Arc::new(NativeSpooler), Arc::clone(&coordinator))
+        .with_server_inspection(
+            Arc::new(MockServerInspector {
+                inspection: ServerInspection::Reachable {
+                    identity: ServerIdentityInspection::Matching,
+                    printer_shared: Some(true),
+                },
+            }),
+            Arc::new(MockChannel { configured: true }),
+            Arc::new(MockAuthorization { rejected: false }),
+        );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    assert!(snapshot.repair_enabled);
+    assert!(snapshot.queue_empty);
+    assert!(!snapshot.test_print_enabled);
+}
+
+#[tokio::test]
+async fn repair_is_disabled_when_client_proxy_is_stopped() {
+    use shaprint_desktop::application::{ServerIdentityInspection, ServerInspection};
+    // Coordinator has service registered but not started -> ProxyStopped
+    let coordinator = Arc::new(RuntimeCoordinator::new(vec![Arc::new(TestProxyService)]));
+    let diagnostics = LocalTroubleshooting::new(Arc::new(NativeSpooler), coordinator)
+        .with_server_inspection(
+            Arc::new(MockServerInspector {
+                inspection: ServerInspection::Reachable {
+                    identity: ServerIdentityInspection::Matching,
+                    printer_shared: Some(true),
+                },
+            }),
+            Arc::new(MockChannel { configured: true }),
+            Arc::new(MockAuthorization { rejected: false }),
+        );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    let check = |id: &str| snapshot.checks.iter().find(|c| c.check == id).unwrap();
+    assert_eq!(check("client-proxy").status, "failed");
+    assert!(!snapshot.repair_enabled);
+}
+
+struct BusySpooler;
+
+#[async_trait]
+impl LocalPrinterCatalog for BusySpooler {
+    async fn local_printers(&self) -> Result<Vec<PrinterName>, AppError> {
+        unreachable!()
+    }
+    async fn inspect_client_queue(
+        &self,
+        _: &RecognisedClientQueue,
+    ) -> Result<LocalQueueInspection, AppError> {
+        Ok(LocalQueueInspection::Matching {
+            pending_jobs: Some(3),
+        })
+    }
+}
+
+#[tokio::test]
+async fn repair_is_disabled_when_queue_has_pending_jobs() {
+    use shaprint_desktop::application::{ServerIdentityInspection, ServerInspection};
+    let coordinator = running_proxy_coordinator().await;
+    let diagnostics = LocalTroubleshooting::new(Arc::new(BusySpooler), coordinator)
+        .with_server_inspection(
+            Arc::new(MockServerInspector {
+                inspection: ServerInspection::Reachable {
+                    identity: ServerIdentityInspection::Matching,
+                    printer_shared: Some(true),
+                },
+            }),
+            Arc::new(MockChannel { configured: true }),
+            Arc::new(MockAuthorization { rejected: false }),
+        );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    let check = |id: &str| snapshot.checks.iter().find(|c| c.check == id).unwrap();
+    assert_eq!(check("pending-jobs").status, "failed");
+    assert!(!snapshot.queue_empty);
+    assert!(!snapshot.repair_enabled);
+}
+
+#[tokio::test]
+async fn repair_is_disabled_when_server_is_unreachable() {
+    use shaprint_desktop::application::ServerInspection;
+    let coordinator = running_proxy_coordinator().await;
+    let diagnostics = LocalTroubleshooting::new(Arc::new(NativeSpooler), coordinator)
+        .with_server_inspection(
+            Arc::new(MockServerInspector {
+                inspection: ServerInspection::Unreachable,
+            }),
+            Arc::new(MockChannel { configured: true }),
+            Arc::new(MockAuthorization { rejected: false }),
+        );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    assert!(!snapshot.repair_enabled);
+}
+
+#[tokio::test]
+async fn repair_is_disabled_when_network_channel_is_unconfigured() {
+    use shaprint_desktop::application::{ServerIdentityInspection, ServerInspection};
+    let coordinator = running_proxy_coordinator().await;
+    let diagnostics = LocalTroubleshooting::new(Arc::new(NativeSpooler), coordinator)
+        .with_server_inspection(
+            Arc::new(MockServerInspector {
+                inspection: ServerInspection::Reachable {
+                    identity: ServerIdentityInspection::Matching,
+                    printer_shared: Some(true),
+                },
+            }),
+            Arc::new(MockChannel { configured: false }),
+            Arc::new(MockAuthorization { rejected: false }),
+        );
+
+    let snapshot = LocalTroubleshootingDto::from(diagnostics.inspect(target()).await);
+    assert!(!snapshot.repair_enabled);
 }
 
 #[cfg(all(windows, feature = "desktop"))]
