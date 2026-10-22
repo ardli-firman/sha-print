@@ -58,6 +58,50 @@ jobs:
       - name: Test
         run: cargo test
 
+      - name: Prepare native Windows diagnostics
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'Native diagnostics require this disposable runner to be elevated.'
+          }
+          if (Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue) {
+            $feature = Get-WindowsFeature -Name Print-Server
+            if (-not $feature.Installed) {
+              $installed = Install-WindowsFeature -Name Print-Server -IncludeManagementTools
+              if (-not $installed.Success -or $installed.RestartNeeded -eq 'Yes') {
+                throw 'The print server role could not be enabled without a restart.'
+              }
+            }
+          }
+          if (-not (Get-Command Add-Printer -ErrorAction Stop).Parameters.ContainsKey('IppURL')) {
+            throw 'This runner does not support native IPP queue installation.'
+          }
+          Set-Service Spooler -StartupType Automatic
+          Start-Service Spooler
+          (Get-Service Spooler).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+
+      - name: Native Windows Client queue diagnostics runtime
+        timeout-minutes: 5
+        env:
+          SHAPRINT_DIAGNOSTICS_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: cargo test --test windows_local_troubleshooting windows_native_diagnostics_are_self_contained -- --ignored --exact --nocapture --test-threads=1
+
+      - name: Clean up native diagnostics fixture
+        if: always()
+        shell: powershell
+        env:
+          SHAPRINT_DIAGNOSTICS_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Start-Service Spooler
+          $prefix = 'ShaPrint Diagnostics ' + $env:SHAPRINT_DIAGNOSTICS_RUN_ID
+          Get-Printer | Where-Object { $_.Name.StartsWith($prefix + ' (ShaPrint ') -or $_.Name -eq $prefix } | ForEach-Object {
+            Get-PrintJob -PrinterName $_.Name -ErrorAction SilentlyContinue | Remove-PrintJob -ErrorAction Stop
+            Remove-Printer -Name $_.Name -ErrorAction Stop
+          }
+
   frontend:
     name: Frontend (typecheck, tests)
     runs-on: ubuntu-latest

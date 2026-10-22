@@ -52,6 +52,18 @@ The troubleshooting panel offers no test-print or repair action in this slice.
 
 ## Open runtime criteria
 
+Desktop CI now explicitly provisions the disposable Windows runner's print
+services and runs `windows_native_diagnostics_are_self_contained` with `--ignored`.
+That smoke test creates its own IPPS Server, proxy, and genuine native IPP Client
+queue, generates held work only in the paused temporary queue, and observes the
+public desktop control results for healthy, pending, stopped-proxy, mismatched,
+missing, and unavailable-spooler cases. It asserts no work reaches the fake
+physical printer. Rust cleanup guards and an unconditional CI cleanup step remove
+the uniquely named fixture queue and restore the runner's spooler.
+
+The workflow's existence and successful cross-compilation do not establish a
+passing Windows runtime result. Record the actual PR run before closing #172.
+
 Windows native runtime and a launched Windows desktop UI were not available in
 this Linux workspace. Cross-compilation is not evidence of Windows runtime
 behavior. Keep ticket #172 open until that platform's changed surface is actually
