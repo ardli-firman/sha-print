@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { startService } from "@/api/ipc";
 import { repairPrinterQueue } from "@/api/serverConnections";
-import { closeTestPrintSession, confirmTestPrint, refreshTestPrintSession, sendTestPrint, inspectLocalClientQueue, type LocalTroubleshootingSnapshot } from "@/api/troubleshooting";
+import { closeTestPrintSession, confirmTestPrint, refreshTestPrintSession, sendTestPrint, inspectLocalClientQueue, type LocalTroubleshootingSnapshot, type UserSymptom } from "@/api/troubleshooting";
 import type { RecognisedClientQueue } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -27,6 +27,7 @@ const ACTION_LABELS: Record<string, string> = {
   "start-client-proxy": "Start client proxy",
   "repair-client-queue": "Repair Client queue",
   "send-test-print": "Send test print",
+  "retry-test-print": "Retry test print",
 };
 
 const OUTCOME_LABELS: Record<string, string> = {
@@ -36,6 +37,13 @@ const OUTCOME_LABELS: Record<string, string> = {
   partial: "Partially completed",
   accepted: "Accepted by the native spooler", rejected: "Rejected before submission",
   uncertain: "Submission uncertain", blocked: "Blocked by fresh checks",
+};
+
+const SYMPTOM_GUIDANCE: Record<UserSymptom, string> = {
+  clipping: "Compare Requested media with Loaded media in the printer tray and Server queue. Inspect printable margins and the outer border patterns (2 mm, 5 mm, 10 mm) on the diagnostic page. This symptom guides investigation and does not prove a hardware fault.",
+  shifted: "Compare Requested media with Loaded media and check the paper alignment guides in the printer tray. Inspect the 50 mm center alignment cross on the diagnostic page. This symptom guides investigation and does not prove an alignment fault.",
+  "incorrect-size": "Compare Requested media with Loaded media in the printer tray and Server queue settings. Inspect page scaling and paper dimensions. This symptom guides investigation and does not prove a scaling fault.",
+  blank: "Check the printer's ink, toner, or ribbon supplies and printhead condition. Try printing a native test page directly on the Server. Local acceptance confirms only spooler submission, not marking agent transfer. This symptom guides investigation and does not prove a communication fault.",
 };
 
 function classifyActionOutcome(error: unknown): "denied" | "failed" | "partial" {
@@ -75,7 +83,11 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
   const actionBusyRef = useRef(false);
   const [testError, setTestError] = useState(false);
   const [testActionPending, setTestActionPending] = useState(false);
-  const [symptom, setSymptom] = useState("");
+  const [symptom, setSymptom] = useState<UserSymptom | "">("");
+
+  const patchSnapshot = (patch: Partial<LocalTroubleshootingSnapshot>) => {
+    setSnapshot((current) => (current ? { ...current, ...patch } : current));
+  };
   useEffect(() => () => {
     if (sessionIdRef.current !== undefined) void closeTestPrintSession(sessionIdRef.current).catch(() => {});
   }, [target]);
@@ -130,27 +142,61 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
     };
   }, [target, run]);
 
-  const handleTestAction = async (result?: "correct" | "no-output" | "incorrect") => {
+  const handleTestAction = async (
+    result?: "correct" | "no-output" | "incorrect",
+    chosenSymptom?: UserSymptom,
+  ) => {
     const id = sessionIdRef.current;
     if (id === undefined || actionBusyRef.current) return;
     actionBusyRef.current = true;
     setTestActionPending(true);
     setIsExecutingAction(true);
     setTestError(false);
-    if (!result) setSnapshot((current) => current ? { ...current, test_print_enabled: false, submission: "checking", physical_result: "unconfirmed" } : current);
+    if (!result) {
+      patchSnapshot({
+        test_print_enabled: false,
+        submission: "checking",
+        physical_result: "unconfirmed",
+        user_symptom: undefined,
+      });
+    }
     try {
-      const next = result ? await confirmTestPrint(id, result) : await sendTestPrint(id);
+      const next = result
+        ? await confirmTestPrint(id, result, chosenSymptom)
+        : await sendTestPrint(id);
       if (!activeRef.current || sessionIdRef.current !== id) return;
-      setSnapshot({ ...next, attempted_actions: [...attemptedActionsRef.current, ...next.attempted_actions] });
+      setSnapshot({
+        ...next,
+        attempted_actions: [...attemptedActionsRef.current, ...next.attempted_actions],
+      });
+      // The select mirrors the recorded classification exactly: a send clears it.
+      setSymptom(next.user_symptom ?? "");
     } catch {
       if (!activeRef.current) return;
       // A transport failure does not establish whether the spooler accepted work.
-      if (!result) setSnapshot((current) => current ? { ...current, test_print_enabled: false, submission: "uncertain", physical_result: "unconfirmed" } : current);
+      if (!result) {
+        patchSnapshot({
+          test_print_enabled: false,
+          submission: "uncertain",
+          physical_result: "unconfirmed",
+        });
+      }
       setTestError(true);
     } finally {
       actionBusyRef.current = false;
-      if (activeRef.current) { setIsExecutingAction(false); setTestActionPending(false); }
+      if (activeRef.current) {
+        setIsExecutingAction(false);
+        setTestActionPending(false);
+      }
     }
+  };
+
+  const handleSymptomChange = (newSymptom: UserSymptom | "") => {
+    // A pending confirmation owns the select; a change made now would be silently
+    // dropped by the busy guard and then overwritten by the pending response.
+    if (actionBusyRef.current) return;
+    setSymptom(newSymptom);
+    void handleTestAction("incorrect", newSymptom || undefined);
   };
 
   const handleStartProxy = async () => {
@@ -282,8 +328,10 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
             <section className="mt-4 space-y-3 rounded-md border p-3 text-sm" aria-label="Guided test print">
               <p>Requested media: {snapshot.requested_media ?? "Unavailable"}</p>
               <p>One page, one copy, grayscale, one-sided. Saved queue defaults stay unchanged.</p>
-              {snapshot.attempted_actions.some((action) => action.action === "send-test-print") || snapshot.submission === "uncertain" ? <p>Before another send, check again and confirm the Client queue is empty. Earlier work may still print downstream even when this queue is empty. A retry sends another page.</p> : null}
-              <Button type="button" disabled={!snapshot.test_print_enabled || isExecutingAction} onClick={() => void handleTestAction()}>Send test print</Button>
+              {snapshot.attempted_actions.some((action) => action.action === "send-test-print" || action.action === "retry-test-print") || snapshot.submission === "uncertain" ? <p>Before another send, check again and confirm the Client queue is empty. Empty local queue state does not establish downstream cancellation. Earlier work may still print downstream even when this queue is empty. A retry sends another page.</p> : null}
+              <Button type="button" disabled={!snapshot.test_print_enabled || isExecutingAction} onClick={() => void handleTestAction()}>
+                {snapshot.attempted_actions.some((action) => action.action === "send-test-print" || action.action === "retry-test-print") ? "Retry test print" : "Send test print"}
+              </Button>
               {testActionPending ? <p role="status">Checking prerequisites and submitting. Do not send again.</p> : null}
               {testError ? <p role="alert">The result could not be confirmed. Inspect the native queue before checking again. No automatic retry was sent.</p> : null}
               {snapshot.submission === "accepted" ? <p>The native spooler accepted the test print. Physical output is unconfirmed until you respond.</p> : null}
@@ -299,16 +347,16 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
                 </div>
               </> : null}
               {snapshot.physical_result === "correct" ? <p>You confirmed correct physical output.</p> : null}
-              {snapshot.physical_result === "no-output" ? <p>You reported no output. Inspect the native Client queue for pending work, then check ShaPrint on the Server and the printer itself. Local acceptance does not establish where downstream work stopped.</p> : null}
+              {snapshot.physical_result === "no-output" ? <p>You reported no output. Local spooler acceptance confirms only that work entered the local queue; it does not confirm whether the print job reached the Server or the physical printer. Inspect the native Client queue for pending work, check ShaPrint on the Server, and inspect the physical printer&apos;s status and paper tray. Wait for delayed output before sending again, as an earlier print job may still produce a page.</p> : null}
               {snapshot.physical_result === "incorrect" ? <>
                 <label className="block">Observed symptom
-                  <select aria-label="Observed symptom" value={symptom} onChange={(event) => setSymptom(event.target.value)} className="block border rounded p-2">
+                  <select aria-label="Observed symptom" value={symptom} onChange={(event) => handleSymptomChange(event.target.value as UserSymptom | "")} disabled={isExecutingAction} className="block border rounded p-2">
                     <option value="">Choose a symptom</option>
                     <option value="clipping">Clipping</option><option value="shifted">Shifted position</option>
-                    <option value="size">Incorrect size</option><option value="blank">Blank output</option>
+                    <option value="incorrect-size">Incorrect size</option><option value="blank">Blank output</option>
                   </select>
                 </label>
-                {symptom ? <p>{symptom === "blank" ? "Check the printer's supplies and try its native test page on the Server. " : "Compare the Requested media above with the Loaded media in the tray and the Server queue. Inspect page scaling and the alignment and clipping patterns. "}This symptom guides investigation and does not prove a remote cause.</p> : null}
+                {symptom ? <p>{SYMPTOM_GUIDANCE[symptom]}</p> : null}
               </> : null}
             </section>
           ) : null}

@@ -223,6 +223,8 @@ pub struct LocalTroubleshootingDto {
     pub submission: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub physical_result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_symptom: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -262,6 +264,7 @@ impl From<crate::application::LocalTroubleshootingSnapshot> for LocalTroubleshoo
             requested_media: None,
             submission: None,
             physical_result: None,
+            user_symptom: None,
         }
     }
 }
@@ -276,13 +279,31 @@ impl From<crate::application::TestPrintSnapshot> for LocalTroubleshootingDto {
             .map(|media| media.keyword().to_owned());
         dto.submission = Some(snapshot.submission.as_str().to_owned());
         dto.physical_result = Some(snapshot.physical_result.as_str().to_owned());
+        dto.user_symptom = snapshot.user_symptom.map(|sym| sym.as_str().to_owned());
         dto.test_print_enabled = enabled;
+        // Only an accepted or uncertain earlier attempt may have submitted a page;
+        // blocked and rejected attempts never turn the next send into a "retry".
+        let mut page_may_exist = false;
         dto.attempted_actions = snapshot
             .attempts
             .into_iter()
-            .map(|outcome| TroubleshootingActionDto {
-                action: "send-test-print".to_owned(),
-                outcome: outcome.as_str().to_owned(),
+            .map(|outcome| {
+                let action = if page_may_exist {
+                    "retry-test-print"
+                } else {
+                    "send-test-print"
+                };
+                if matches!(
+                    outcome,
+                    crate::application::SubmissionOutcome::Accepted
+                        | crate::application::SubmissionOutcome::Uncertain
+                ) {
+                    page_may_exist = true;
+                }
+                TroubleshootingActionDto {
+                    action: action.to_owned(),
+                    outcome: outcome.as_str().to_owned(),
+                }
             })
             .collect();
         if snapshot.supported {

@@ -74,6 +74,33 @@ impl PhysicalResult {
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserSymptom {
+    Clipping,
+    Shifted,
+    IncorrectSize,
+    Blank,
+}
+impl UserSymptom {
+    pub fn parse(s: &str) -> Result<Self, AppError> {
+        match s {
+            "clipping" => Ok(Self::Clipping),
+            "shifted" | "shifted-position" => Ok(Self::Shifted),
+            "size" | "incorrect-size" => Ok(Self::IncorrectSize),
+            "blank" | "blank-output" => Ok(Self::Blank),
+            _ => Err(AppError::invalid_input("Choose an observed symptom.")),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Clipping => "clipping",
+            Self::Shifted => "shifted",
+            Self::IncorrectSize => "incorrect-size",
+            Self::Blank => "blank",
+        }
+    }
+}
 #[async_trait::async_trait]
 pub trait NativeTestPrint: Send + Sync + 'static {
     async fn default_media(
@@ -91,6 +118,7 @@ pub struct TestPrintSnapshot {
     pub requested_media: Option<TestMedia>,
     pub submission: SubmissionOutcome,
     pub physical_result: PhysicalResult,
+    pub user_symptom: Option<UserSymptom>,
     pub attempts: Vec<SubmissionOutcome>,
     pub supported: bool,
     ready: bool,
@@ -146,6 +174,7 @@ impl GuidedTestPrint {
                 requested_media: None,
                 submission: SubmissionOutcome::NotSent,
                 physical_result: PhysicalResult::Unconfirmed,
+                user_symptom: None,
                 attempts: vec![],
                 supported: self.native.is_some(),
                 ready: false,
@@ -231,6 +260,7 @@ impl GuidedTestPrint {
             s.run += 1;
             s.submission = SubmissionOutcome::Checking;
             s.physical_result = PhysicalResult::Unconfirmed;
+            s.user_symptom = None;
             (s.diagnostics.target.clone(), s.requested_media, s.run)
         };
         let guard = SubmissionGuard(Arc::clone(&self.submitting));
@@ -277,10 +307,16 @@ impl GuidedTestPrint {
             .ok_or_else(stale)?;
         s.submission = outcome;
         s.physical_result = PhysicalResult::Unconfirmed;
+        s.user_symptom = None;
         s.attempts.push(outcome);
         Ok(s.clone())
     }
-    pub fn confirm(&self, id: u64, result: PhysicalResult) -> Result<TestPrintSnapshot, AppError> {
+    pub fn confirm(
+        &self,
+        id: u64,
+        result: PhysicalResult,
+        symptom: Option<UserSymptom>,
+    ) -> Result<TestPrintSnapshot, AppError> {
         let mut session = self
             .session
             .lock()
@@ -295,7 +331,13 @@ impl GuidedTestPrint {
                     )
             })
             .ok_or_else(stale)?;
+        if result != PhysicalResult::Incorrect && symptom.is_some() {
+            return Err(AppError::invalid_input(
+                "Symptoms apply only to incorrect output.",
+            ));
+        }
         s.physical_result = result;
+        s.user_symptom = symptom;
         Ok(s.clone())
     }
 }

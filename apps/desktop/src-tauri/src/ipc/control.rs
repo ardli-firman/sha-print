@@ -169,13 +169,18 @@ impl ControlPlane {
         &self,
         id: u64,
         result: &str,
+        symptom: Option<&str>,
     ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
-        use crate::application::PhysicalResult;
+        use crate::application::{PhysicalResult, UserSymptom};
         let physical = PhysicalResult::parse(result)?;
+        let user_symptom = symptom.map(UserSymptom::parse).transpose()?;
         match self {
-            Self::Local(shell) => shell.test_print().confirm(id, physical).map(Into::into),
+            Self::Local(shell) => shell
+                .test_print()
+                .confirm(id, physical, user_symptom)
+                .map(Into::into),
             #[cfg(unix)]
-            Self::Machine(machine) => machine.client.confirm_test_print(id, result).await,
+            Self::Machine(machine) => machine.client.confirm_test_print(id, result, symptom).await,
         }
     }
 

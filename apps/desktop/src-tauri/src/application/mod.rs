@@ -17,7 +17,7 @@ mod test_print;
 mod troubleshooting;
 pub use test_print::{
     GuidedTestPrint, NativeTestPrint, PhysicalResult, SubmissionOutcome, TestMedia,
-    TestPrintSnapshot,
+    TestPrintSnapshot, UserSymptom,
 };
 mod updater;
 

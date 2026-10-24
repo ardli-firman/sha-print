@@ -2423,7 +2423,7 @@ it.each(["accepted", "uncertain", "rejected"])("keeps %s submission separate fro
   fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
   fireEvent.click(await screen.findByRole("button", { name: "Send test print" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Check again" }).hasAttribute("disabled")).toBe(false));
-  expect(screen.getByRole("button", { name: "Send test print" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Retry test print" }).hasAttribute("disabled")).toBe(true);
   expect(screen.getByText(/Earlier work may still print downstream/)).toBeTruthy();
   if (submission === "rejected") {
     expect(screen.queryByRole("button", { name: "Printed correctly" })).toBeNull();
@@ -2433,10 +2433,11 @@ it.each(["accepted", "uncertain", "rejected"])("keeps %s submission separate fro
     fireEvent.click(screen.getByRole("button", { name: "Incorrect output" }));
     const symptoms = await screen.findByRole("combobox", { name: "Observed symptom" });
     fireEvent.change(symptoms, { target: { value: "clipping" } });
-    expect(screen.getByText(/Compare the Requested media above with the Loaded media/)).toBeTruthy();
+    expect(screen.getByText(/Compare Requested media with Loaded media in the printer tray and Server queue/)).toBeTruthy();
   }
+  await waitFor(() => expect(screen.getByRole("button", { name: "Check again" }).hasAttribute("disabled")).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Check again" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Send test print" }).hasAttribute("disabled")).toBe(false));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Retry test print" }).hasAttribute("disabled")).toBe(false));
   expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "send_test_print")).toHaveLength(1);
 });
 
@@ -2459,4 +2460,182 @@ it("discards a late send callback after closure and reopening", async () => {
   await act(async () => { finish({ ...ready, submission: "accepted", test_print_enabled: false }); });
   expect(screen.queryByRole("button", { name: "Printed correctly" })).toBeNull();
   expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "send_test_print")).toHaveLength(1);
+});
+
+it.each([
+  ["clipping", /outer border patterns \(2 mm, 5 mm, 10 mm\)/, /Compare Requested media with Loaded media/],
+  ["shifted", /50 mm center alignment cross/, /Compare Requested media with Loaded media/],
+  ["incorrect-size", /page scaling and paper dimensions/, /Compare Requested media with Loaded media/],
+  ["blank", /ink, toner, or ribbon supplies/, /native test page directly on the Server/],
+])("reports the %s symptom and records it without claiming a root cause", async (symptom, specific, media) => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const ready = { target, version: CLIENT_VERSION, queue_empty: true, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [{ action: "send-test-print", outcome: "accepted" }],
+    checks: [], session_id: 11, requested_media: "iso_a4_210x297mm",
+    submission: "accepted", physical_result: "unconfirmed" };
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "confirm_test_print") {
+      const { symptom: chosen } = (args ?? {}) as { symptom?: string };
+      return Promise.resolve({ ...ready, physical_result: "incorrect", user_symptom: chosen });
+    }
+    return Promise.resolve(ready);
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Incorrect output" }));
+  const select = await screen.findByRole("combobox", { name: "Observed symptom" });
+  expect(screen.queryByText(specific)).toBeNull();
+  fireEvent.change(select, { target: { value: symptom } });
+  expect(await screen.findByText(specific)).toBeTruthy();
+  expect(screen.getByText(media)).toBeTruthy();
+  expect(screen.getAllByText(/does not prove/i).length).toBeGreaterThan(0);
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith("confirm_test_print", {
+    sessionId: 11, result: "incorrect", symptom,
+  });
+  // Returning to no symptom clears the classification and the guidance.
+  fireEvent.change(select, { target: { value: "" } });
+  await waitFor(() => expect(screen.queryByText(specific)).toBeNull());
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith("confirm_test_print", {
+    sessionId: 11, result: "incorrect",
+  });
+});
+
+it("keeps the symptom select locked while a confirmation is pending so no selection is dropped", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const ready = { target, version: CLIENT_VERSION, queue_empty: true, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [{ action: "send-test-print", outcome: "accepted" }],
+    checks: [], session_id: 15, requested_media: "iso_a4_210x297mm",
+    submission: "accepted", physical_result: "unconfirmed" };
+  let finishConfirm: (value: unknown) => void = () => {};
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "confirm_test_print") {
+      return new Promise((resolve) => { finishConfirm = resolve; });
+    }
+    return Promise.resolve(ready);
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Incorrect output" }));
+  await act(async () => { finishConfirm({ ...ready, physical_result: "incorrect" }); });
+  const select = await screen.findByRole("combobox", { name: "Observed symptom" });
+  await waitFor(() => expect(select.hasAttribute("disabled")).toBe(false));
+  fireEvent.change(select, { target: { value: "blank" } });
+  expect(select.hasAttribute("disabled")).toBe(true);
+  // A change dispatched while the confirmation owns the select is ignored entirely.
+  fireEvent.change(select, { target: { value: "clipping" } });
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "confirm_test_print")).toHaveLength(2);
+  await act(async () => { finishConfirm({ ...ready, physical_result: "incorrect", user_symptom: "blank" }); });
+  await waitFor(() => expect(select.hasAttribute("disabled")).toBe(false));
+  expect((select as HTMLSelectElement).value).toBe("blank");
+  expect(screen.getByText(/ink, toner, or ribbon supplies/)).toBeTruthy();
+});
+
+it("explains no-output and delayed output across every visibility limit", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const ready = { target, version: CLIENT_VERSION, queue_empty: true, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [{ action: "send-test-print", outcome: "accepted" }],
+    checks: [], session_id: 12, requested_media: "iso_a4_210x297mm",
+    submission: "accepted", physical_result: "unconfirmed" };
+  vi.mocked(invoke).mockImplementation((command) => command === "confirm_test_print"
+    ? Promise.resolve({ ...ready, physical_result: "no-output" })
+    : Promise.resolve(ready));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  expect(await screen.findByText(/Wait for delayed output before answering/)).toBeTruthy();
+  fireEvent.click(await screen.findByRole("button", { name: "No output" }));
+  const guidance = await screen.findByText(/You reported no output/);
+  expect(guidance.textContent).toContain("native Client queue");
+  expect(guidance.textContent).toContain("ShaPrint on the Server");
+  expect(guidance.textContent).toContain("physical printer");
+  expect(guidance.textContent).toContain("may still produce a page");
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "send_test_print")).toHaveLength(0);
+});
+
+it("offers an explicit retry only after fresh checks and the duplicate-output warning", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const ready = { target, version: CLIENT_VERSION, queue_empty: true, test_print_enabled: true,
+    repair_enabled: false, attempted_actions: [], checks: [], session_id: 13,
+    requested_media: "iso_a4_210x297mm", submission: "not-sent", physical_result: "unconfirmed" };
+  const sent = { ...ready, submission: "accepted", test_print_enabled: false,
+    attempted_actions: [{ action: "send-test-print", outcome: "accepted" }] };
+  const sends = { count: 0 };
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "send_test_print") {
+      sends.count += 1;
+      return Promise.resolve({ ...sent, attempted_actions: [
+        { action: "send-test-print", outcome: "accepted" },
+        { action: "retry-test-print", outcome: "accepted" },
+      ] });
+    }
+    if (command === "refresh_test_print_session") {
+      return Promise.resolve({ ...sent, test_print_enabled: true });
+    }
+    if (command === "confirm_test_print") {
+      return Promise.resolve({ ...sent, physical_result: (args as { result: string }).result });
+    }
+    return Promise.resolve(ready);
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Send test print" }));
+  expect(await screen.findByText(/Empty local queue state does not establish downstream cancellation/)).toBeTruthy();
+  expect(screen.getByText(/Earlier work may still print downstream/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "No output" }));
+  expect(await screen.findByText(/You reported no output/)).toBeTruthy();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Check again" }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+  const retry = await screen.findByRole("button", { name: "Retry test print" });
+  await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
+  expect(sends.count).toBe(1);
+  expect(screen.getByText(/Empty local queue state does not establish downstream cancellation/)).toBeTruthy();
+  fireEvent.click(retry);
+  await waitFor(() => expect(sends.count).toBe(2));
+  expect(screen.getByRole("button", { name: "Retry test print" }).hasAttribute("disabled")).toBe(true);
+  // A retry clears the earlier classification: the next incorrect report starts unclassified.
+  await waitFor(() => expect(screen.getByRole("button", { name: "Incorrect output" }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Incorrect output" }));
+  const selectAfterRetry = await screen.findByRole("combobox", { name: "Observed symptom" });
+  expect((selectAfterRetry as HTMLSelectElement).value).toBe("");
+});
+
+it.each([
+  ["newly busy queue", { check: "pending-jobs", status: "failed", detail: "Print jobs are pending.", code: "invalid-state" }, false, "blocked until this Client queue is known to be empty"],
+  ["changed server trust", { check: "server-identity", status: "failed", detail: "The server certificate has changed since it was approved.", code: "server-identity-changed" }, true, "The server certificate has changed"],
+])("keeps the retry blocked after fresh checks report a %s", async (_label, failedCheck, queueEmpty, expectedDetail) => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const ready = { target, version: CLIENT_VERSION, queue_empty: true, test_print_enabled: true,
+    repair_enabled: false, attempted_actions: [], checks: [], session_id: 14,
+    requested_media: "iso_a4_210x297mm", submission: "not-sent", physical_result: "unconfirmed" };
+  const sent = { ...ready, submission: "accepted", test_print_enabled: false,
+    attempted_actions: [{ action: "send-test-print", outcome: "accepted" }] };
+  const sends = { count: 0 };
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "send_test_print") {
+      sends.count += 1;
+      return Promise.resolve(sent);
+    }
+    if (command === "confirm_test_print") {
+      return Promise.resolve({ ...sent, physical_result: (args as { result: string }).result });
+    }
+    if (command === "refresh_test_print_session") {
+      return Promise.resolve({ ...sent, queue_empty: queueEmpty, test_print_enabled: false, checks: [failedCheck] });
+    }
+    return Promise.resolve(ready);
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Send test print" }));
+  fireEvent.click(await screen.findByRole("button", { name: "No output" }));
+  await screen.findByText(/You reported no output/);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Check again" }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+  const retry = await screen.findByRole("button", { name: "Retry test print" });
+  await waitFor(() => expect(screen.getByText(expectedDetail, { exact: false })).toBeTruthy());
+  expect(retry.hasAttribute("disabled")).toBe(true);
+  expect(sends.count).toBe(1);
 });

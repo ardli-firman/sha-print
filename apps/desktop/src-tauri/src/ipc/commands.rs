@@ -68,9 +68,10 @@ pub async fn confirm_test_print(
     control: State<'_, SharedControl>,
     session_id: u64,
     result: String,
+    symptom: Option<String>,
 ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppErrorDto> {
     control
-        .confirm_test_print(session_id, &result)
+        .confirm_test_print(session_id, &result, symptom.as_deref())
         .await
         .map_err(|error| AppErrorDto::from(&error))
 }
