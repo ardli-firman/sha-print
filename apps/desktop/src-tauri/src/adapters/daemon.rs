@@ -286,6 +286,8 @@ enum ControlRequest {
     ConfirmTestPrint {
         id: u64,
         result: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        symptom: Option<String>,
     },
     CloseTestPrintSession {
         id: u64,
@@ -793,11 +795,19 @@ async fn process_stream(
                 let snapshot = shell.test_print().send(id).await?.into();
                 Ok(ControlResponse::LocalTroubleshooting { snapshot })
             }
-            ControlRequest::ConfirmTestPrint { id, result } => {
-                use crate::application::PhysicalResult;
+            ControlRequest::ConfirmTestPrint {
+                id,
+                result,
+                symptom,
+            } => {
+                use crate::application::{PhysicalResult, UserSymptom};
                 let physical = PhysicalResult::parse(&result)?;
+                let user_symptom = symptom.as_deref().map(UserSymptom::parse).transpose()?;
                 let shell = require_shell(&shell)?;
-                let snapshot = shell.test_print().confirm(id, physical)?.into();
+                let snapshot = shell
+                    .test_print()
+                    .confirm(id, physical, user_symptom)?
+                    .into();
                 Ok(ControlResponse::LocalTroubleshooting { snapshot })
             }
             ControlRequest::CloseTestPrintSession { id } => {
@@ -1111,11 +1121,13 @@ impl DaemonClient {
         &self,
         id: u64,
         result: &str,
+        symptom: Option<&str>,
     ) -> Result<crate::ipc::dto::LocalTroubleshootingDto, AppError> {
         match self
             .send(&ControlRequest::ConfirmTestPrint {
                 id,
                 result: result.to_owned(),
+                symptom: symptom.map(str::to_owned),
             })
             .await?
         {

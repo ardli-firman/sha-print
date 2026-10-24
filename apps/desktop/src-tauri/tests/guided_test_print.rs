@@ -157,9 +157,22 @@ async fn explicit_send_rechecks_queue_and_never_claims_physical_output() {
     assert_eq!(accepted.physical_result, PhysicalResult::Unconfirmed);
     assert!(!accepted.can_send());
     assert_eq!(spooler.sends.load(Ordering::SeqCst), 1);
+    // The blocked attempt submitted no page, so the accepted page is the first send.
+    let public = shaprint_desktop::ipc::dto::LocalTroubleshootingDto::from(accepted);
+    assert_eq!(
+        public
+            .attempted_actions
+            .iter()
+            .map(|action| (action.action.as_str(), action.outcome.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("send-test-print", "blocked"),
+            ("send-test-print", "accepted"),
+        ]
+    );
     assert!(flow.send(ready.session_id).await.is_err());
     let confirmed = flow
-        .confirm(ready.session_id, PhysicalResult::Correct)
+        .confirm(ready.session_id, PhysicalResult::Correct, None)
         .unwrap();
     assert_eq!(confirmed.physical_result, PhysicalResult::Correct);
 }
@@ -184,7 +197,7 @@ async fn reopening_discards_physical_confirmation_and_rejects_old_callbacks() {
     let (flow, spooler) = fixture().await;
     let first = flow.open(target()).await.unwrap();
     flow.send(first.session_id).await.unwrap();
-    flow.confirm(first.session_id, PhysicalResult::NoOutput)
+    flow.confirm(first.session_id, PhysicalResult::NoOutput, None)
         .unwrap();
     flow.close(first.session_id);
     let second = flow.open(target()).await.unwrap();
@@ -193,7 +206,7 @@ async fn reopening_discards_physical_confirmation_and_rejects_old_callbacks() {
     assert_eq!(second.submission, SubmissionOutcome::NotSent);
     assert!(second.attempts.is_empty());
     assert!(flow
-        .confirm(first.session_id, PhysicalResult::Correct)
+        .confirm(first.session_id, PhysicalResult::Correct, None)
         .is_err());
     assert!(flow.send(first.session_id).await.is_err());
     assert_eq!(spooler.sends.load(Ordering::SeqCst), 1);
@@ -267,7 +280,7 @@ async fn rejection_uncertainty_and_all_physical_results_remain_distinct() {
             PhysicalResult::NoOutput,
             PhysicalResult::Incorrect,
         ] {
-            let result = flow.confirm(ready.session_id, physical);
+            let result = flow.confirm(ready.session_id, physical, None);
             if outcome == SubmissionOutcome::Rejected {
                 assert!(result.is_err());
             } else {
@@ -346,4 +359,160 @@ async fn protected_driver_data_cannot_enter_the_public_session_snapshot() {
     assert!(!public.contains("document"));
     assert!(dto.requested_media.is_none());
     assert_eq!(native.sends.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn classified_symptoms_are_recorded_and_closed_to_free_form_values() {
+    use shaprint_desktop::ipc::dto::LocalTroubleshootingDto;
+    let (flow, native) = fixture().await;
+    let ready = flow.open(target()).await.unwrap();
+    flow.send(ready.session_id).await.unwrap();
+    for (symptom, wire, alternate) in [
+        (UserSymptom::Clipping, "clipping", "clipping"),
+        (UserSymptom::Shifted, "shifted", "shifted-position"),
+        (UserSymptom::IncorrectSize, "incorrect-size", "size"),
+        (UserSymptom::Blank, "blank", "blank-output"),
+    ] {
+        assert_eq!(UserSymptom::parse(wire).unwrap(), symptom);
+        assert_eq!(UserSymptom::parse(alternate).unwrap(), symptom);
+        let reported = flow
+            .confirm(ready.session_id, PhysicalResult::Incorrect, Some(symptom))
+            .unwrap();
+        assert_eq!(reported.physical_result, PhysicalResult::Incorrect);
+        assert_eq!(reported.user_symptom, Some(symptom));
+        let public = LocalTroubleshootingDto::from(reported);
+        assert_eq!(public.user_symptom.as_deref(), Some(wire));
+        // A later correct result replaces the incorrect report and clears the symptom.
+        let corrected = flow
+            .confirm(ready.session_id, PhysicalResult::Correct, None)
+            .unwrap();
+        assert_eq!(corrected.user_symptom, None);
+        // Symptoms never apply to non-incorrect results.
+        assert!(flow
+            .confirm(ready.session_id, PhysicalResult::Correct, Some(symptom))
+            .is_err());
+        assert!(flow
+            .confirm(ready.session_id, PhysicalResult::Incorrect, Some(symptom))
+            .is_ok());
+    }
+    // Free-form symptom values are rejected without reaching the snapshot.
+    let generated = {
+        use ring::rand::{SecureRandom, SystemRandom};
+        let mut bytes = [0u8; 16];
+        SystemRandom::new().fill(&mut bytes).unwrap();
+        hex::encode(bytes)
+    };
+    assert!(UserSymptom::parse(&generated).is_err());
+    let reported = flow
+        .confirm(ready.session_id, PhysicalResult::Incorrect, None)
+        .unwrap();
+    assert_eq!(reported.user_symptom, None);
+    assert_eq!(native.sends.load(Ordering::SeqCst), 1);
+    // A stale session cannot classify symptoms into a newer session.
+    flow.close(ready.session_id);
+    let fresh = flow.open(target()).await.unwrap();
+    assert_eq!(fresh.user_symptom, None);
+    assert!(flow
+        .confirm(
+            ready.session_id,
+            PhysicalResult::Incorrect,
+            Some(UserSymptom::Blank)
+        )
+        .is_err());
+    let refreshed = flow.refresh(fresh.session_id).await.unwrap();
+    assert_eq!(refreshed.user_symptom, None);
+}
+
+#[tokio::test]
+async fn explicit_retry_requires_fresh_checks_and_records_the_retry_attempt() {
+    use shaprint_desktop::ipc::dto::LocalTroubleshootingDto;
+    let (flow, native) = fixture().await;
+    let ready = flow.open(target()).await.unwrap();
+    let first = flow.send(ready.session_id).await.unwrap();
+    assert_eq!(first.submission, SubmissionOutcome::Accepted);
+    assert_eq!(first.attempts, vec![SubmissionOutcome::Accepted]);
+    // No automatic retry: an immediate second send is refused until checks rerun.
+    assert!(flow.send(ready.session_id).await.is_err());
+    assert_eq!(native.sends.load(Ordering::SeqCst), 1);
+    flow.confirm(ready.session_id, PhysicalResult::NoOutput, None)
+        .unwrap();
+    let fresh = flow.refresh(ready.session_id).await.unwrap();
+    assert!(fresh.can_send(), "{:?}", fresh.diagnostics.checks);
+    let retry = flow.send(ready.session_id).await.unwrap();
+    assert_eq!(retry.submission, SubmissionOutcome::Accepted);
+    assert_eq!(retry.user_symptom, None);
+    assert_eq!(retry.attempts.len(), 2);
+    assert_eq!(native.sends.load(Ordering::SeqCst), 2);
+    let public = LocalTroubleshootingDto::from(retry);
+    assert_eq!(
+        public
+            .attempted_actions
+            .iter()
+            .map(|action| (action.action.as_str(), action.outcome.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("send-test-print", "accepted"),
+            ("retry-test-print", "accepted"),
+        ]
+    );
+    // Still no third send without another explicit retry after fresh checks.
+    assert!(flow.send(ready.session_id).await.is_err());
+    assert_eq!(native.sends.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn retry_is_blocked_by_newly_busy_unknown_queue_or_changed_trust() {
+    // Each mutation is applied after fresh checks passed, so only the recheck
+    // that runs inside the explicit send itself can still refuse the retry.
+    let block_at_send = [
+        ("newly pending jobs", 1u32, 0u32, false),
+        ("unreadable pending state", u32::MAX, 0, false),
+        ("changed server trust", 0, 3, false),
+        ("observed channel rejection", 0, 0, true),
+    ];
+    for (label, pending, server, rejected) in block_at_send {
+        let (flow, native) = fixture().await;
+        let ready = flow.open(target()).await.unwrap();
+        flow.send(ready.session_id).await.unwrap();
+        flow.confirm(ready.session_id, PhysicalResult::Incorrect, None)
+            .unwrap();
+        let fresh = flow.refresh(ready.session_id).await.unwrap();
+        assert!(fresh.can_send());
+        if pending != 0 {
+            native.pending.store(pending, Ordering::SeqCst);
+        }
+        if server != 0 {
+            native.server.store(server, Ordering::SeqCst);
+        }
+        native.rejected.store(rejected, Ordering::SeqCst);
+        let blocked = flow.send(ready.session_id).await.unwrap();
+        assert_eq!(blocked.submission, SubmissionOutcome::Blocked, "{label}");
+        assert_eq!(native.sends.load(Ordering::SeqCst), 1, "{label}");
+        assert_eq!(
+            blocked.attempts.last(),
+            Some(&SubmissionOutcome::Blocked),
+            "{label}: the refused retry is recorded, not hidden"
+        );
+    }
+    // Blocked before submission when the rerun checks already observe the problem.
+    let block_at_refresh = [
+        ("newly pending jobs", 1u32, 0u32),
+        ("unreadable pending state", u32::MAX, 0),
+        ("changed server trust", 0, 3),
+    ];
+    for (label, pending, server) in block_at_refresh {
+        let (flow, native) = fixture().await;
+        let ready = flow.open(target()).await.unwrap();
+        flow.send(ready.session_id).await.unwrap();
+        if pending != 0 {
+            native.pending.store(pending, Ordering::SeqCst);
+        }
+        if server != 0 {
+            native.server.store(server, Ordering::SeqCst);
+        }
+        let stale = flow.refresh(ready.session_id).await.unwrap();
+        assert!(!stale.can_send(), "{label}: {:?}", stale.diagnostics.checks);
+        assert!(flow.send(ready.session_id).await.is_err(), "{label}");
+        assert_eq!(native.sends.load(Ordering::SeqCst), 1, "{label}");
+    }
 }

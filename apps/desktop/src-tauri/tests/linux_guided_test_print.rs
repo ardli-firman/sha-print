@@ -268,10 +268,11 @@ async fn linux_native_client_queue_prints_guided_diagnostic_page_without_mutatin
 
     // 8. Confirm test print outcome
     let after_confirm = control
-        .confirm_test_print(session_id, "correct")
+        .confirm_test_print(session_id, "correct", None)
         .await
         .expect("confirms physical outcome");
     assert_eq!(after_confirm.physical_result.as_deref(), Some("correct"));
+    assert_eq!(after_confirm.user_symptom, None);
 
     // 9. Close test print session
     control
@@ -464,14 +465,81 @@ async fn linux_guided_test_print_operates_over_daemon_socket() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    // 8. Confirm over socket
+    // 8. Confirm an incorrect result with a classified symptom over the socket
+    let incorrect = control
+        .confirm_test_print(session_id, "incorrect", Some("clipping"))
+        .await
+        .expect("confirms outcome with symptom over socket");
+    assert_eq!(incorrect.physical_result.as_deref(), Some("incorrect"));
+    assert_eq!(incorrect.user_symptom.as_deref(), Some("clipping"));
+
+    // A symptom is only valid alongside incorrect output.
+    control
+        .confirm_test_print(session_id, "correct", Some("clipping"))
+        .await
+        .unwrap_err();
+
+    // 9. Explicit retry: fresh checks must re-enable sending before another page.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let refreshed = loop {
+        let refreshed = control
+            .refresh_test_print_session(session_id)
+            .await
+            .expect("refreshes over socket");
+        if refreshed.test_print_enabled || std::time::Instant::now() > deadline {
+            break refreshed;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        refreshed.test_print_enabled,
+        "fresh checks must re-enable the retry: {refreshed:?}"
+    );
+    let retried = control
+        .send_test_print(session_id)
+        .await
+        .expect("sends the explicit retry over socket");
+    assert_eq!(retried.submission.as_deref(), Some("accepted"));
+    assert_eq!(retried.physical_result.as_deref(), Some("unconfirmed"));
+    assert_eq!(retried.user_symptom, None);
+    assert_eq!(
+        retried
+            .attempted_actions
+            .iter()
+            .map(|action| (action.action.as_str(), action.outcome.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("send-test-print", "accepted"),
+            ("retry-test-print", "accepted"),
+        ]
+    );
+
+    // 10. The retried diagnostic page also arrives at the Server.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        {
+            let jobs = received.0.lock().unwrap();
+            if jobs.len() >= 2 {
+                assert_eq!(jobs.len(), 2, "one page per explicit send");
+                assert_eq!(jobs[1].0, server_printer_name);
+                assert_eq!(jobs[1].2, 1);
+                break;
+            }
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("timed out waiting for the retried test print job");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // 11. Confirm and close over socket
     let confirmed = control
-        .confirm_test_print(session_id, "correct")
+        .confirm_test_print(session_id, "correct", None)
         .await
         .expect("confirms outcome over socket");
     assert_eq!(confirmed.physical_result.as_deref(), Some("correct"));
+    assert_eq!(confirmed.user_symptom, None);
 
-    // 9. Close session over socket
     control
         .close_test_print_session(session_id)
         .await
