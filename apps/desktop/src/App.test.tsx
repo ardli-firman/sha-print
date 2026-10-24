@@ -2501,6 +2501,37 @@ it.each([
   });
 });
 
+it("keeps the symptom select locked while a confirmation is pending so no selection is dropped", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const ready = { target, version: CLIENT_VERSION, queue_empty: true, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [{ action: "send-test-print", outcome: "accepted" }],
+    checks: [], session_id: 15, requested_media: "iso_a4_210x297mm",
+    submission: "accepted", physical_result: "unconfirmed" };
+  let finishConfirm: (value: unknown) => void = () => {};
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "confirm_test_print") {
+      return new Promise((resolve) => { finishConfirm = resolve; });
+    }
+    return Promise.resolve(ready);
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Incorrect output" }));
+  await act(async () => { finishConfirm({ ...ready, physical_result: "incorrect" }); });
+  const select = await screen.findByRole("combobox", { name: "Observed symptom" });
+  await waitFor(() => expect(select.hasAttribute("disabled")).toBe(false));
+  fireEvent.change(select, { target: { value: "blank" } });
+  expect(select.hasAttribute("disabled")).toBe(true);
+  // A change dispatched while the confirmation owns the select is ignored entirely.
+  fireEvent.change(select, { target: { value: "clipping" } });
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "confirm_test_print")).toHaveLength(2);
+  await act(async () => { finishConfirm({ ...ready, physical_result: "incorrect", user_symptom: "blank" }); });
+  await waitFor(() => expect(select.hasAttribute("disabled")).toBe(false));
+  expect((select as HTMLSelectElement).value).toBe("blank");
+  expect(screen.getByText(/ink, toner, or ribbon supplies/)).toBeTruthy();
+});
+
 it("explains no-output and delayed output across every visibility limit", async () => {
   const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
   vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);

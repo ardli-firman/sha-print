@@ -192,6 +192,9 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
   };
 
   const handleSymptomChange = (newSymptom: UserSymptom | "") => {
+    // A pending confirmation owns the select; a change made now would be silently
+    // dropped by the busy guard and then overwritten by the pending response.
+    if (actionBusyRef.current) return;
     setSymptom(newSymptom);
     void handleTestAction("incorrect", newSymptom || undefined);
   };
@@ -347,7 +350,7 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
               {snapshot.physical_result === "no-output" ? <p>You reported no output. Local spooler acceptance confirms only that work entered the local queue; it does not confirm whether the print job reached the Server or the physical printer. Inspect the native Client queue for pending work, check ShaPrint on the Server, and inspect the physical printer&apos;s status and paper tray. Wait for delayed output before sending again, as an earlier print job may still produce a page.</p> : null}
               {snapshot.physical_result === "incorrect" ? <>
                 <label className="block">Observed symptom
-                  <select aria-label="Observed symptom" value={symptom} onChange={(event) => handleSymptomChange(event.target.value as UserSymptom | "")} className="block border rounded p-2">
+                  <select aria-label="Observed symptom" value={symptom} onChange={(event) => handleSymptomChange(event.target.value as UserSymptom | "")} disabled={isExecutingAction} className="block border rounded p-2">
                     <option value="">Choose a symptom</option>
                     <option value="clipping">Clipping</option><option value="shifted">Shifted position</option>
                     <option value="incorrect-size">Incorrect size</option><option value="blank">Blank output</option>
