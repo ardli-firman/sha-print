@@ -35,11 +35,18 @@ fake-adapter success never replace physical/runtime criteria.
    - closure refusing stale callbacks without sending pages, and switching to a second
      installed queue superseding the session,
    - every public payload produced during the journey (session snapshots, diagnostics,
-     runtime status) plus daemon logs inspected for the generated Network Channel
-     secret and IPP URLs,
-   - persisted state (`etc/shaprint`) compared byte-for-byte before and after the
-     journey: settings, Trusted Servers, and Network Channel storage are untouched and
-     no troubleshooting history is added.
+     runtime status) inspected for the generated Network Channel secrets and IPP URLs,
+     together with the daemon's own log records — captured in-process with a recording
+     logger whose liveness is itself asserted (the daemon start event arrives) before
+     the records are trusted as a boundary,
+   - persisted state compared across the stores the daemon actually uses — the Shell
+     data dir (`client-server-trust.json`, `network-channel-verifier.json`, server
+     identity, sharing selections) and the separate credential directory
+     (`network-channel`), with the baseline asserted non-empty and containing the
+     named stores: diagnosis, recovery, pending protection, native send/confirm, and
+     retry leave them byte-identical; the intentional reapproval and the
+     wrong-then-restored channel configuration are the only permitted diffs (trust
+     store, verifier, credential), and no file is ever added.
 2. **`apps/desktop/src/App.test.tsx`** — three qualification tests:
    - `qualifies the assembled journey through the visible flow and reflects it in the
      copied report` drives the visible flow end to end: stopped-proxy diagnosis, the
@@ -102,8 +109,8 @@ cargo test --test guided_troubleshooting_qualification -- --nocapture
 | Changed identities, observed authorization rejection | Native journey (both block sending; reapproval and repair+dismissal restore) |
 | Passive timeout/partial results, uncertain submission, delayed output | Deterministic seam and UI: `App.test.tsx` deadline tests, `guided_test_print` uncertainty/timeout/late-callback tests, delayed-output guidance assertions. Not reproduced at native level (not deterministically forceable against real CUPS) |
 | Explicit retry, closure, stale callbacks, target switching | Native journey + UI journey + `guided_test_print` |
-| Report reflects integrated outcomes; protected-data boundaries | UI journey asserts the copied report (incl. canary exclusion); native journey inspects every payload and daemon logs for the generated secret and IPP URLs; persisted state byte-comparison |
-| Stable↔Nightly and downgrade state preservation | No persisted-schema change: byte-identical state before/after the journey; protocol-level cross-channel matrix green in `linux_qualification`. Real two-binary channel matrix remains open (below) |
+| Report reflects integrated outcomes; protected-data boundaries | UI journey asserts the copied report (incl. canary exclusion); native journey inspects every payload and the captured daemon log records (live capture asserted) for the generated secrets and IPP URLs; persisted stores compared with intentional diffs accounted |
+| Stable↔Nightly and downgrade state preservation | No persisted-schema change: the real state and credential stores stay byte-identical through diagnosis/send/confirm/retry, with only the user-driven reapproval and channel reconfiguration rewriting their own stores and no files added; protocol-level cross-channel matrix green in `linux_qualification`. Real two-binary channel matrix remains open (below) |
 | Repository-required checks with observed output | Above |
 | No breaking changes | Confirmed: qualification adds tests and this record only; no IPC, daemon, port, wire, path, TLS, or persisted-state change |
 
@@ -136,6 +143,7 @@ No breaking changes are introduced by this qualification slice:
   protocol, Network Channel authentication headers, queue URI paths
   (`/ipp/print/...`), and TLS identity/fingerprint storage are untouched.
 - **Settings & State Backward Compatibility**: the qualification shows the guided flow
-  neither mutates persisted settings nor adds a persisted schema, and no storage
-  format changed in this slice, so no `SETTINGS_RISK=true` dispatch is required;
+  neither mutates the real persisted stores (state and credential directories, with
+  only the user-driven reapproval and channel reconfiguration rewriting their own
+  stores) nor adds a persisted schema, and no storage format changed in this slice, so no `SETTINGS_RISK=true` dispatch is required;
   direct two-binary downgrade evidence remains open as recorded above.
