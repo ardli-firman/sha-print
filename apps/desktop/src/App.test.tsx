@@ -2748,3 +2748,159 @@ it("shows copy failure visibly instead of an unsafe fallback", async () => {
   // The preview remains the only payload; nothing was printed, saved, or resent.
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "send_test_print")).toBe(false);
 });
+
+it("qualifies the assembled journey through the visible flow and reflects it in the copied report", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const canary = `channel-${Math.random().toString(36).slice(2)}`;
+  // Journey state evolves exactly as the backend session contract would.
+  const state = {
+    proxyRunning: false,
+    submission: "not-sent" as string,
+    physical: "unconfirmed" as string,
+    symptom: undefined as string | undefined,
+    attempts: [] as { action: string; outcome: string }[],
+  };
+  const snapshotOf = () => ({
+    target, version: CLIENT_VERSION,
+    queue_empty: state.proxyRunning,
+    // Mirrors the backend: sending is disabled while a response is awaited, and a
+    // physical-result confirmation re-enables it after fresh checks.
+    test_print_enabled:
+      state.proxyRunning && !(state.submission === "accepted" && state.physical === "unconfirmed"),
+    repair_enabled: false,
+    session_id: 30,
+    requested_media: "iso_a4_210x297mm",
+    submission: state.submission,
+    physical_result: state.physical,
+    user_symptom: state.symptom,
+    attempted_actions: [...state.attempts],
+    checks: [{
+      check: "client-proxy",
+      status: state.proxyRunning ? "passed" : "failed",
+      code: state.proxyRunning ? null : "invalid-state",
+      // The generated canary proves check prose cannot reach the copied report.
+      detail: `The client proxy is not running. ${canary}`,
+    }],
+  });
+  vi.mocked(ipc.startService).mockImplementation(async () => {
+    state.proxyRunning = true;
+    return runtimeWith("running", "stopped");
+  });
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "send_test_print") {
+      state.attempts.push(
+        state.attempts.length === 0
+          ? { action: "send-test-print", outcome: "accepted" }
+          : { action: "retry-test-print", outcome: "accepted" },
+      );
+      state.submission = "accepted";
+      state.physical = "unconfirmed";
+      state.symptom = undefined;
+      return Promise.resolve(snapshotOf());
+    }
+    if (command === "confirm_test_print") {
+      const { result, symptom } = (args ?? {}) as { result: string; symptom?: string };
+      state.physical = result;
+      state.symptom = result === "incorrect" ? symptom : undefined;
+      return Promise.resolve(snapshotOf());
+    }
+    return Promise.resolve(snapshotOf());
+  });
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.assign(navigator, { clipboard: { writeText } });
+  render(<App />);
+
+  // Diagnosis observes the stopped proxy; the explicit recovery action is recorded.
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  const dialog = await screen.findByRole("dialog", { name: "Troubleshoot printer" });
+  expect(within(dialog).getByText(/The client proxy is not running/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Send test print" }).hasAttribute("disabled")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Start client proxy" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send test print" }).hasAttribute("disabled")).toBe(false));
+
+  // Native send, no-output report, then incorrect output with a symptom.
+  fireEvent.click(screen.getByRole("button", { name: "Send test print" }));
+  expect(await screen.findByText(/Physical output is unconfirmed/)).toBeTruthy();
+  await waitFor(() => expect(screen.getByRole("button", { name: "No output" }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "No output" }));
+  expect(await screen.findByText(/You reported no output/)).toBeTruthy();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Incorrect output" }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Incorrect output" }));
+  fireEvent.change(await screen.findByRole("combobox", { name: "Observed symptom" }), { target: { value: "blank" } });
+  expect(await screen.findByText(/ink, toner, or ribbon supplies/)).toBeTruthy();
+
+  // Fresh checks, then the explicit retry relabeled as such.
+  await waitFor(() => expect(screen.getByRole("button", { name: "Check again" }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+  const retry = await screen.findByRole("button", { name: "Retry test print" });
+  await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(retry);
+  await waitFor(() => expect(screen.getByText(/Physical output is unconfirmed/)).toBeTruthy());
+
+  // The copied report reflects the integrated outcomes of the whole journey.
+  await waitFor(() => expect(screen.getByRole("button", { name: "Incorrect output" }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Incorrect output" }));
+  fireEvent.change(await screen.findByRole("combobox", { name: "Observed symptom" }), { target: { value: "blank" } });
+  await screen.findByText(/ink, toner, or ribbon supplies/);
+  fireEvent.click(screen.getByRole("button", { name: "Preview report" }));
+  const report = await screen.findByText(/ShaPrint troubleshooting report/);
+  const text = report.closest("pre")?.textContent ?? "";
+  expect(text).toContain(`App version: ${CLIENT_VERSION}`);
+  expect(text).toContain("- Client proxy: Passed");
+  expect(text).toContain("- Start client proxy: Succeeded");
+  expect(text).toContain("- Send test print: Accepted by the native spooler");
+  expect(text).toContain("- Retry test print: Accepted by the native spooler");
+  expect(text).toContain("Submission: accepted");
+  expect(text).toContain("Observed symptom: blank");
+  // Check prose never reaches the report the user copies.
+  expect(text).not.toContain(canary);
+  fireEvent.click(screen.getByRole("button", { name: "Copy report" }));
+  await screen.findByText(/Report copied to the clipboard/);
+  expect(writeText).toHaveBeenCalledWith(text);
+});
+
+it("records a denied client-proxy recovery without unlocking the send action", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const failed = {
+    target, version: CLIENT_VERSION, queue_empty: false, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [], session_id: 31,
+    requested_media: "iso_a4_210x297mm", submission: "not-sent", physical_result: "unconfirmed",
+    checks: [{ check: "client-proxy", status: "failed", code: "invalid-state", detail: "The client proxy is not running." }],
+  };
+  vi.mocked(invoke).mockResolvedValue(failed);
+  vi.mocked(ipc.startService).mockRejectedValue({ code: "not-authorized", message: "administrator permission was not granted" });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  const dialog = await screen.findByRole("dialog", { name: "Troubleshoot printer" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Start client proxy" }));
+  const attempted = await within(dialog).findByLabelText("Attempted recovery actions");
+  expect(within(attempted).getByText("Start client proxy")).toBeTruthy();
+  expect(within(attempted).getByText("Authorization denied")).toBeTruthy();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send test print" }).hasAttribute("disabled")).toBe(true));
+  expect(screen.getByText(/The client proxy is not running/)).toBeTruthy();
+});
+
+it("records a partially completed recovery accurately instead of claiming success", async () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const repairable = {
+    target, version: CLIENT_VERSION, queue_empty: true, test_print_enabled: false,
+    repair_enabled: true, attempted_actions: [], session_id: 32,
+    requested_media: "iso_a4_210x297mm", submission: "not-sent", physical_result: "unconfirmed",
+    checks: [{ check: "client-queue", status: "passed", code: null, detail: "The installed Client queue matches the selected Server and shared printer." }],
+  };
+  vi.mocked(invoke).mockResolvedValue(repairable);
+  vi.mocked(serverConnections.repairPrinterQueue).mockRejectedValue(
+    new Error("the queue repair partially completed"),
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  const dialog = await screen.findByRole("dialog", { name: "Troubleshoot printer" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Repair Client queue" }));
+  const attempted = await within(dialog).findByLabelText("Attempted recovery actions");
+  expect(within(attempted).getByText("Repair Client queue")).toBeTruthy();
+  expect(within(attempted).getByText("Partially completed")).toBeTruthy();
+  expect(within(dialog).getByText(/Attempted recovery actions do not claim physical printing is restored/)).toBeTruthy();
+});
