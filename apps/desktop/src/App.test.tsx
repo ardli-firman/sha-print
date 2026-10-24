@@ -2639,3 +2639,112 @@ it.each([
   expect(retry.hasAttribute("disabled")).toBe(true);
   expect(sends.count).toBe(1);
 });
+
+const reportFixture = () => {
+  const target = { queue_name: "Office", server_address: "192.0.2.10:48631", printer_name: "Office" };
+  const passive = {
+    target, version: CLIENT_VERSION, queue_empty: false, test_print_enabled: false,
+    repair_enabled: false, attempted_actions: [] as { action: string; outcome: string }[],
+    checks: [
+      { check: "spooler", status: "passed", code: null, detail: "The native print spooler responded." },
+      { check: "pending-jobs", status: "failed", code: "invalid-state", detail: "Print jobs are pending." },
+      { check: "server-identity", status: "failed", code: "server-identity-changed", detail: "The server certificate has changed." },
+    ],
+  };
+  return { target, passive };
+};
+
+it("previews and copies a passive-diagnostics report without needing a test print session", async () => {
+  const { target, passive } = reportFixture();
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(invoke).mockResolvedValue(passive);
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.assign(navigator, { clipboard: { writeText } });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Preview report" }));
+  const report = await screen.findByText(/ShaPrint troubleshooting report/);
+  const text = report.closest("pre")?.textContent ?? "";
+  expect(text).toContain(`App version: ${CLIENT_VERSION}`);
+  expect(text).toContain("Client queue: Office");
+  expect(text).toContain("Server: 192.0.2.10:48631");
+  expect(text).toContain("- Native print spooler: Passed");
+  expect(text).toContain("- Pending print jobs: Failed [invalid-state]");
+  expect(text).toContain("- Server identity: Failed [server-identity-changed]");
+  expect(text).toContain("Attempted actions:");
+  expect(text).toContain("- none recorded");
+  expect(text).toContain("Session-only report.");
+  // Passive findings carry no test print session: those lines are absent, not invented.
+  expect(text).not.toContain("Submission:");
+  expect(text).not.toContain("Physical result:");
+  fireEvent.click(screen.getByRole("button", { name: "Copy report" }));
+  await screen.findByText(/Report copied to the clipboard/);
+  expect(writeText).toHaveBeenCalledTimes(1);
+  expect(writeText).toHaveBeenCalledWith(text);
+});
+
+it("includes later session outcomes in the report as they become available", async () => {
+  const { target, passive } = reportFixture();
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const withSession = {
+    ...passive, session_id: 21, requested_media: "iso_a4_210x297mm",
+    submission: "uncertain", physical_result: "incorrect", user_symptom: "clipping" as const,
+    attempted_actions: [
+      { action: "send-test-print", outcome: "accepted" },
+      { action: "retry-test-print", outcome: "blocked" },
+    ],
+  };
+  vi.mocked(invoke).mockResolvedValue(withSession);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Preview report" }));
+  const text = (await screen.findByText(/ShaPrint troubleshooting report/)).closest("pre")?.textContent ?? "";
+  expect(text).toContain("Requested media: iso_a4_210x297mm");
+  expect(text).toContain("Submission: uncertain");
+  expect(text).toContain("Physical result: incorrect");
+  expect(text).toContain("Observed symptom: clipping");
+  expect(text).toContain("- Send test print: Accepted by the native spooler");
+  expect(text).toContain("- Retry test print: Blocked by fresh checks");
+  expect(text).not.toContain("- none recorded");
+});
+
+it("keeps check prose and protected values out of the previewed report", async () => {
+  const { target, passive } = reportFixture();
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  const secret = `channel-${Math.random().toString(36).slice(2)}`;
+  const keyedUri = `ipps://192.0.2.10:48631/ipp/print/Office?key=${secret}`;
+  const tainted = {
+    ...passive,
+    checks: [
+      ...passive.checks,
+      { check: "network-channel", status: "failed", code: "not-authorized", detail: `driver said ${secret} at ${keyedUri}` },
+    ],
+  };
+  vi.mocked(invoke).mockResolvedValue(tainted);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Preview report" }));
+  const text = (await screen.findByText(/ShaPrint troubleshooting report/)).closest("pre")?.textContent ?? "";
+  expect(text).not.toContain(secret);
+  expect(text).not.toContain("ipps://");
+  expect(text).not.toContain("driver said");
+  expect(text).toContain("- Network Channel authorization: Failed [not-authorized]");
+});
+
+it("shows copy failure visibly instead of an unsafe fallback", async () => {
+  const { target, passive } = reportFixture();
+  vi.mocked(serverConnections.listRecognisedClientQueues).mockResolvedValue([target]);
+  vi.mocked(invoke).mockResolvedValue(passive);
+  const writeText = vi.fn().mockRejectedValue(new Error("clipboard denied"));
+  Object.assign(navigator, { clipboard: { writeText } });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Troubleshoot Office" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Preview report" }));
+  fireEvent.click(screen.getByRole("button", { name: "Copy report" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Copy failed. Select the report text above and copy it manually.");
+  expect(writeText).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/Report copied to the clipboard/)).toBeNull();
+  // The preview remains the only payload; nothing was printed, saved, or resent.
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "send_test_print")).toBe(false);
+});

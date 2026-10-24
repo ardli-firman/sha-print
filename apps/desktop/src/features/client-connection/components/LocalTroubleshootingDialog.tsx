@@ -5,39 +5,8 @@ import { closeTestPrintSession, confirmTestPrint, refreshTestPrintSession, sendT
 import type { RecognisedClientQueue } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { buildTroubleshootingReport, CHECK_LABELS, actionLabel, actionOutcomeLabel, checkLabel, checkStatusLabel } from "@/lib/troubleshooting-report";
 import { CLIENT_VERSION } from "@/lib/version";
-
-const CHECK_LABELS: Record<string, string> = {
-  spooler: "Native print spooler",
-  "client-queue": "Client queue destination",
-  "pending-jobs": "Pending print jobs",
-  "client-proxy": "Client proxy",
-  "server-reachability": "Server reachability",
-  "server-identity": "Server identity",
-  "shared-printer": "Shared printer availability",
-  "network-channel": "Network Channel authorization",
-  firewall: "Firewall inspection",
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  passed: "Passed", failed: "Failed", inconclusive: "Inconclusive", "not-applicable": "Not applicable",
-};
-
-const ACTION_LABELS: Record<string, string> = {
-  "start-client-proxy": "Start client proxy",
-  "repair-client-queue": "Repair Client queue",
-  "send-test-print": "Send test print",
-  "retry-test-print": "Retry test print",
-};
-
-const OUTCOME_LABELS: Record<string, string> = {
-  success: "Succeeded",
-  denied: "Authorization denied",
-  failed: "Failed",
-  partial: "Partially completed",
-  accepted: "Accepted by the native spooler", rejected: "Rejected before submission",
-  uncertain: "Submission uncertain", blocked: "Blocked by fresh checks",
-};
 
 const SYMPTOM_GUIDANCE: Record<UserSymptom, string> = {
   clipping: "Compare Requested media with Loaded media in the printer tray and Server queue. Inspect printable margins and the outer border patterns (2 mm, 5 mm, 10 mm) on the diagnostic page. This symptom guides investigation and does not prove a hardware fault.",
@@ -81,13 +50,20 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
   const activeRef = useRef(true);
   const sessionIdRef = useRef<number | undefined>(undefined);
   const actionBusyRef = useRef(false);
+  const copyBusyRef = useRef(false);
   const [testError, setTestError] = useState(false);
   const [testActionPending, setTestActionPending] = useState(false);
   const [symptom, setSymptom] = useState<UserSymptom | "">("");
+  const [reportOpen, setReportOpen] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   const patchSnapshot = (patch: Partial<LocalTroubleshootingSnapshot>) => {
     setSnapshot((current) => (current ? { ...current, ...patch } : current));
   };
+  // A copied indicator must not outlive the findings it describes.
+  useEffect(() => {
+    setCopyState("idle");
+  }, [snapshot]);
   useEffect(() => () => {
     if (sessionIdRef.current !== undefined) void closeTestPrintSession(sessionIdRef.current).catch(() => {});
   }, [target]);
@@ -235,6 +211,21 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
     setRun((v) => v + 1);
   };
 
+  // Copying never falls back to another channel automatically: a failure is shown
+  // so the user can select the preview text by hand instead.
+  const handleCopyReport = async () => {
+    if (!snapshot || copyBusyRef.current) return;
+    copyBusyRef.current = true;
+    try {
+      await navigator.clipboard.writeText(buildTroubleshootingReport(snapshot));
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    } finally {
+      copyBusyRef.current = false;
+    }
+  };
+
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}
       ariaLabelledBy="troubleshoot-title" ariaDescribedBy="troubleshoot-description">
@@ -257,9 +248,9 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
             {snapshot.checks.map((check) => (
               <li key={check.check} className="rounded-md border p-3 text-sm">
                 <p className="font-semibold">
-                  {CHECK_LABELS[check.check] ?? check.check}{" "}
+                  {checkLabel(check.check)}{" "}
                   <span className="font-normal">
-                    ({STATUS_LABELS[check.status] ?? "Inconclusive"})
+                    ({checkStatusLabel(check.status)})
                   </span>
                 </p>
                 <p>{check.detail}</p>
@@ -368,8 +359,8 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
               <ul className="space-y-1">
                 {snapshot.attempted_actions.map((item, idx) => (
                   <li key={idx} className="flex justify-between items-center text-xs">
-                    <span className="font-medium">{ACTION_LABELS[item.action] ?? item.action}</span>
-                    <span className="text-muted-foreground">{OUTCOME_LABELS[item.outcome] ?? item.outcome}</span>
+                    <span className="font-medium">{actionLabel(item.action)}</span>
+                    <span className="text-muted-foreground">{actionOutcomeLabel(item.outcome)}</span>
                   </li>
                 ))}
               </ul>
@@ -378,6 +369,43 @@ export function LocalTroubleshootingDialog({ target, onClose, onReviewServer, on
               </p>
             </div>
           ) : null}
+          <div className="mt-4 rounded-md border p-3 text-sm bg-muted/40" aria-label="Troubleshooting report">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="text-xs h-7"
+                aria-expanded={reportOpen}
+                onClick={() => setReportOpen((open) => !open)}
+              >
+                {reportOpen ? "Hide report" : "Preview report"}
+              </Button>
+              {reportOpen ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="text-xs h-7"
+                  onClick={() => void handleCopyReport()}
+                >
+                  Copy report
+                </Button>
+              ) : null}
+            </div>
+            {reportOpen ? (
+              <>
+                <pre className="mt-2 whitespace-pre-wrap text-xs" tabIndex={0}>
+                  {buildTroubleshootingReport(snapshot)}
+                </pre>
+                {copyState === "copied" ? (
+                  <p role="status" className="mt-2 text-xs">Report copied to the clipboard.</p>
+                ) : null}
+                {copyState === "failed" ? (
+                  <p role="alert" className="mt-2 text-xs">Copy failed. Select the report text above and copy it manually.</p>
+                ) : null}
+              </>
+            ) : null}
+          </div>
           {isExecutingAction && !testActionPending ? (
             <p className="mt-2 text-xs text-muted-foreground" role="status">
               Performing recovery action...
