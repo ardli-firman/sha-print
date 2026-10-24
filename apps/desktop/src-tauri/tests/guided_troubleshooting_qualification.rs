@@ -202,6 +202,59 @@ fn persisted_snapshot(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8
     out
 }
 
+/// The only persisted files the journey may intentionally change: the trust store is
+/// rewritten by the user's reapproval, and the Network Channel verifier/credential by
+/// the deliberate wrong-then-restored channel configuration. Nothing else may differ,
+/// and no file may be added.
+fn assert_persisted_unchanged(
+    context: &str,
+    before: &[(std::path::PathBuf, Vec<u8>)],
+    after: &[(std::path::PathBuf, Vec<u8>)],
+    allow_changes_to: &[&str],
+) {
+    let allowed = |path: &std::path::Path| {
+        allow_changes_to
+            .iter()
+            .any(|name| path.file_name().and_then(|n| n.to_str()) == Some(name))
+    };
+    for (path, bytes) in before {
+        match after.iter().find(|(p, _)| p == path) {
+            Some((_, after_bytes)) => {
+                assert!(
+                    after_bytes == bytes || allowed(path),
+                    "{context}: {} changed unexpectedly",
+                    path.display()
+                );
+            }
+            None => panic!("{context}: {} disappeared", path.display()),
+        }
+    }
+    for (path, _) in after {
+        assert!(
+            before.iter().any(|(p, _)| p == path),
+            "{context}: {} was added; troubleshooting must stay session-only",
+            path.display()
+        );
+    }
+}
+
+/// In-process capture of daemon log records, standing in for the stderr logger that
+/// `shaprintd` installs in production. The qualification asserts capture is live
+/// (the daemon start event arrives) before trusting it as a protected-data boundary.
+struct CaptureLogger(Arc<Mutex<Vec<String>>>);
+impl log::Log for CaptureLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("[{}] {}", record.target(), record.args()));
+    }
+    fn flush(&self) {}
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn linux_assembled_guided_troubleshooting_journey_qualifies_the_user_flow() {
     if !IsolatedCupsd::is_supported() {
@@ -212,6 +265,12 @@ async fn linux_assembled_guided_troubleshooting_journey_qualifies_the_user_flow(
     let _cups_guard = CUPS_MUTEX.lock().await;
     let cupsd = IsolatedCupsd::start();
     let root = support::temporary_directory("guided-qualification");
+
+    // Capture daemon log records before launch; a live capture is itself asserted later.
+    let log_records = Arc::new(Mutex::new(Vec::<String>::new()));
+    log::set_boxed_logger(Box::new(CaptureLogger(log_records.clone())))
+        .expect("installs the qualification logger");
+    log::set_max_level(log::LevelFilter::Info);
 
     // Server side: shared printer behind TLS IPPS with a recording fake physical printer.
     let server_printer = "Office Laser";
@@ -335,8 +394,31 @@ async fn linux_assembled_guided_troubleshooting_journey_qualifies_the_user_flow(
         printer_name: "Labels".to_owned(),
     };
 
-    // Persisted state snapshot after setup: the journey must not mutate it or add history.
-    let persisted_before = persisted_snapshot(&root.join("etc/shaprint"));
+    // Persisted state baseline over the stores the daemon actually uses: the Shell's
+    // data dir (trust store, verifier, identity, sharing selections) and the separate
+    // credential directory that holds the Network Channel client credential.
+    let credential_dir = root.join("etc/shaprint-credentials");
+    let state_baseline = || {
+        let mut files = persisted_snapshot(&state_dir);
+        files.extend(persisted_snapshot(&credential_dir));
+        files
+    };
+    let persisted_before = state_baseline();
+    let names: Vec<&str> = persisted_before
+        .iter()
+        .map(|(path, _)| path.file_name().and_then(|n| n.to_str()).unwrap_or(""))
+        .collect();
+    for expected in [
+        "client-server-trust.json",
+        "network-channel-verifier.json",
+        "network-channel",
+        "server-identity.cert.der",
+    ] {
+        assert!(
+            names.contains(&expected),
+            "baseline must contain the real persisted stores (missing {expected}): {names:?}"
+        );
+    }
     let lpoptions_before = query_cups_options(&cupsd, &office_queue);
     println!(
         "[qualification] version {} queues {:?} | {:?} route cups({}) -> ipp backend -> proxy(127.0.0.1:{proxy_port}) -> ipps tls -> {server_address}",
@@ -484,6 +566,8 @@ async fn linux_assembled_guided_troubleshooting_journey_qualifies_the_user_flow(
             ("retry-test-print", "accepted")
         ]
     );
+    // Frozen here, before the intentional channel and trust mutations below.
+    let persisted_mid = state_baseline();
 
     // 6. An observed authorization rejection blocks sending until repaired and dismissed.
     let wrong_secret = {
@@ -595,7 +679,7 @@ async fn linux_assembled_guided_troubleshooting_journey_qualifies_the_user_flow(
         .await
         .unwrap();
 
-    // 10. Protected data never entered any public payload or log of the journey.
+    // 10. Protected data never entered any public payload or daemon log of the journey.
     public_payloads.push(serde_json::to_string(&control.diagnostics().await.unwrap()).unwrap());
     public_payloads.push(serde_json::to_string(&control.status().await.unwrap()).unwrap());
     for payload in &public_payloads {
@@ -609,27 +693,48 @@ async fn linux_assembled_guided_troubleshooting_journey_qualifies_the_user_flow(
         );
         assert!(!payload.contains("ipps://"), "IPP URL leaked: {payload}");
     }
-    for (path, bytes) in persisted_snapshot(&root.join("etc/shaprint")) {
-        if path.extension().and_then(|e| e.to_str()) == Some("log") {
-            let text = String::from_utf8_lossy(&bytes);
+    {
+        let records = log_records.lock().unwrap();
+        assert!(
+            records
+                .iter()
+                .any(|line| line.contains("shaprintd started")),
+            "the log capture must be live before it can be trusted as a boundary: {:?}",
+            records
+        );
+        for line in records.iter() {
             assert!(
-                !text.contains(&channel_secret),
-                "secret reached log {}",
-                path.display()
+                !line.contains(&channel_secret),
+                "secret reached log: {line}"
             );
             assert!(
-                !text.contains("ipps://"),
-                "IPP URL reached log {}",
-                path.display()
+                !line.contains(&wrong_secret),
+                "wrong secret reached log: {line}"
             );
+            assert!(!line.contains("ipps://"), "IPP URL reached log: {line}");
         }
     }
 
-    // 11. The journey is session-only: persisted settings untouched, no history added.
-    let persisted_after = persisted_snapshot(&root.join("etc/shaprint"));
-    assert_eq!(
-        persisted_before, persisted_after,
-        "guided troubleshooting must not mutate persisted settings or add history"
+    // 11. The journey is session-only. Steps 1-5 (diagnosis, recovery, pending
+    // protection, native send/confirm, explicit retry) must leave the persisted
+    // stores byte-identical; steps 6-7 intentionally rewrote the trust store
+    // (reapproval) and the channel verifier/credential (wrong-then-restored
+    // configuration), so only those files may differ, and nothing may be added.
+    assert_persisted_unchanged(
+        "after diagnosis, recovery, test print, confirmation, and retry",
+        &persisted_before,
+        &persisted_mid,
+        &[],
+    );
+    assert_persisted_unchanged(
+        "after the full journey",
+        &persisted_before,
+        &state_baseline(),
+        &[
+            "client-server-trust.json",
+            "network-channel-verifier.json",
+            "network-channel",
+        ],
     );
 
     daemon.shutdown().await.unwrap();
