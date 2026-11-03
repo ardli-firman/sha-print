@@ -45,4 +45,9 @@ The page size a client specifies for a print job, which may be smaller than the 
 media.
 _Avoid_: client paper size, document paper size
 
+**Requested print quality**:
+The output quality level a client specifies for a print job (`draft`, `normal`, or `high`), which the server forwards to the physical printer driver.
+_Avoid_: DPI mode, driver resolution, print detail
+
+
 
