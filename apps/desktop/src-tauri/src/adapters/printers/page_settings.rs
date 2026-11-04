@@ -87,6 +87,7 @@ mod tests {
             copies: Some(2),
             color: Some(false),
             duplex: Some(crate::application::DuplexMode::Simplex),
+            quality: None,
         };
         assert_eq!(
             settings_for_page(&requested, &page).expect("keeps explicit settings"),

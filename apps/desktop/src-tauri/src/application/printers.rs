@@ -23,6 +23,13 @@ pub enum PrintOrientation {
     Landscape,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrintQuality {
+    Draft,
+    Normal,
+    High,
+}
+
 /// Common print settings a server can forward to a local queue.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PrintSettings {
@@ -31,6 +38,7 @@ pub struct PrintSettings {
     pub duplex: Option<DuplexMode>,
     pub copies: Option<u16>,
     pub orientation: Option<PrintOrientation>,
+    pub quality: Option<PrintQuality>,
 }
 
 /// PWG Raster document and requested settings for a shared queue.

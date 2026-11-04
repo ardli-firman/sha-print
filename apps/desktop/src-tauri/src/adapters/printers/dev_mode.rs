@@ -152,6 +152,7 @@ mod tests {
             copies: Some(3),
             color: Some(false),
             duplex: Some(crate::application::DuplexMode::LongEdge),
+            quality: None,
         };
 
         apply_settings_to_dev_mode(&mut devmode, &settings).expect("applies settings");

@@ -20,8 +20,8 @@ use super::protocol::{
 
 use crate::adapters::ipps::NetworkChannel;
 use crate::application::{
-    DuplexMode, PrintFailures, PrintJob, PrintJobSubmitter, PrintOrientation, PrintSettings,
-    RequestLease,
+    DuplexMode, PrintFailures, PrintJob, PrintJobSubmitter, PrintOrientation, PrintQuality,
+    PrintSettings, RequestLease,
 };
 
 const PENDING_JOB_LIFETIME: Duration = Duration::from_secs(5 * 60);
@@ -787,12 +787,31 @@ fn job_settings(request: &Request<'_>) -> Result<PrintSettings, Status> {
         Some(_) => return Err(Status::AttributesOrValuesNotSupported),
         None => None,
     };
+    let quality = match request.integer("print-quality") {
+        Some(3) => Some(PrintQuality::Draft),
+        Some(4) => Some(PrintQuality::Normal),
+        Some(5) => Some(PrintQuality::High),
+        Some(_) => return Err(Status::AttributesOrValuesNotSupported),
+        None => match request.value("print-quality") {
+            Some("draft") | Some("3") => Some(PrintQuality::Draft),
+            Some("normal") | Some("4") => Some(PrintQuality::Normal),
+            Some("high") | Some("5") => Some(PrintQuality::High),
+            Some(_) => return Err(Status::AttributesOrValuesNotSupported),
+            None => {
+                if request.has_attribute("print-quality") {
+                    return Err(Status::AttributesOrValuesNotSupported);
+                }
+                None
+            }
+        },
+    };
     Ok(PrintSettings {
         media,
         color,
         duplex,
         copies,
         orientation,
+        quality,
     })
 }
 
@@ -1258,5 +1277,59 @@ mod tests {
                 "invalid copies: {invalid}"
             );
         }
+    }
+
+    #[test]
+    fn job_settings_parses_print_quality() {
+        use crate::application::PrintQuality;
+
+        // Omitted print-quality defaults to None
+        let bytes = job_request_with(&[], &[]);
+        let req = Request::parse(&bytes).expect("valid request");
+        let settings = job_settings(&req).expect("valid settings");
+        assert_eq!(settings.quality, None);
+
+        // Standard IPP enums: 3 (Draft), 4 (Normal), 5 (High)
+        for (enum_val, expected) in [
+            (3, PrintQuality::Draft),
+            (4, PrintQuality::Normal),
+            (5, PrintQuality::High),
+        ] {
+            let bytes = job_request_with(&[], &[("print-quality", 0x23, enum_val)]);
+            let req = Request::parse(&bytes).expect("valid request");
+            let settings = job_settings(&req).expect("valid settings");
+            assert_eq!(settings.quality, Some(expected));
+        }
+
+        // Text keyword fallback: "draft", "normal", "high"
+        for (kw, expected) in [
+            ("draft", PrintQuality::Draft),
+            ("normal", PrintQuality::Normal),
+            ("high", PrintQuality::High),
+        ] {
+            let bytes = job_request_with(&[("print-quality", kw)], &[]);
+            let req = Request::parse(&bytes).expect("valid request");
+            let settings = job_settings(&req).expect("valid settings");
+            assert_eq!(settings.quality, Some(expected));
+        }
+
+        // Out-of-range enums rejected
+        for invalid in [0, 1, 2, 6, 99, -1] {
+            let bytes = job_request_with(&[], &[("print-quality", 0x23, invalid)]);
+            let req = Request::parse(&bytes).expect("valid request");
+            assert_eq!(
+                job_settings(&req),
+                Err(Status::AttributesOrValuesNotSupported),
+                "invalid quality enum: {invalid}"
+            );
+        }
+
+        // Unsupported string keywords rejected
+        let bytes = job_request_with(&[("print-quality", "ultra-hd")], &[]);
+        let req = Request::parse(&bytes).expect("valid request");
+        assert_eq!(
+            job_settings(&req),
+            Err(Status::AttributesOrValuesNotSupported)
+        );
     }
 }

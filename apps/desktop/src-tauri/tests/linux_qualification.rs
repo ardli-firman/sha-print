@@ -338,6 +338,7 @@ async fn linux_qualification_matrix_four_os_role_combinations() {
         duplex: Some(DuplexMode::LongEdge),
         copies: Some(2),
         orientation: Some(PrintOrientation::Landscape),
+        quality: None,
     };
     let pwg_doc = build_test_pwg_raster(2480, 3508, 300, true);
 
@@ -631,6 +632,7 @@ async fn linux_qualification_stable_nightly_cross_channel_bidirectional() {
         duplex: Some(DuplexMode::Simplex),
         copies: Some(1),
         orientation: Some(PrintOrientation::Portrait),
+        quality: None,
     };
     let pwg_doc = build_test_pwg_raster(2550, 3300, 300, false);
 
@@ -894,6 +896,7 @@ async fn linux_qualification_physical_output_driverless_and_usb_cups_visual_equi
         duplex: Some(DuplexMode::LongEdge),
         copies: Some(2),
         orientation: Some(PrintOrientation::Landscape),
+        quality: None,
     };
 
     // 1. Generate standard test raster stream representing document to print
@@ -983,6 +986,7 @@ async fn linux_qualification_physical_output_driverless_and_usb_cups_visual_equi
         duplex: None,
         copies: Some(0), // invalid copies count
         orientation: None,
+        quality: None,
     };
     let invalid_options_result = build_cups_job_options(&invalid_settings);
     assert!(

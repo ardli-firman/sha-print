@@ -1001,6 +1001,7 @@ mod tests {
             duplex: Some(DuplexMode::LongEdge),
             copies: Some(3),
             orientation: Some(PrintOrientation::Landscape),
+            quality: None,
         };
         let options = build_cups_job_options(&settings).expect("maps valid settings");
         assert_eq!(
@@ -1023,6 +1024,7 @@ mod tests {
             duplex: Some(DuplexMode::ShortEdge),
             copies: Some(1),
             orientation: Some(PrintOrientation::Portrait),
+            quality: None,
         };
         let options = build_cups_job_options(&settings).expect("maps valid settings");
         assert_eq!(
@@ -1277,9 +1279,10 @@ mod tests {
             PrintSettings {
                 media: Some("iso_a4_210x297mm".to_owned()),
                 color: Some(false),
-                duplex: Some(DuplexMode::Simplex),
+                duplex: DuplexMode::Simplex.into(),
                 copies: Some(2),
                 orientation: Some(PrintOrientation::Landscape),
+                quality: None,
             },
         );
         let job_id = submitter

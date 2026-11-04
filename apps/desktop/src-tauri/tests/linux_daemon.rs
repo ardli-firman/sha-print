@@ -1909,6 +1909,7 @@ esac
                     duplex: Some(DuplexMode::LongEdge),
                     copies: Some(2),
                     orientation: Some(PrintOrientation::Landscape),
+                    quality: None,
                 },
             ),
         )
@@ -1951,6 +1952,7 @@ esac
                 duplex: Some(DuplexMode::LongEdge),
                 copies: Some(2),
                 orientation: Some(PrintOrientation::Landscape),
+                quality: None,
             }
         );
     }
@@ -2159,6 +2161,7 @@ esac
                     duplex: Some(DuplexMode::LongEdge),
                     copies: Some(2),
                     orientation: Some(PrintOrientation::Landscape),
+                    quality: None,
                 },
             ),
         )
@@ -2883,6 +2886,7 @@ async fn almalinux_previous_major_matrix_cross_flows_print_settings_and_baseline
         duplex: Some(DuplexMode::LongEdge),
         media: Some("iso_a4_210x297mm".to_string()),
         orientation: Some(PrintOrientation::Landscape),
+        quality: None,
     };
 
     let sample_pwg_raster = b"RaSt0123456789PWG-AlmaLinux9-Matrix";
@@ -3058,6 +3062,7 @@ async fn ubuntu_primary_lts_matrix_cross_flows_print_settings_and_ufw_check() {
         duplex: Some(DuplexMode::Simplex),
         media: Some("na_letter_8.5x11in".to_string()),
         orientation: Some(PrintOrientation::Portrait),
+        quality: None,
     };
 
     let sample_pwg_raster = b"RaSt0123456789PWG-Ubuntu2404-Matrix";
@@ -3298,6 +3303,7 @@ async fn ubuntu_previous_lts_matrix_cross_flows_print_settings_and_baseline_chec
         duplex: Some(DuplexMode::LongEdge),
         media: Some("iso_a4_210x297mm".to_string()),
         orientation: Some(PrintOrientation::Landscape),
+        quality: None,
     };
 
     let sample_pwg_raster = b"RaSt0123456789PWG-Ubuntu2204-Matrix";
@@ -3535,6 +3541,7 @@ async fn debian_stable_matrix_cross_flows_print_settings_and_firewall_detection(
         duplex: Some(DuplexMode::LongEdge),
         media: Some("iso_a4_210x297mm".to_string()),
         orientation: Some(PrintOrientation::Portrait),
+        quality: None,
     };
 
     let sample_pwg_raster = b"RaSt0123456789PWG-Debian12-Matrix";
@@ -3765,6 +3772,7 @@ async fn debian_previous_stable_matrix_cross_flows_print_settings_and_baseline_c
         duplex: Some(DuplexMode::Simplex),
         media: Some("na_letter_8.5x11in".to_string()),
         orientation: Some(PrintOrientation::Landscape),
+        quality: None,
     };
 
     let sample_pwg_raster = b"RaSt0123456789PWG-Debian11-Matrix";
