@@ -491,6 +491,7 @@ pub(crate) fn submit_blocking(
         color: Some(false),
         duplex: Some(DuplexMode::Simplex),
         orientation: Some(PrintOrientation::Portrait),
+        quality: None,
     };
     let option_pairs = match build_cups_job_options(&settings) {
         Ok(pairs) => pairs,

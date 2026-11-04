@@ -437,6 +437,7 @@ async fn authorized_print_job_reaches_the_selected_queue_with_document_and_setti
                 duplex: Some(DuplexMode::LongEdge),
                 copies: Some(2),
                 orientation: None,
+                quality: None,
             },
         );
     }

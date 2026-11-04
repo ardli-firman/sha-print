@@ -101,6 +101,7 @@ fn submit(target: &RecognisedClientQueue, media: TestMedia) -> SubmissionOutcome
             color: Some(false),
             duplex: Some(DuplexMode::Simplex),
             orientation: Some(PrintOrientation::Portrait),
+            quality: None,
         };
         let dm = prepare_dev_mode(printer.0, name.as_ptr(), &settings)?
             .ok_or_else(|| AppError::invalid_state("Test print settings could not be applied."))?;

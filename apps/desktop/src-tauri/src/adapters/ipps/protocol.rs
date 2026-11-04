@@ -257,8 +257,18 @@ impl<'a> Request<'a> {
             .attributes
             .iter()
             .find(|attribute| attribute.name == name)?;
+        if attribute.tag != tag::INTEGER && attribute.tag != tag::ENUM {
+            return None;
+        }
         let value: [u8; 4] = attribute.values.first()?.as_slice().try_into().ok()?;
         Some(i32::from_be_bytes(value))
+    }
+
+    /// Returns true if the request contains any attribute with the given name.
+    pub fn has_attribute(&self, name: &str) -> bool {
+        self.attributes
+            .iter()
+            .any(|attribute| attribute.name == name)
     }
 
     /// A boolean-valued attribute's first value.
@@ -978,6 +988,8 @@ fn build_response(
             "orientation-requested-supported",
             &[3, 4],
         );
+        write_integers(&mut out, tag::ENUM, "print-quality-default", &[4]);
+        write_integers(&mut out, tag::ENUM, "print-quality-supported", &[3, 4, 5]);
         write_resolution(&mut out, "printer-resolution-default", 300, 300, 3);
         write_resolution(&mut out, "printer-resolution-supported", 300, 300, 3);
         write_resolution(
@@ -1565,6 +1577,26 @@ mod tests {
         assert!(attributes.iter().any(|a| a.name == "media-col-default"));
         assert!(attributes.iter().any(|a| a.name == "media-col-database"));
         assert!(attributes.iter().any(|a| a.name == "media-size-supported"));
+    }
+
+    #[test]
+    fn printer_attributes_advertise_print_quality_supported_and_default() {
+        let bytes = response(
+            12,
+            IPP_VERSION_2_0,
+            Status::Ok,
+            &[PrinterEntry {
+                name: "TestPrinter".to_owned(),
+                uri: "ipps://server:8631/ipp/print/TestPrinter".to_owned(),
+                accepting_jobs: true,
+            }],
+        );
+        let attributes = decode(&bytes);
+        assert_eq!(integers(&attributes, "print-quality-default"), vec![4]);
+        assert_eq!(
+            integers(&attributes, "print-quality-supported"),
+            vec![3, 4, 5]
+        );
     }
 
     #[test]
