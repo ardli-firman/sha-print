@@ -17,16 +17,28 @@ use shaprint_desktop::adapters::ipps::NetworkChannel;
 use shaprint_desktop::adapters::port_binding::{
     PortBinder, PortOwner, PortOwnerInspector, PortTransport,
 };
+use shaprint_desktop::adapters::printers::dev_mode::{
+    apply_settings_to_dev_mode, DMRES_DRAFT, DMRES_HIGH, DMRES_MEDIUM, DM_PRINTQUALITY,
+};
+use shaprint_desktop::adapters::printers::raster::decode_pwg;
 use shaprint_desktop::adapters::{
     client_connections::ClientConnections, ClientProxyService, ServerSharingService,
 };
 use shaprint_desktop::application::{
-    PrintFailures, RuntimeCoordinator, SharedPrinterSource, Sharing,
+    PrintFailures, PrintJob, PrintJobSubmitter, PrintQuality, RuntimeCoordinator,
+    SharedPrinterSource, Sharing,
 };
-use shaprint_desktop::domain::{ErrorCode, ServiceId, ServiceState};
+use shaprint_desktop::domain::{AppError, ErrorCode, PrinterName, ServiceId, ServiceState};
 use shaprint_desktop::Shell;
 
-use support::{printer_names, sharing_runtime, temporary_directory};
+#[cfg(unix)]
+use shaprint_desktop::adapters::printers::cups::build_cups_job_options;
+
+use support::{
+    attribute_integers, attribute_resolutions, build_test_pwg_raster, get_printer_attributes,
+    print_job_request, printer_names, sharing_runtime, sharing_runtime_with_submitter, status_code,
+    temporary_directory, IppClient,
+};
 
 /// A coordinator with both supervised services, sharing over the fake printer catalog.
 fn coordinator(queues: &[&str]) -> (RuntimeCoordinator, Arc<Sharing>) {
@@ -711,4 +723,343 @@ async fn stopping_server_sharing_releases_its_tcp_and_udp_listeners() {
         std::net::UdpSocket::bind(("0.0.0.0", udp_port)).expect("stop released the discovery port");
     drop((tcp_rebound, udp_rebound));
     runtime.shutdown().await.expect("shutdown is idempotent");
+}
+
+#[derive(Default)]
+struct CapturingSubmitter {
+    jobs: Mutex<Vec<(String, PrintJob)>>,
+}
+
+#[async_trait::async_trait]
+impl PrintJobSubmitter for CapturingSubmitter {
+    async fn submit(&self, printer: &PrinterName, job: PrintJob) -> Result<u32, AppError> {
+        self.jobs
+            .lock()
+            .map_err(|_| AppError::internal("capturing submitter lock poisoned"))?
+            .push((printer.as_str().to_owned(), job));
+        Ok(101)
+    }
+}
+
+struct LiveQualityServer {
+    runtime: RuntimeCoordinator,
+    client: IppClient,
+    printer_uri: String,
+    channel_secret: String,
+    submitter: Arc<CapturingSubmitter>,
+}
+
+impl LiveQualityServer {
+    async fn start(queue_name: &str) -> Self {
+        let channel = Arc::new(NetworkChannel::in_memory());
+        let channel_secret = "quality-test-channel-secret".to_owned();
+        channel
+            .configure(&channel_secret)
+            .await
+            .expect("configures test Network Channel");
+        let submitter = Arc::new(CapturingSubmitter::default());
+        let (sharing, endpoint) =
+            sharing_runtime_with_submitter(&[queue_name], submitter.clone(), Arc::clone(&channel));
+        sharing
+            .set_shared(printer_names(&[queue_name]))
+            .await
+            .expect("selects queue to share");
+
+        let service = Arc::new(support::sharing_service_with_channel(
+            Arc::clone(&sharing),
+            Arc::clone(&endpoint),
+            channel,
+        ));
+        let runtime = RuntimeCoordinator::new(vec![service]);
+        runtime
+            .start(ServiceId::ServerSharing)
+            .await
+            .expect("starts server sharing service");
+
+        let address = endpoint.bound_address().expect("endpoint is listening");
+        let client = IppClient::new(address.port(), endpoint.fingerprint().to_string());
+        let encoded_queue: String = queue_name
+            .bytes()
+            .map(|byte| {
+                if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                    char::from(byte).to_string()
+                } else {
+                    format!("%{byte:02X}")
+                }
+            })
+            .collect();
+        let printer_uri = format!(
+            "ipps://127.0.0.1:{}/ipp/print/{encoded_queue}",
+            address.port()
+        );
+
+        Self {
+            runtime,
+            client,
+            printer_uri,
+            channel_secret,
+            submitter,
+        }
+    }
+}
+
+#[tokio::test]
+async fn print_quality_lifecycle_end_to_end_across_ipps_submission_and_platform_mapping() {
+    let server = LiveQualityServer::start("Office Printer").await;
+    let document = build_test_pwg_raster(2480, 3508, 300, true);
+
+    for (quality_value, expected_enum, expected_dm_quality, _expected_cups_val) in [
+        (3, PrintQuality::Draft, DMRES_DRAFT, "3"),
+        (4, PrintQuality::Normal, DMRES_MEDIUM, "4"),
+        (5, PrintQuality::High, DMRES_HIGH, "5"),
+    ] {
+        let request = print_job_request(
+            &server.printer_uri,
+            Some(&server.channel_secret),
+            Some(quality_value),
+            &[],
+            &document,
+        );
+
+        let (http_status, response) = server
+            .client
+            .post(&request)
+            .await
+            .expect("submits job over TLS IPPS");
+
+        assert_eq!(http_status, 200);
+        assert_eq!(status_code(&response), 0x0000);
+
+        let jobs = server.submitter.jobs.lock().expect("locks captured jobs");
+        let (printer, job) = jobs
+            .last()
+            .expect("captured job must be present on submitter");
+        assert_eq!(printer, "Office Printer");
+        assert_eq!(job.settings().quality, Some(expected_enum));
+
+        // Verify Windows DEVMODE driver translation
+        let mut devmode = vec![0u8; 220];
+        devmode[68..70].copy_from_slice(&220u16.to_ne_bytes());
+        apply_settings_to_dev_mode(&mut devmode, job.settings()).expect("applies to devmode");
+        let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+        assert_ne!(
+            fields & DM_PRINTQUALITY,
+            0,
+            "DM_PRINTQUALITY must be flagged for quality {quality_value}"
+        );
+        let dm_quality = i16::from_ne_bytes(devmode[90..92].try_into().unwrap());
+        assert_eq!(
+            dm_quality, expected_dm_quality,
+            "dmPrintQuality must match expected Win32 constant for quality {quality_value}"
+        );
+
+        // Verify Linux CUPS IPP option translation
+        #[cfg(unix)]
+        {
+            let cups_options = build_cups_job_options(job.settings()).expect("builds cups options");
+            assert!(
+                cups_options.contains(&("print-quality".to_owned(), _expected_cups_val.to_owned())),
+                "CUPS options must contain print-quality={_expected_cups_val}"
+            );
+        }
+    }
+
+    server.runtime.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn print_quality_wire_preservation_bounds_pwg_raster_at_300_dpi() {
+    let server = LiveQualityServer::start("Office Printer").await;
+
+    // 1. Verify capability advertisement on Get-Printer-Attributes
+    let req_attrs = get_printer_attributes(1, &server.printer_uri);
+    let (http_status, attrs_response) = server
+        .client
+        .post(&req_attrs)
+        .await
+        .expect("queries printer attributes over TLS IPPS");
+    assert_eq!(http_status, 200);
+    assert_eq!(status_code(&attrs_response), 0x0000);
+
+    let supported_quality = attribute_integers(&attrs_response, "print-quality-supported");
+    assert_eq!(
+        supported_quality,
+        vec![3, 4, 5],
+        "print-quality-supported must advertise [3, 4, 5]"
+    );
+
+    let default_quality = attribute_integers(&attrs_response, "print-quality-default");
+    assert_eq!(
+        default_quality,
+        vec![4],
+        "print-quality-default must advertise 4 (Normal)"
+    );
+
+    let resolutions =
+        attribute_resolutions(&attrs_response, "pwg-raster-document-resolution-supported");
+    assert_eq!(
+        resolutions,
+        vec![(300, 300, 3)],
+        "pwg-raster wire format must be advertised at 300 DPI"
+    );
+
+    // 2. Submit high quality print job and verify 300 DPI wire preservation
+    let pwg_doc = build_test_pwg_raster(2480, 3508, 300, true);
+    let request = print_job_request(
+        &server.printer_uri,
+        Some(&server.channel_secret),
+        Some(5), // High quality
+        &[],
+        &pwg_doc,
+    );
+
+    let (http_status, response) = server
+        .client
+        .post(&request)
+        .await
+        .expect("submits high-quality job over TLS IPPS");
+    assert_eq!(http_status, 200);
+    assert_eq!(status_code(&response), 0x0000);
+
+    {
+        let jobs = server.submitter.jobs.lock().expect("locks captured jobs");
+        let (_, job) = jobs
+            .last()
+            .expect("captured high-quality job must be present");
+        assert_eq!(job.settings().quality, Some(PrintQuality::High));
+
+        // Verify wire preservation: document is intact, decode succeeds, and resolution is strictly 300 DPI
+        let pages = decode_pwg(job.document()).expect("decodes wire PWG Raster payload");
+        assert_eq!(pages.len(), 1);
+        assert_eq!(
+            pages[0].dpi,
+            [300, 300],
+            "wire raster resolution must remain 300 DPI even when High quality is requested"
+        );
+        assert_eq!(pages[0].width, 2480);
+        assert_eq!(pages[0].height, 3508);
+        assert!(
+            job.document().len() < 10 * 1024 * 1024,
+            "payload size must remain compact and bounded"
+        );
+    }
+
+    server.runtime.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn print_quality_cross_version_compatibility_preserves_defaults_for_unspecified_and_handles_unknown_attributes(
+) {
+    let server = LiveQualityServer::start("Office Printer").await;
+    let document = build_test_pwg_raster(2480, 3508, 300, false);
+
+    // 1. Stable Client scenario: quality is omitted from request
+    let request_stable = print_job_request(
+        &server.printer_uri,
+        Some(&server.channel_secret),
+        None, // omitted quality attribute
+        &[],
+        &document,
+    );
+    let (http_status, response_stable) = server
+        .client
+        .post(&request_stable)
+        .await
+        .expect("submits job without quality over TLS IPPS");
+    assert_eq!(http_status, 200);
+    assert_eq!(status_code(&response_stable), 0x0000);
+
+    {
+        let jobs = server.submitter.jobs.lock().expect("locks captured jobs");
+        let (_, job) = jobs.last().expect("captured stable job");
+        assert_eq!(
+            job.settings().quality,
+            None,
+            "omitted quality must be represented as None"
+        );
+
+        // Windows DEVMODE: DM_PRINTQUALITY unflagged, offset 90..92 preserved
+        let mut devmode = vec![0u8; 220];
+        devmode[68..70].copy_from_slice(&220u16.to_ne_bytes());
+        devmode[90..92].copy_from_slice(&999i16.to_ne_bytes()); // pre-set default preference
+        apply_settings_to_dev_mode(&mut devmode, job.settings())
+            .expect("applies settings with unspecified quality");
+        let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+        assert_eq!(
+            fields & DM_PRINTQUALITY,
+            0,
+            "DM_PRINTQUALITY must remain unflagged when quality is None"
+        );
+        let dm_quality = i16::from_ne_bytes(devmode[90..92].try_into().unwrap());
+        assert_eq!(
+            dm_quality, 999,
+            "offset 90..92 must remain untouched to preserve queue default preferences"
+        );
+
+        // Linux CUPS: no print-quality option injected
+        #[cfg(unix)]
+        {
+            let cups_options = build_cups_job_options(job.settings()).expect("builds cups options");
+            assert!(
+                !cups_options.iter().any(|(k, _)| k == "print-quality"),
+                "no print-quality option must be passed when quality is None"
+            );
+        }
+    }
+
+    // 2. Future / vendor unknown attributes are ignored per RFC 8011 §5.2.8
+    let request_unknown = print_job_request(
+        &server.printer_uri,
+        Some(&server.channel_secret),
+        Some(4),
+        &[("vendor-unknown-feature", "custom-future-client-value")],
+        &document,
+    );
+    let (http_status, response_unknown) = server
+        .client
+        .post(&request_unknown)
+        .await
+        .expect("submits job with unknown attribute");
+    assert_eq!(http_status, 200);
+    assert_eq!(status_code(&response_unknown), 0x0000);
+
+    // 3. Out-of-range quality values (e.g. 2 and 6) are rejected with 0x040B
+    let count_before = server
+        .submitter
+        .jobs
+        .lock()
+        .expect("locks captured jobs")
+        .len();
+    for invalid_val in [2, 6] {
+        let request_invalid = print_job_request(
+            &server.printer_uri,
+            Some(&server.channel_secret),
+            Some(invalid_val),
+            &[],
+            &document,
+        );
+        let (http_status, response_invalid) = server
+            .client
+            .post(&request_invalid)
+            .await
+            .expect("submits invalid quality job");
+        assert_eq!(http_status, 200);
+        assert_eq!(
+            status_code(&response_invalid),
+            0x040B, // client-error-attributes-or-values-not-supported
+            "quality {invalid_val} must be rejected with 0x040B"
+        );
+    }
+    let count_after = server
+        .submitter
+        .jobs
+        .lock()
+        .expect("locks captured jobs")
+        .len();
+    assert_eq!(
+        count_before, count_after,
+        "rejected jobs must not reach the physical printer submitter"
+    );
+
+    server.runtime.shutdown().await.expect("clean shutdown");
 }

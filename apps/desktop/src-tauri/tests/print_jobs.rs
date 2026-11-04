@@ -144,6 +144,40 @@ fn print_job_with_options(
     body
 }
 
+fn print_job_with_quality(
+    channel: Option<&str>,
+    printer: &str,
+    quality_int: Option<i32>,
+    quality_str: Option<&str>,
+    document: &[u8],
+) -> Vec<u8> {
+    let mut body = vec![2, 0, 0, 2, 0, 0, 0, 9, 1];
+    text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
+    text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
+    text_attribute(&mut body, 0x45, "printer-uri", printer);
+    text_attribute(&mut body, 0x49, "document-format", "image/pwg-raster");
+    if let Some(channel) = channel {
+        text_attribute(&mut body, 0x41, "network-channel", channel);
+    }
+    body.push(0x02);
+    text_attribute(&mut body, 0x44, "media", "iso_a4_210x297mm");
+    text_attribute(&mut body, 0x44, "print-color-mode", "color");
+    text_attribute(&mut body, 0x44, "sides", "one-sided");
+    if let Some(q) = quality_int {
+        body.push(0x23);
+        body.extend((13u16).to_be_bytes());
+        body.extend(b"print-quality");
+        body.extend(4u16.to_be_bytes());
+        body.extend(q.to_be_bytes());
+    }
+    if let Some(q) = quality_str {
+        text_attribute(&mut body, 0x44, "print-quality", q);
+    }
+    body.push(3);
+    body.extend(document);
+    body
+}
+
 fn validate_job(channel: Option<&str>, printer: &str) -> Vec<u8> {
     let mut body = vec![2, 0, 0, 4, 0, 0, 0, 9, 1];
     text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
@@ -742,6 +776,103 @@ async fn unsupported_copies_count_is_rejected_without_submitting_job() {
         assert_eq!(ipp_status(&response), 0x040B, "copies: {invalid}");
         assert!(submitter.0.lock().expect("reads submissions").is_empty());
     }
+}
+
+#[tokio::test]
+async fn print_quality_settings_reach_the_printer_adapter_for_both_enum_and_keyword_syntax() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    use shaprint_desktop::application::PrintQuality;
+
+    for (quality_int, quality_str) in [
+        (Some(3), None),
+        (Some(4), None),
+        (Some(5), None),
+        (None, Some("draft")),
+        (None, Some("normal")),
+        (None, Some("high")),
+    ] {
+        let req = print_job_with_quality(
+            Some(&secret),
+            OFFICE_PRINTER_URI,
+            quality_int,
+            quality_str,
+            b"document",
+        );
+        let response = send(&req, &shared, &channel, &submitter).await;
+        assert_eq!(ipp_status(&response), 0x0000);
+    }
+
+    let submissions = submitter.0.lock().expect("reads submissions");
+    assert_eq!(submissions.len(), 6);
+    assert_eq!(
+        submissions[0].1.settings().quality,
+        Some(PrintQuality::Draft)
+    );
+    assert_eq!(
+        submissions[1].1.settings().quality,
+        Some(PrintQuality::Normal)
+    );
+    assert_eq!(
+        submissions[2].1.settings().quality,
+        Some(PrintQuality::High)
+    );
+    assert_eq!(
+        submissions[3].1.settings().quality,
+        Some(PrintQuality::Draft)
+    );
+    assert_eq!(
+        submissions[4].1.settings().quality,
+        Some(PrintQuality::Normal)
+    );
+    assert_eq!(
+        submissions[5].1.settings().quality,
+        Some(PrintQuality::High)
+    );
+}
+
+#[tokio::test]
+async fn unsupported_print_quality_is_rejected_without_submitting_job() {
+    let shared = Shared(vec![
+        PrinterName::parse("Office Printer").expect("valid name")
+    ]);
+    let submitter = FakeSubmitter::default();
+    let channel = NetworkChannel::in_memory();
+    let secret = channel_secret();
+    channel
+        .configure(&secret)
+        .await
+        .expect("configures channel");
+
+    for (quality_int, quality_str) in [
+        (Some(1), None),
+        (Some(2), None),
+        (Some(6), None),
+        (Some(100), None),
+        (None, Some("ultra-fine")),
+        (None, Some("best")),
+    ] {
+        let req = print_job_with_quality(
+            Some(&secret),
+            OFFICE_PRINTER_URI,
+            quality_int,
+            quality_str,
+            b"document",
+        );
+        let response = send(&req, &shared, &channel, &submitter).await;
+        assert_eq!(ipp_status(&response), 0x040B);
+    }
+
+    assert!(submitter.0.lock().expect("reads submissions").is_empty());
 }
 
 #[tokio::test]
