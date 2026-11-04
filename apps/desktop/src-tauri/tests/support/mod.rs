@@ -132,6 +132,25 @@ pub fn sharing_runtime_on(queues: &[&str], port: u16) -> (Arc<Sharing>, Arc<Ipps
     (sharing, endpoint)
 }
 
+/// The sharing configuration over `queues` using a custom `submitter` and `channel`.
+pub fn sharing_runtime_with_submitter(
+    queues: &[&str],
+    submitter: Arc<dyn PrintJobSubmitter>,
+    channel: Arc<NetworkChannel>,
+) -> (Arc<Sharing>, Arc<IppsServer>) {
+    let sharing = Arc::new(Sharing::new(FakeCatalog::new(queues)));
+    let identity = ServerIdentity::generate().expect("generates a server identity");
+    let endpoint = Arc::new(IppsServer::new(
+        0,
+        Arc::new(identity),
+        channel,
+        submitter,
+        Arc::new(PrintFailures::new()),
+        Arc::new(shaprint_desktop::application::PrintJobTracker::new()),
+    ));
+    (sharing, endpoint)
+}
+
 /// A UDP port nothing is listening on, for a test that has to name a discovery port.
 pub fn free_udp_port() -> u16 {
     std::net::UdpSocket::bind("127.0.0.1:0")
@@ -358,11 +377,55 @@ fn request(operation: u16, request_id: u32, attributes: &[(&str, &str)]) -> Vec<
 }
 
 fn attribute(body: &mut Vec<u8>, value_tag: u8, name: &str, value: &str) {
+    text_attribute(body, value_tag, name, value);
+}
+
+pub fn text_attribute(body: &mut Vec<u8>, value_tag: u8, name: &str, value: &str) {
     body.push(value_tag);
     body.extend((name.len() as u16).to_be_bytes());
     body.extend(name.as_bytes());
     body.extend((value.len() as u16).to_be_bytes());
     body.extend(value.as_bytes());
+}
+
+pub fn enum_attribute(body: &mut Vec<u8>, name: &str, value: i32) {
+    body.push(0x23);
+    body.extend((name.len() as u16).to_be_bytes());
+    body.extend(name.as_bytes());
+    body.extend(4u16.to_be_bytes());
+    body.extend(value.to_be_bytes());
+}
+
+/// Constructs an IPP Print-Job request body with standard attributes.
+pub fn print_job_request(
+    printer_uri: &str,
+    channel: Option<&str>,
+    quality: Option<i32>,
+    extra_attributes: &[(&str, &str)],
+    document: &[u8],
+) -> Vec<u8> {
+    let mut body = vec![2, 0, 0, 2, 0, 0, 0, 1];
+    body.push(0x01); // Operation attributes
+    text_attribute(&mut body, 0x47, "attributes-charset", "utf-8");
+    text_attribute(&mut body, 0x48, "attributes-natural-language", "en");
+    text_attribute(&mut body, 0x45, "printer-uri", printer_uri);
+    text_attribute(&mut body, 0x49, "document-format", "image/pwg-raster");
+    if let Some(channel) = channel {
+        text_attribute(&mut body, 0x41, "network-channel", channel);
+    }
+    body.push(0x02); // Job template attributes
+    text_attribute(&mut body, 0x44, "media", "iso_a4_210x297mm");
+    text_attribute(&mut body, 0x44, "print-color-mode", "color");
+    text_attribute(&mut body, 0x44, "sides", "one-sided");
+    if let Some(q) = quality {
+        enum_attribute(&mut body, "print-quality", q);
+    }
+    for (name, val) in extra_attributes {
+        text_attribute(&mut body, 0x44, name, val);
+    }
+    body.push(0x03); // End of attributes
+    body.extend(document);
+    body
 }
 
 /// The status code of an IPP response; RFC 8010 §3.4.3 puts it in the header, where a request
@@ -379,10 +442,11 @@ pub fn advertised_printers(response: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// Reads one attribute's values out of an IPP response, the way a client's parser would.
-fn attribute_values(response: &[u8], wanted: &str) -> Vec<Vec<u8>> {
+/// Reads one attribute's values out of an IPP response, handling 1setOf attribute repetitions (RFC 8010 §3.1.5).
+pub fn attribute_values(response: &[u8], wanted: &str) -> Vec<Vec<u8>> {
     let mut values = Vec::new();
     let mut position = 8;
+    let mut current_name = Vec::new();
     while position + 1 < response.len() {
         let value_tag = response[position];
         position += 1;
@@ -393,12 +457,94 @@ fn attribute_values(response: &[u8], wanted: &str) -> Vec<Vec<u8>> {
             continue;
         }
         let name = read_value(response, &mut position);
+        if !name.is_empty() {
+            current_name = name;
+        }
         let value = read_value(response, &mut position);
-        if name == wanted.as_bytes() {
+        if current_name == wanted.as_bytes() {
             values.push(value);
         }
     }
     values
+}
+
+/// Reads 32-bit integer or enum attribute values out of an IPP response.
+pub fn attribute_integers(response: &[u8], wanted: &str) -> Vec<i32> {
+    attribute_values(response, wanted)
+        .into_iter()
+        .filter_map(|val| {
+            if val.len() == 4 {
+                Some(i32::from_be_bytes(val.as_slice().try_into().ok()?))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Reads resolution attribute values `(xres, yres, units)` out of an IPP response.
+pub fn attribute_resolutions(response: &[u8], wanted: &str) -> Vec<(i32, i32, u8)> {
+    attribute_values(response, wanted)
+        .into_iter()
+        .filter_map(|val| {
+            if val.len() == 9 {
+                let x = i32::from_be_bytes(val[0..4].try_into().ok()?);
+                let y = i32::from_be_bytes(val[4..8].try_into().ok()?);
+                let units = val[8];
+                Some((x, y, units))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Generates a valid, parseable 1-page PWG Raster test document with specified resolution and dimensions.
+pub fn build_test_pwg_raster(width: u32, height: u32, dpi: u32, color: bool) -> Vec<u8> {
+    let mut raster = b"RaS2".to_vec();
+    let mut header = vec![0u8; 1796];
+
+    let bits_per_color = 8u32;
+    let (color_space, colors) = if color { (19u32, 3u32) } else { (18u32, 1u32) };
+    let bits_per_pixel = bits_per_color * colors;
+    let bytes_per_line = width * colors;
+
+    for (offset, value) in [
+        (276usize, dpi),
+        (280, dpi),
+        (372, width),
+        (376, height),
+        (384, bits_per_color),
+        (388, bits_per_pixel),
+        (392, bytes_per_line),
+        (396, 0u32),
+        (400, color_space),
+        (420, colors),
+    ] {
+        header[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+    }
+    raster.extend(header);
+
+    // Packbits encoding for the page:
+    let mut y = 0u32;
+    while y < height {
+        let lines = (height - y).min(256);
+        raster.push((lines - 1) as u8);
+        let mut x = 0u32;
+        while x < width {
+            let chunk = (width - x).min(128);
+            raster.push((chunk - 1) as u8);
+            if color {
+                raster.extend_from_slice(&[200u8, 100u8, 50u8]);
+            } else {
+                raster.push(128u8);
+            }
+            x += chunk;
+        }
+        y += lines;
+    }
+
+    raster
 }
 
 fn read_value(response: &[u8], position: &mut usize) -> Vec<u8> {

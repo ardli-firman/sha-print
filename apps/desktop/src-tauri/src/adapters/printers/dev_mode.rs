@@ -7,14 +7,14 @@ const DM_PAPERSIZE: u32 = 0x0000_0002;
 const DM_PAPERLENGTH: u32 = 0x0000_0004;
 const DM_PAPERWIDTH: u32 = 0x0000_0008;
 const DM_COPIES: u32 = 0x0000_0100;
-const DM_PRINTQUALITY: u32 = 0x0000_0400;
+pub const DM_PRINTQUALITY: u32 = 0x0000_0400;
 const DM_COLOR: u32 = 0x0000_0800;
 const DM_DUPLEX: u32 = 0x0000_1000;
 const DM_FORMNAME: u32 = 0x0001_0000;
 
-const DMRES_DRAFT: i16 = -1;
-const DMRES_MEDIUM: i16 = -3;
-const DMRES_HIGH: i16 = -4;
+pub const DMRES_DRAFT: i16 = -1;
+pub const DMRES_MEDIUM: i16 = -3;
+pub const DMRES_HIGH: i16 = -4;
 
 fn requested_media_spec(media: &str) -> Result<MediaSpec, AppError> {
     media_spec(media).ok_or_else(|| {
@@ -72,7 +72,7 @@ fn loaded_media_fits_requested(loaded: (i16, i16), requested: &MediaSpec) -> boo
     is_a4_requested && is_folio_loaded
 }
 
-pub(super) fn apply_settings_to_dev_mode(
+pub fn apply_settings_to_dev_mode(
     dev_mode: &mut [u8],
     settings: &crate::application::PrintSettings,
 ) -> Result<(), AppError> {

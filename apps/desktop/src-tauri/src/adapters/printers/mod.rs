@@ -5,8 +5,7 @@
 
 #[cfg(unix)]
 pub mod cups;
-#[cfg(any(windows, test))]
-mod dev_mode;
+pub mod dev_mode;
 pub(crate) mod media;
 #[cfg(any(windows, test))]
 mod page_settings;
