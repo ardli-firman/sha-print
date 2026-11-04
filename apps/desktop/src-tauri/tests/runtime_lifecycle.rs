@@ -808,7 +808,7 @@ async fn print_quality_lifecycle_end_to_end_across_ipps_submission_and_platform_
     let server = LiveQualityServer::start("Office Printer").await;
     let document = build_test_pwg_raster(2480, 3508, 300, true);
 
-    for (quality_value, expected_enum, expected_dm_quality, expected_cups_val) in [
+    for (quality_value, expected_enum, expected_dm_quality, _expected_cups_val) in [
         (3, PrintQuality::Draft, DMRES_DRAFT, "3"),
         (4, PrintQuality::Normal, DMRES_MEDIUM, "4"),
         (5, PrintQuality::High, DMRES_HIGH, "5"),
@@ -858,8 +858,8 @@ async fn print_quality_lifecycle_end_to_end_across_ipps_submission_and_platform_
         {
             let cups_options = build_cups_job_options(job.settings()).expect("builds cups options");
             assert!(
-                cups_options.contains(&("print-quality".to_owned(), expected_cups_val.to_owned())),
-                "CUPS options must contain print-quality={expected_cups_val}"
+                cups_options.contains(&("print-quality".to_owned(), _expected_cups_val.to_owned())),
+                "CUPS options must contain print-quality={_expected_cups_val}"
             );
         }
     }
