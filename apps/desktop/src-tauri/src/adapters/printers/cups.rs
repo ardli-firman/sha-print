@@ -773,6 +773,14 @@ pub fn build_cups_job_options(settings: &PrintSettings) -> Result<Vec<(String, S
         };
         options.push(("orientation-requested".to_owned(), code.to_owned()));
     }
+    if let Some(quality) = settings.quality {
+        let code = match quality {
+            crate::application::PrintQuality::Draft => "3",
+            crate::application::PrintQuality::Normal => "4",
+            crate::application::PrintQuality::High => "5",
+        };
+        options.push(("print-quality".to_owned(), code.to_owned()));
+    }
     Ok(options)
 }
 
@@ -1054,6 +1062,38 @@ mod tests {
         };
         let err = build_cups_job_options(&bad_copies).expect_err("rejects zero copies");
         assert_eq!(err.code(), ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn maps_print_quality_options_and_preserves_unspecified() {
+        use crate::application::PrintQuality;
+
+        for (quality, expected_val) in [
+            (PrintQuality::Draft, "3"),
+            (PrintQuality::Normal, "4"),
+            (PrintQuality::High, "5"),
+        ] {
+            let settings = PrintSettings {
+                quality: Some(quality),
+                ..Default::default()
+            };
+            let options = build_cups_job_options(&settings).expect("maps valid quality");
+            assert_eq!(
+                options,
+                vec![("print-quality".to_owned(), expected_val.to_owned())]
+            );
+        }
+
+        // Unspecified quality does not inject print-quality option
+        let settings = PrintSettings {
+            quality: None,
+            ..Default::default()
+        };
+        let options = build_cups_job_options(&settings).expect("maps valid settings");
+        assert!(
+            !options.iter().any(|(k, _)| k == "print-quality"),
+            "unspecified quality must not produce print-quality option"
+        );
     }
 
     #[tokio::test]

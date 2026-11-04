@@ -7,9 +7,14 @@ const DM_PAPERSIZE: u32 = 0x0000_0002;
 const DM_PAPERLENGTH: u32 = 0x0000_0004;
 const DM_PAPERWIDTH: u32 = 0x0000_0008;
 const DM_COPIES: u32 = 0x0000_0100;
+const DM_PRINTQUALITY: u32 = 0x0000_0400;
 const DM_COLOR: u32 = 0x0000_0800;
 const DM_DUPLEX: u32 = 0x0000_1000;
 const DM_FORMNAME: u32 = 0x0001_0000;
+
+const DMRES_DRAFT: i16 = -1;
+const DMRES_MEDIUM: i16 = -3;
+const DMRES_HIGH: i16 = -4;
 
 fn requested_media_spec(media: &str) -> Result<MediaSpec, AppError> {
     media_spec(media).ok_or_else(|| {
@@ -133,6 +138,15 @@ pub(super) fn apply_settings_to_dev_mode(
         };
         dev_mode[94..96].copy_from_slice(&mode.to_ne_bytes());
         fields |= DM_DUPLEX;
+    }
+    if let Some(quality) = settings.quality {
+        let dm_quality = match quality {
+            crate::application::PrintQuality::Draft => DMRES_DRAFT,
+            crate::application::PrintQuality::Normal => DMRES_MEDIUM,
+            crate::application::PrintQuality::High => DMRES_HIGH,
+        };
+        dev_mode[90..92].copy_from_slice(&dm_quality.to_ne_bytes());
+        fields |= DM_PRINTQUALITY;
     }
     dev_mode[72..76].copy_from_slice(&fields.to_ne_bytes());
     Ok(())
@@ -266,6 +280,45 @@ mod tests {
             2100
         );
         assert_eq!(&devmode[102..108], &[b'F', 0, b'4', 0, 0, 0]);
+    }
+
+    #[test]
+    fn dev_mode_mapping_applies_print_quality_and_preserves_unspecified() {
+        use crate::application::PrintQuality;
+
+        // DM_PRINTQUALITY = 0x0000_0400
+        for (quality, expected_dm) in [
+            (PrintQuality::Draft, -1i16),
+            (PrintQuality::Normal, -3i16),
+            (PrintQuality::High, -4i16),
+        ] {
+            let mut devmode = vec![0u8; 120];
+            let settings = crate::application::PrintSettings {
+                quality: Some(quality),
+                ..Default::default()
+            };
+            apply_settings_to_dev_mode(&mut devmode, &settings).expect("applies settings");
+            let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+            assert_eq!(fields, 0x0000_0400);
+            let dm_quality = i16::from_ne_bytes(devmode[90..92].try_into().unwrap());
+            assert_eq!(dm_quality, expected_dm, "quality: {quality:?}");
+        }
+
+        // Unspecified quality leaves DM_PRINTQUALITY unflagged and bytes untouched
+        let mut devmode = vec![0u8; 120];
+        devmode[90..92].copy_from_slice(&42i16.to_ne_bytes());
+        let settings = crate::application::PrintSettings {
+            quality: None,
+            ..Default::default()
+        };
+        apply_settings_to_dev_mode(&mut devmode, &settings).expect("applies settings");
+        let fields = u32::from_ne_bytes(devmode[72..76].try_into().unwrap());
+        assert_eq!(fields & 0x0000_0400, 0);
+        let dm_quality = i16::from_ne_bytes(devmode[90..92].try_into().unwrap());
+        assert_eq!(
+            dm_quality, 42,
+            "unspecified quality preserves existing value"
+        );
     }
 
     #[test]
