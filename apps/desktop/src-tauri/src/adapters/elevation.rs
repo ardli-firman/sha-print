@@ -945,6 +945,203 @@ pub mod linux {
     }
 }
 
+/// Builds the PowerShell script to verify effective Windows firewall policy.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn build_windows_firewall_inspection_script(rules: &[InboundRule]) -> String {
+    let named_list = rules
+        .iter()
+        .map(|r| format!("'{}'", r.name.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let targets = rules
+        .iter()
+        .map(|r| {
+            format!(
+                "@{{ Protocol = '{proto}'; Port = '{port}'; Name = '{name}' }}",
+                proto = r.protocol,
+                port = r.port,
+                name = r.name.replace('\'', "''")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n    ");
+
+    format!(
+        r#"$ErrorActionPreference = 'Stop'
+function RuleProfiles($rule) {{
+  return @($rule.Profile.ToString().Split(',') | ForEach-Object {{ $_.Trim() }})
+}}
+function OverlapsActiveProfile($rule) {{
+  $profiles = @(RuleProfiles $rule)
+  if ($profiles -contains 'Any') {{ return $true }}
+  foreach ($profile in $profiles) {{ if ($needed.ContainsKey($profile) -and $needed[$profile]) {{ return $true }} }}
+  return $false
+}}
+function Unrestricted($rule) {{
+  if ($rule.PackageFamilyName -and $rule.PackageFamilyName -ne 'Any') {{ return $false }}
+  $address = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  $application = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  $service = Get-NetFirewallServiceFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  $interface = Get-NetFirewallInterfaceFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  $type = Get-NetFirewallInterfaceTypeFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  $security = Get-NetFirewallSecurityFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  return ((@($address.LocalAddress) -contains 'Any') -and (@($address.RemoteAddress) -contains 'Any') -and
+          $application.Program -eq 'Any' -and (-not $application.Package -or $application.Package -eq 'Any') -and
+          $service.Service -eq 'Any' -and (@($interface.InterfaceAlias) -contains 'Any') -and
+          $type.InterfaceType -eq 'Any' -and $security.Authentication -eq 'NotRequired')
+}}
+function BlocksClients($rule) {{
+  if (-not (OverlapsActiveProfile $rule)) {{ return $false }}
+  $application = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  if ($application.Program -ne 'Any' -and
+      [Environment]::ExpandEnvironmentVariables($application.Program) -ine $env:SHAPRINT_FIREWALL_EXE) {{ return $false }}
+  if ($application.Package -and $application.Package -ne 'Any') {{ return $false }}
+  $service = Get-NetFirewallServiceFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  if ($service.Service -ne 'Any') {{ return $false }}
+  $address = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+  if (@($address.RemoteAddress) -contains '127.0.0.1' -or @($address.RemoteAddress) -contains '::1') {{
+    if (@($address.RemoteAddress) -notcontains 'Any' -and @($address.RemoteAddress).Count -eq 1) {{ return $false }}
+  }}
+  return $true
+}}
+function PortMatchesExact($filter, $protocol, $port) {{
+  if (($filter.Protocol.ToString() -eq $protocol -or $filter.Protocol.ToString() -eq 'Any') -and
+      (@($filter.LocalPort) -contains $port) -and
+      (@($filter.RemotePort) -contains 'Any')) {{ return $true }}
+  return $false
+}}
+function PortMatchesAny($filter, $protocol) {{
+  if (($filter.Protocol.ToString() -eq $protocol -or $filter.Protocol.ToString() -eq 'Any') -and
+      (@($filter.LocalPort) -contains 'Any') -and
+      (@($filter.RemotePort) -contains 'Any')) {{ return $true }}
+  return $false
+}}
+function IsCovered($covered) {{
+  return ((-not $needed.Domain -or $covered.Domain) -and
+          (-not $needed.Private -or $covered.Private) -and
+          (-not $needed.Public -or $covered.Public))
+}}
+function UpdateCoverage($covered, $rule) {{
+  $profiles = @(RuleProfiles $rule)
+  if ($profiles -contains 'Any') {{
+    $covered.Domain = $true
+    $covered.Private = $true
+    $covered.Public = $true
+  }} else {{
+    foreach ($p in $profiles) {{
+      if ($covered.ContainsKey($p)) {{ $covered[$p] = $true }}
+    }}
+  }}
+}}
+try {{
+  $needed = @{{ Domain = $false; Private = $false; Public = $false }}
+  $defaults = @{{ Domain = $false; Private = $false; Public = $false }}
+  foreach ($profile in @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop)) {{
+    if ($profile.Enabled -eq 'True') {{
+      if ($profile.AllowInboundRules -eq 'False') {{ exit 2 }}
+      $needed[$profile.Name] = $true
+      $defaults[$profile.Name] = ($profile.DefaultInboundAction -eq 'Allow')
+    }}
+  }}
+  if (-not ($needed.Domain -or $needed.Private -or $needed.Public)) {{ exit 0 }}
+
+  $blockRules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Action Block -Enabled True -Direction Inbound -ErrorAction SilentlyContinue)
+  $blockRuleMap = @{{}}
+  foreach ($b in $blockRules) {{ $blockRuleMap[$b.InstanceID] = $b }}
+  $blockFilters = @($blockRules | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue)
+
+  $namedRules = @(Get-NetFirewallRule -DisplayName @({named_list}) -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' -and $_.Direction -eq 'Inbound' }})
+  $namedRuleMap = @{{}}
+  foreach ($r in $namedRules) {{ $namedRuleMap[$r.InstanceID] = $r }}
+  $namedFilters = @($namedRules | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue)
+
+  $fallbackLoaded = $false
+  $fallbackRuleMap = $null
+  $fallbackFilters = $null
+  $fallbackAppMap = $null
+
+  $checkPorts = @(
+    {targets}
+  )
+
+  foreach ($target in $checkPorts) {{
+    $proto = $target.Protocol
+    $port = $target.Port
+
+    foreach ($bf in $blockFilters) {{
+      if ((PortMatchesExact $bf $proto $port) -or (PortMatchesAny $bf $proto)) {{
+        $bRule = $blockRuleMap[$bf.InstanceID]
+        if ($bRule -and (BlocksClients $bRule)) {{ exit 2 }}
+      }}
+    }}
+
+    $covered = @{{ Domain = $defaults.Domain; Private = $defaults.Private; Public = $defaults.Public }}
+
+    foreach ($nf in $namedFilters) {{
+      if ((PortMatchesExact $nf $proto $port) -or (PortMatchesAny $nf $proto)) {{
+        $nRule = $namedRuleMap[$nf.InstanceID]
+        if ($nRule -and (Unrestricted $nRule)) {{
+          UpdateCoverage $covered $nRule
+        }}
+      }}
+    }}
+
+    if (IsCovered $covered) {{ continue }}
+
+    if (-not $fallbackLoaded) {{
+      $allAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -Action Allow -Enabled True -Direction Inbound -ErrorAction Stop)
+      $fallbackRuleMap = @{{}}
+      foreach ($ar in $allAllow) {{ $fallbackRuleMap[$ar.InstanceID] = $ar }}
+      $fallbackFilters = @($allAllow | Get-NetFirewallPortFilter -ErrorAction Stop)
+      $fallbackLoaded = $true
+    }}
+
+    foreach ($af in $fallbackFilters) {{
+      if (PortMatchesExact $af $proto $port) {{
+        $aRule = $fallbackRuleMap[$af.InstanceID]
+        if ($aRule -and (Unrestricted $aRule)) {{
+          UpdateCoverage $covered $aRule
+          if (IsCovered $covered) {{ break }}
+        }}
+      }}
+    }}
+
+    if (IsCovered $covered) {{ continue }}
+
+    if ($fallbackAppMap -eq $null) {{
+      $anyFilterRules = @($fallbackFilters | Where-Object {{ PortMatchesAny $_ $proto }} | ForEach-Object {{ $fallbackRuleMap[$_.InstanceID] }} | Where-Object {{ $_ -ne $null }})
+      $fallbackAppMap = @{{}}
+      if ($anyFilterRules.Count -gt 0) {{
+        $apps = @($anyFilterRules | Get-NetFirewallApplicationFilter -ErrorAction Stop)
+        foreach ($app in $apps) {{ $fallbackAppMap[$app.InstanceID] = $app }}
+      }}
+    }}
+
+    foreach ($af in $fallbackFilters) {{
+      if (PortMatchesAny $af $proto) {{
+        $app = $fallbackAppMap[$af.InstanceID]
+        if ($app -and ($app.Program -eq 'Any' -or ([Environment]::ExpandEnvironmentVariables($app.Program) -ieq $env:SHAPRINT_FIREWALL_EXE))) {{
+          $aRule = $fallbackRuleMap[$af.InstanceID]
+          if ($aRule -and (Unrestricted $aRule)) {{
+            UpdateCoverage $covered $aRule
+            if (IsCovered $covered) {{ break }}
+          }}
+        }}
+      }}
+    }}
+
+    if (-not (IsCovered $covered)) {{ exit 2 }}
+  }}
+  exit 0
+}} catch {{
+  exit 3
+}}
+"#
+    )
+}
+
 #[cfg(windows)]
 mod windows {
     use std::mem::size_of;
@@ -969,6 +1166,31 @@ mod windows {
 
     /// Windows error raised when the user declines the UAC prompt.
     const ERROR_CANCELLED: u32 = 1223;
+
+    /// Environment variable used in tests to redirect PowerShell commands to a mock runner.
+    pub const POWERSHELL_CMD_ENV: &str = "SHAPRINT_POWERSHELL_CMD";
+
+    /// Environment variable used in tests to override the Windows firewall inspection timeout.
+    pub const FIREWALL_TIMEOUT_MS_ENV: &str = "SHAPRINT_FIREWALL_TIMEOUT_MS";
+
+    fn locate_powershell() -> std::path::PathBuf {
+        if let Ok(custom) = std::env::var(POWERSHELL_CMD_ENV) {
+            let trimmed = custom.trim();
+            if !trimmed.is_empty() {
+                return std::path::PathBuf::from(trimmed);
+            }
+        }
+        std::path::PathBuf::from("powershell.exe")
+    }
+
+    fn firewall_timeout() -> std::time::Duration {
+        if let Ok(custom) = std::env::var(FIREWALL_TIMEOUT_MS_ENV) {
+            if let Ok(ms) = custom.trim().parse::<u64>() {
+                return std::time::Duration::from_millis(ms);
+            }
+        }
+        std::time::Duration::from_secs(60)
+    }
 
     /// How long the app waits for the helper before it gives up and terminates it. Installing a
     /// queue talks to the spooler, which can be slow, but it must never hang the app forever.
@@ -1134,107 +1356,12 @@ mod windows {
         }
     }
 
+    pub(super) use super::build_windows_firewall_inspection_script as build_firewall_inspection_script;
+
     /// Reads effective firewall policy, including rules installed by an administrator under a
     /// different name. A restricted rule is not proof that LAN Clients can reach ShaPrint.
     pub(super) fn inbound_sharing_allowed() -> Result<bool, SetupFailure> {
-        let checks = inbound_rules()
-            .iter()
-            .map(|rule| {
-                format!(
-                    "if (-not (AccessForPort '{protocol}' '{port}')) {{ exit 2 }};",
-                    protocol = rule.protocol,
-                    port = rule.port
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        // Inspect the active policy rather than netsh's localized text. A blocking rule takes
-        // precedence over any allowance; requiring unrestricted address/program/interface scope
-        // prevents an unrelated app's or loopback-only rule from passing as Client access.
-        let script = format!(
-            r#"
-$ErrorActionPreference = 'Stop'
-function PortMatches($entry, $protocol, $port) {{
-  foreach ($filter in $entry.Ports) {{
-    if (($filter.Protocol.ToString() -eq $protocol -or $filter.Protocol.ToString() -eq 'Any') -and
-        (@($filter.LocalPort) -contains $port -or @($filter.LocalPort) -contains 'Any') -and
-        (@($filter.RemotePort) -contains 'Any')) {{ return $true }}
-  }}
-  return $false
-}}
-function RuleProfiles($rule) {{
-  return @($rule.Profile.ToString().Split(',') | ForEach-Object {{ $_.Trim() }})
-}}
-function OverlapsActiveProfile($rule) {{
-  $profiles = @(RuleProfiles $rule)
-  if ($profiles -contains 'Any') {{ return $true }}
-  foreach ($profile in $profiles) {{ if ($needed.ContainsKey($profile) -and $needed[$profile]) {{ return $true }} }}
-  return $false
-}}
-function Unrestricted($rule) {{
-  $address = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-  $application = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-  $service = Get-NetFirewallServiceFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-  $interface = Get-NetFirewallInterfaceFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-  $type = Get-NetFirewallInterfaceTypeFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-  $security = Get-NetFirewallSecurityFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-  return ((@($address.LocalAddress) -contains 'Any') -and (@($address.RemoteAddress) -contains 'Any') -and
-          $application.Program -eq 'Any' -and (-not $application.Package -or $application.Package -eq 'Any') -and
-          $service.Service -eq 'Any' -and (@($interface.InterfaceAlias) -contains 'Any') -and
-          $type.InterfaceType -eq 'Any' -and $security.Authentication -eq 'NotRequired')
-}}
-function BlocksClients($rule) {{
-  if (-not (OverlapsActiveProfile $rule)) {{ return $false }}
-  $application = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-  if ($application.Program -ne 'Any' -and
-      [Environment]::ExpandEnvironmentVariables($application.Program) -ine $env:SHAPRINT_FIREWALL_EXE) {{ return $false }}
-  if ($application.Package -and $application.Package -ne 'Any') {{ return $false }}
-  $service = Get-NetFirewallServiceFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-  if ($service.Service -ne 'Any') {{ return $false }}
-  $address = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-  if (@($address.RemoteAddress) -contains '127.0.0.1' -or @($address.RemoteAddress) -contains '::1') {{
-    if (@($address.RemoteAddress) -notcontains 'Any' -and @($address.RemoteAddress).Count -eq 1) {{ return $false }}
-  }}
-  return $true
-}}
-function AccessForPort($protocol, $port) {{
-  if (-not ($needed.Domain -or $needed.Private -or $needed.Public)) {{ return $true }}
-  $covered = @{{ Domain = $defaults.Domain; Private = $defaults.Private; Public = $defaults.Public }}
-  foreach ($entry in $rules) {{
-    $rule = $entry.Rule
-    if ($rule.Action -eq 'Block' -and (PortMatches $entry $protocol $port) -and (BlocksClients $rule)) {{ return $false }}
-  }}
-  foreach ($entry in $rules) {{
-    $rule = $entry.Rule
-    if ($rule.Action -ne 'Allow' -or -not (PortMatches $entry $protocol $port)) {{ continue }}
-    if (-not (Unrestricted $rule)) {{ continue }}
-    $profiles = @(RuleProfiles $rule)
-    if ($profiles -contains 'Any') {{ return $true }}
-    foreach ($profile in $profiles) {{ if ($covered.ContainsKey($profile)) {{ $covered[$profile] = $true }} }}
-  }}
-  return ((-not $needed.Domain -or $covered.Domain) -and
-          (-not $needed.Private -or $covered.Private) -and
-          (-not $needed.Public -or $covered.Public))
-}}
-try {{
-  $needed = @{{ Domain = $false; Private = $false; Public = $false }}
-  $defaults = @{{ Domain = $false; Private = $false; Public = $false }}
-  foreach ($profile in @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop)) {{
-    if ($profile.Enabled -eq 'True') {{
-      if ($profile.AllowInboundRules -eq 'False') {{ exit 2 }}
-      $needed[$profile.Name] = $true
-      $defaults[$profile.Name] = ($profile.DefaultInboundAction -eq 'Allow')
-    }}
-  }}
-  $rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
-    Where-Object {{ $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and
-                    ($_.Action -eq 'Allow' -or $_.Action -eq 'Block') }} |
-    ForEach-Object {{ [pscustomobject]@{{ Rule = $_; Ports = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $_ -ErrorAction Stop) }} }})
-  {checks}
-  exit 0
-}} catch {{ exit 3 }}
-"#
-        );
+        let script = build_firewall_inspection_script(&inbound_rules());
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let executable = std::env::current_exe().map_err(|error| {
             SetupFailure::new(
@@ -1242,12 +1369,13 @@ try {{
                 format!("cannot locate ShaPrint: {error}"),
             )
         })?;
-        let mut child = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        let mut child = std::process::Command::new(locate_powershell())
+            .args(["-NoProfile", "-NonInteractive", "-Command", "-"])
             .env("SHAPRINT_FIREWALL_EXE", executable)
             .creation_flags(CREATE_NO_WINDOW)
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|error| {
                 SetupFailure::new(
@@ -1255,7 +1383,11 @@ try {{
                     format!("cannot check Windows firewall: {error}"),
                 )
             })?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(script.as_bytes());
+        }
+        let deadline = std::time::Instant::now() + firewall_timeout();
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -1269,7 +1401,7 @@ try {{
                     }
                 }
                 Ok(None) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 Ok(None) => {
                     let _ = child.kill();
@@ -1686,6 +1818,135 @@ mod tests {
     #[cfg(windows)]
     fn is_elevated_runs_without_panicking() {
         let _ = windows::is_elevated();
+    }
+
+    #[cfg(windows)]
+    static WIN_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_firewall_inspection_uses_testing_seam_and_reports_allowed() {
+        let _lock = WIN_ENV_LOCK.lock().unwrap();
+        let dir = crate::test_support::temporary_directory("win-fw-seam-test");
+        std::fs::create_dir_all(&dir).expect("creates temp dir");
+        let fake_cmd = dir.join("fake-ps.cmd");
+        std::fs::write(&fake_cmd, "@echo off\r\nexit 0\r\n").expect("writes fake script");
+
+        std::env::set_var(windows::POWERSHELL_CMD_ENV, &fake_cmd);
+        let broker = SystemElevation::new();
+        let allowed = broker.inbound_sharing_allowed();
+        std::env::remove_var(windows::POWERSHELL_CMD_ENV);
+
+        assert!(allowed.expect("inspection succeeds"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_firewall_inspection_reports_disallowed_when_rules_missing() {
+        let _lock = WIN_ENV_LOCK.lock().unwrap();
+        let dir = crate::test_support::temporary_directory("win-fw-disallowed-test");
+        std::fs::create_dir_all(&dir).expect("creates temp dir");
+        let fake_cmd = dir.join("fake-ps.cmd");
+        std::fs::write(&fake_cmd, "@echo off\r\nexit 2\r\n").expect("writes fake script");
+
+        std::env::set_var(windows::POWERSHELL_CMD_ENV, &fake_cmd);
+        let broker = SystemElevation::new();
+        let allowed = broker.inbound_sharing_allowed();
+        std::env::remove_var(windows::POWERSHELL_CMD_ENV);
+
+        assert!(!allowed.expect("inspection succeeds"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_firewall_inspection_reports_error_on_script_failure() {
+        let _lock = WIN_ENV_LOCK.lock().unwrap();
+        let dir = crate::test_support::temporary_directory("win-fw-error-test");
+        std::fs::create_dir_all(&dir).expect("creates temp dir");
+        let fake_cmd = dir.join("fake-ps.cmd");
+        std::fs::write(&fake_cmd, "@echo off\r\nexit 3\r\n").expect("writes fake script");
+
+        std::env::set_var(windows::POWERSHELL_CMD_ENV, &fake_cmd);
+        let broker = SystemElevation::new();
+        let failure = broker
+            .inbound_sharing_allowed()
+            .expect_err("must fail on exit 3");
+        std::env::remove_var(windows::POWERSHELL_CMD_ENV);
+
+        assert_eq!(failure.kind(), SetupFailureKind::Other);
+        assert!(failure
+            .detail()
+            .contains("cannot read Windows firewall rules"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_firewall_inspection_reports_timeout() {
+        let _lock = WIN_ENV_LOCK.lock().unwrap();
+        let dir = crate::test_support::temporary_directory("win-fw-timeout-test");
+        std::fs::create_dir_all(&dir).expect("creates temp dir");
+        let fake_cmd = dir.join("fake-ps.cmd");
+        // ping 127.0.0.1 -n 4 sleeps ~3 seconds
+        std::fs::write(
+            &fake_cmd,
+            "@echo off\r\nping 127.0.0.1 -n 4 >nul\r\nexit 0\r\n",
+        )
+        .expect("writes fake script");
+
+        std::env::set_var(windows::POWERSHELL_CMD_ENV, &fake_cmd);
+        std::env::set_var(windows::FIREWALL_TIMEOUT_MS_ENV, "100");
+        let broker = SystemElevation::new();
+        let failure = broker.inbound_sharing_allowed().expect_err("must time out");
+        std::env::remove_var(windows::POWERSHELL_CMD_ENV);
+        std::env::remove_var(windows::FIREWALL_TIMEOUT_MS_ENV);
+
+        assert_eq!(failure.kind(), SetupFailureKind::TimedOut);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_firewall_live_powershell_inspection_resolves_promptly() {
+        let _lock = WIN_ENV_LOCK.lock().unwrap();
+        // Ensure no mock overrides are active so it exercises live powershell.exe
+        std::env::remove_var(windows::POWERSHELL_CMD_ENV);
+        std::env::remove_var(windows::FIREWALL_TIMEOUT_MS_ENV);
+
+        let start = std::time::Instant::now();
+        let broker = SystemElevation::new();
+        let result = broker.inbound_sharing_allowed();
+        let elapsed = start.elapsed();
+
+        assert!(
+            result.is_ok(),
+            "live firewall inspection should succeed: {result:?}"
+        );
+        // Must complete promptly well under the 60-second deadline (acceptance criteria: under two seconds)
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "firewall inspection took too long: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn test_windows_firewall_script_generation() {
+        let rules = inbound_rules();
+        let script = build_windows_firewall_inspection_script(&rules);
+
+        // Verifies fast-path named lookup
+        assert!(script.contains("ShaPrint (48631)"));
+        assert!(script.contains("ShaPrint discovery (48633)"));
+        // Verifies bulk port filter pipeline
+        assert!(script.contains("Get-NetFirewallPortFilter"));
+        // Verifies package family name protection
+        assert!(script.contains("PackageFamilyName"));
+        // Verifies ActiveStore policy inspection
+        assert!(script.contains("PolicyStore ActiveStore"));
+        // Verifies conflicting block rules inspection
+        assert!(script.contains("Action Block"));
+        assert!(script.contains("BlocksClients"));
+        // Verifies targeted port matching
+        assert!(script.contains("PortMatchesExact"));
+        assert!(script.contains("PortMatchesAny"));
     }
 
     #[test]
