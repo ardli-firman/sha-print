@@ -91,6 +91,10 @@ impl LocalPrinterCatalog for WindowsPrinterCatalog {
     async fn recognised_client_queues(&self) -> Result<Vec<RecognisedClientQueue>, AppError> {
         self.inner.recognised_client_queues().await
     }
+
+    async fn ineligible_sharing_queues(&self) -> Result<Vec<PrinterName>, AppError> {
+        self.inner.ineligible_sharing_queues().await
+    }
 }
 
 /// Enumeration flags: include both locally installed printers and per-user network/IPP connections

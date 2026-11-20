@@ -727,6 +727,10 @@ impl LocalPrinterCatalog for CupsPrinterCatalog {
     async fn recognised_client_queues(&self) -> Result<Vec<RecognisedClientQueue>, AppError> {
         self.inner.recognised_client_queues().await
     }
+
+    async fn ineligible_sharing_queues(&self) -> Result<Vec<PrinterName>, AppError> {
+        self.inner.ineligible_sharing_queues().await
+    }
 }
 
 /// Maps ShaPrint `PrintSettings` into validated CUPS IPP job attribute `(name, value)` pairs.

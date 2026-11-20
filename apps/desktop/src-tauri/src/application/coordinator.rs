@@ -130,6 +130,7 @@ pub struct RuntimeCoordinator {
     services: BTreeMap<ServiceId, Arc<dyn RuntimeService>>,
     running: Mutex<BTreeMap<ServiceId, RunningService>>,
     start_gates: BTreeMap<ServiceId, tokio::sync::Mutex<()>>,
+    shutdown_signal: watch::Sender<bool>,
     start_timeout: Duration,
     shutdown_timeout: Duration,
 }
@@ -148,6 +149,7 @@ impl RuntimeCoordinator {
             .into_iter()
             .filter(|id| supervised.contains_key(id))
             .collect();
+        let (shutdown_signal, _) = watch::channel(false);
 
         Self {
             registry: Arc::new(StatusRegistry::new(&ids)),
@@ -158,6 +160,7 @@ impl RuntimeCoordinator {
                 .collect(),
             services: supervised,
             running: Mutex::new(BTreeMap::new()),
+            shutdown_signal,
             start_timeout: START_TIMEOUT,
             shutdown_timeout: SHUTDOWN_TIMEOUT,
         }
@@ -192,7 +195,20 @@ impl RuntimeCoordinator {
     /// A service that fails is reported and left `failed`; the remaining services still start, so
     /// one broken runtime cannot keep the others, or the shell, from working.
     pub async fn start_autostart(&self) -> Result<(), AppError> {
-        let mut failure = None;
+        self.start_autostart_with_retries(&[]).await
+    }
+
+    /// Starts every service that opts into autostart, retrying transient startup failures (such as
+    /// Windows Firewall or network services still warming up immediately after boot) across
+    /// `retry_delays`. Non-retryable configuration/permission errors are never retried, and
+    /// retries stop immediately if `shutdown()` is called or the service is no longer autostarting.
+    pub async fn start_autostart_with_retries(
+        &self,
+        retry_delays: &[Duration],
+    ) -> Result<(), AppError> {
+        let mut permanent_failure: Option<AppError> = None;
+        let mut retry_pending: Vec<(ServiceId, AppError)> = Vec::new();
+
         for (id, service) in &self.services {
             if !service.autostart() {
                 continue;
@@ -203,14 +219,76 @@ impl RuntimeCoordinator {
                     id.as_str(),
                     error.code_str()
                 );
-                if failure.is_none() {
-                    failure = Some(error);
+                if is_retryable_autostart_error(&error) && !retry_delays.is_empty() {
+                    retry_pending.push((*id, error));
+                } else if permanent_failure.is_none() {
+                    permanent_failure = Some(error);
                 }
             }
         }
-        match failure {
-            Some(error) => Err(error),
-            None => Ok(()),
+
+        let mut shutdown_rx = self.shutdown_signal.subscribe();
+        for (attempt, delay) in retry_delays.iter().enumerate() {
+            if retry_pending.is_empty() || *shutdown_rx.borrow() {
+                break;
+            }
+            tokio::select! {
+                () = tokio::time::sleep(*delay) => {}
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+            }
+            if *shutdown_rx.borrow() {
+                break;
+            }
+
+            let mut next_pending = Vec::new();
+            for (id, _previous_error) in std::mem::take(&mut retry_pending) {
+                let Ok(service) = self.service(id) else {
+                    continue;
+                };
+                if !service.autostart() {
+                    continue;
+                }
+                if matches!(self.state(id), Ok(state) if state.is_live()) {
+                    continue;
+                }
+                log::info!(
+                    "retrying autostart id={} attempt={}/{}",
+                    id.as_str(),
+                    attempt + 1,
+                    retry_delays.len()
+                );
+                match self.start(id).await {
+                    Ok(()) => {
+                        log::info!("autostart retry succeeded id={}", id.as_str());
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "autostart retry failed id={} attempt={} code={}",
+                            id.as_str(),
+                            attempt + 1,
+                            error.code_str()
+                        );
+                        if is_retryable_autostart_error(&error) {
+                            next_pending.push((id, error));
+                        } else if permanent_failure.is_none() {
+                            permanent_failure = Some(error);
+                        }
+                    }
+                }
+            }
+            retry_pending = next_pending;
+        }
+
+        if let Some(error) = permanent_failure {
+            Err(error)
+        } else if let Some((_, error)) = retry_pending.into_iter().next() {
+            Err(error)
+        } else {
+            Ok(())
         }
     }
 
@@ -238,9 +316,10 @@ impl RuntimeCoordinator {
         service.prepare().await?;
         service.preflight()?;
 
-        // A failed service is reset first, so a retry from the UI is a single action.
+        // A failed service is reset first, so a retry from the UI or boot retry is a single action.
+        // Do not notify `service.stopped()` here: resetting to retry is not an explicit user stop.
         if self.state(id)? == ServiceState::Failed {
-            self.stop(id).await?;
+            self.stop_internal(id, false).await?;
         }
 
         let (cancel, shutdown) = Shutdown::channel();
@@ -284,6 +363,10 @@ impl RuntimeCoordinator {
 
     /// Stops one service and waits for its task to end.
     pub async fn stop(&self, id: ServiceId) -> Result<(), AppError> {
+        self.stop_internal(id, true).await
+    }
+
+    async fn stop_internal(&self, id: ServiceId, notify_stopped: bool) -> Result<(), AppError> {
         self.service(id)?;
         let state = self.state(id)?;
         if state == ServiceState::Stopped {
@@ -295,10 +378,12 @@ impl RuntimeCoordinator {
 
         let entry = self.lock_running()?.remove(&id);
         let Some(entry) = entry else {
-            // No task is left to cancel (the service failed on its own); settle to Stopped and persist.
+            // No task is left to cancel (the service failed on its own); settle to Stopped.
             self.registry.record(id, ServiceState::Stopped, "stopped");
-            if let Ok(service) = self.service(id) {
-                service.stopped();
+            if notify_stopped {
+                if let Ok(service) = self.service(id) {
+                    service.stopped();
+                }
             }
             log::info!("service stopped from non-running state id={}", id.as_str());
             return Ok(());
@@ -312,8 +397,10 @@ impl RuntimeCoordinator {
         match timeout_at(Instant::now() + self.shutdown_timeout, entry.task).await {
             Ok(_) => {
                 self.settle_stopped(id);
-                if let Ok(service) = self.service(id) {
-                    service.stopped();
+                if notify_stopped {
+                    if let Ok(service) = self.service(id) {
+                        service.stopped();
+                    }
                 }
                 log::info!("service stopped id={}", id.as_str());
                 Ok(())
@@ -337,6 +424,7 @@ impl RuntimeCoordinator {
 
     /// Stops every service the shell started; safe to call more than once.
     pub async fn shutdown(&self) -> Result<(), AppError> {
+        let _ = self.shutdown_signal.send_replace(true);
         let entries: Vec<(ServiceId, RunningService)> = {
             let mut running = self.lock_running()?;
             std::mem::take(&mut *running).into_iter().collect()
@@ -468,6 +556,15 @@ impl RuntimeCoordinator {
             .lock()
             .map_err(|_| AppError::internal("runtime lock is poisoned"))
     }
+}
+
+/// Returns whether an autostart error may be transient during early OS boot (e.g., firewall
+/// service or network stack still initializing) and is safe to retry.
+fn is_retryable_autostart_error(error: &AppError) -> bool {
+    matches!(
+        error.code(),
+        ErrorCode::Internal | ErrorCode::Timeout | ErrorCode::QueueUnavailable
+    )
 }
 
 /// Runs one service and records how its task ended: cancellation ends in `stopped`, an error or
@@ -914,5 +1011,123 @@ mod tests {
             Some(ServiceState::Running)
         );
         runtime.shutdown().await.expect("shutdown succeeds");
+    }
+
+    #[tokio::test]
+    async fn autostart_retries_transient_boot_failures_without_notifying_stopped() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct FlakyService {
+            attempts: AtomicUsize,
+            stopped_notifications: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl RuntimeService for FlakyService {
+            fn id(&self) -> ServiceId {
+                ServiceId::ServerSharing
+            }
+            fn autostart(&self) -> bool {
+                true
+            }
+            fn stopped(&self) {
+                self.stopped_notifications.fetch_add(1, Ordering::SeqCst);
+            }
+            async fn run(&self, context: ServiceContext) -> Result<(), AppError> {
+                if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(AppError::internal("firewall service still starting"));
+                }
+                context.reporter().ready()?;
+                context.cancelled().await;
+                Ok(())
+            }
+        }
+
+        let flaky = Arc::new(FlakyService {
+            attempts: AtomicUsize::new(0),
+            stopped_notifications: AtomicUsize::new(0),
+        });
+        let runtime = RuntimeCoordinator::new(vec![Arc::clone(&flaky) as Arc<dyn RuntimeService>]);
+
+        runtime
+            .start_autostart_with_retries(&[Duration::from_millis(10), Duration::from_millis(10)])
+            .await
+            .expect("recovers on retry");
+
+        assert_eq!(flaky.attempts.load(Ordering::SeqCst), 2);
+        // Resetting a failed service for retry must never trigger `service.stopped()` (which would
+        // overwrite persisted sharing enabled=false).
+        assert_eq!(flaky.stopped_notifications.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            state(&runtime, ServiceId::ServerSharing),
+            ServiceState::Running
+        );
+        runtime.shutdown().await.expect("shutdown succeeds");
+    }
+
+    #[tokio::test]
+    async fn autostart_does_not_retry_non_retryable_precondition_failures() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingBlockedService(AtomicUsize);
+
+        #[async_trait]
+        impl RuntimeService for CountingBlockedService {
+            fn id(&self) -> ServiceId {
+                ServiceId::ServerSharing
+            }
+            fn autostart(&self) -> bool {
+                true
+            }
+            fn preflight(&self) -> Result<(), AppError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err(AppError::invalid_state(
+                    "a Network Channel is not configured",
+                ))
+            }
+            async fn run(&self, _context: ServiceContext) -> Result<(), AppError> {
+                unreachable!("preflight blocks run")
+            }
+        }
+
+        let blocked = Arc::new(CountingBlockedService(AtomicUsize::new(0)));
+        let runtime =
+            RuntimeCoordinator::new(vec![Arc::clone(&blocked) as Arc<dyn RuntimeService>]);
+
+        let error = runtime
+            .start_autostart_with_retries(&[Duration::from_secs(5)])
+            .await
+            .expect_err("fails immediately without waiting");
+
+        assert_eq!(error.code(), ErrorCode::InvalidState);
+        assert_eq!(blocked.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_pending_autostart_retry_sleep() {
+        let runtime = Arc::new(coordinator(vec![FakeService::new(
+            ServiceId::ServerSharing,
+            true,
+            Behaviour::Fails,
+        )]));
+
+        let runner = tokio::spawn({
+            let runtime = Arc::clone(&runtime);
+            async move {
+                runtime
+                    .start_autostart_with_retries(&[Duration::from_secs(30)])
+                    .await
+            }
+        });
+
+        // Give the initial failed attempt a moment to enter the retry sleep, then shut down.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        runtime.shutdown().await.expect("shutdown succeeds");
+
+        let outcome = tokio::time::timeout(Duration::from_secs(1), runner)
+            .await
+            .expect("retry loop exits promptly on shutdown")
+            .expect("task joins");
+        assert!(outcome.is_err());
     }
 }

@@ -178,25 +178,23 @@ impl Sharing {
 
     /// Restores the persistent sharing state against available local queues.
     ///
-    /// Recognised client queues (queues installed by the ShaPrint client targeting remote servers)
-    /// are filtered out in-memory to prevent circular re-sharing loops (ADR 0005). Physical and network
-    /// printer selections are preserved even if they are offline or still initializing during boot,
+    /// Recognised client queues and ambiguous loopback/client-named records are filtered out
+    /// in-memory to prevent circular re-sharing loops (ADR 0005). Physical and network printer
+    /// selections are preserved even if they are offline or still initializing during boot,
     /// ensuring server sharing autostarts and settings are not wiped out.
     pub async fn restore(&self) -> Result<(), AppError> {
-        let client_queues = match self.catalog.recognised_client_queues().await {
+        let ineligible_queues = match self.catalog.ineligible_sharing_queues().await {
             Ok(queues) => queues,
             Err(error) => {
                 log::warn!(
-                    "cannot query recognised client queues during restore; retaining saved state: {error}"
+                    "cannot query ineligible sharing queues during restore; retaining saved state: {error}"
                 );
                 return Ok(());
             }
         };
 
-        let client_queue_names: Vec<&str> = client_queues
-            .iter()
-            .map(|q| q.queue_name().as_str())
-            .collect();
+        let ineligible_names: Vec<&str> =
+            ineligible_queues.iter().map(PrinterName::as_str).collect();
 
         let mut updated_selection = Vec::new();
         let mut changed = false;
@@ -206,9 +204,9 @@ impl Sharing {
                 .read()
                 .map_err(|_| AppError::internal("printer selection lock is poisoned"))?;
             for printer in current.as_slice() {
-                if client_queue_names.contains(&printer.as_str()) {
+                if ineligible_names.contains(&printer.as_str()) {
                     log::info!(
-                        "filtered out recognised client queue from sharing: {}",
+                        "filtered out ineligible client/ambiguous queue from sharing: {}",
                         printer.as_str()
                     );
                     changed = true;
@@ -658,15 +656,22 @@ mod tests {
                     "Office Laser (ShaPrint 10.0.0.5-8631)",
                     "ipp://127.0.0.1:8632/ipp/print/10.0.0.5%3A8631/Office%20Laser",
                 ),
+                SpoolerRecord::new(
+                    "Corrupt Queue (ShaPrint 10.0.0.5-8631)",
+                    "ipp://127.0.0.1:8632/ipp/print/malformed",
+                ),
             ],
         });
 
-        // Craft a saved settings file that contains both a local printer and an injected client queue
+        // Craft a saved settings file that contains a local printer, an offline physical printer,
+        // a recognised client queue, and an ambiguous loopback record.
         let saved_json = r#"{
             "enabled": true,
             "printers": [
                 "Brother HL-L2350DW",
-                "Office Laser (ShaPrint 10.0.0.5-8631)"
+                "EPSON L3110",
+                "Office Laser (ShaPrint 10.0.0.5-8631)",
+                "Corrupt Queue (ShaPrint 10.0.0.5-8631)"
             ]
         }"#;
         std::fs::write(path.join("sharing_state.json"), saved_json).expect("writes state");
@@ -676,8 +681,12 @@ mod tests {
 
         sharing.restore().await.expect("restore succeeds");
 
-        // The client queue was filtered out; only the real local printer was restored
-        assert_eq!(sharing.shared_printers(), vec![name("Brother HL-L2350DW")]);
+        // Both the client queue and ambiguous record were filtered out; both the enumerated
+        // local printer and the not-yet-enumerated physical printer were preserved.
+        assert_eq!(
+            sharing.shared_printers(),
+            vec![name("Brother HL-L2350DW"), name("EPSON L3110")]
+        );
         assert!(sharing.is_autostart_enabled());
 
         std::fs::remove_dir_all(&path).ok();

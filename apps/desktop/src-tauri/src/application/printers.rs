@@ -117,6 +117,17 @@ pub trait LocalPrinterCatalog: Send + Sync + 'static {
     async fn recognised_client_queues(&self) -> Result<Vec<RecognisedClientQueue>, AppError> {
         Ok(Vec::new())
     }
+
+    /// Queue names that must never be shared by the server (recognised ShaPrint client queues and
+    /// ambiguous loopback/client-named records) to prevent circular re-sharing loops (ADR 0005).
+    async fn ineligible_sharing_queues(&self) -> Result<Vec<PrinterName>, AppError> {
+        Ok(self
+            .recognised_client_queues()
+            .await?
+            .into_iter()
+            .filter_map(|queue| PrinterName::parse(queue.queue_name().as_str()).ok())
+            .collect())
+    }
 }
 
 /// A printer catalog backed by a spooler reader that evaluates ports and excludes client queues.
@@ -171,6 +182,30 @@ impl LocalPrinterCatalog for DestinationAwarePrinterCatalog {
         queues.sort();
         queues.dedup();
         Ok(queues)
+    }
+
+    async fn ineligible_sharing_queues(&self) -> Result<Vec<PrinterName>, AppError> {
+        let records = self.spooler.read_spooler_records().await?;
+        let mut ineligible = Vec::new();
+        for record in records {
+            match record.classify(&self.proxy_authority) {
+                SpoolerRecordClassification::RecognisedClientQueue(queue) => {
+                    if let Ok(name) = PrinterName::parse(queue.queue_name().as_str()) {
+                        ineligible.push(name);
+                    }
+                }
+                SpoolerRecordClassification::AmbiguousClientQueue => {
+                    if let Ok(name) = PrinterName::parse(record.name()) {
+                        ineligible.push(name);
+                    }
+                }
+                SpoolerRecordClassification::EligibleLocal(_)
+                | SpoolerRecordClassification::Ignored => {}
+            }
+        }
+        ineligible.sort();
+        ineligible.dedup();
+        Ok(ineligible)
     }
 }
 
