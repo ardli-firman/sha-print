@@ -478,4 +478,33 @@ mod tests {
         assert_eq!(registration.registered().as_deref(), Some(COMMAND));
         let _ = std::fs::remove_dir_all(&directory);
     }
+
+    #[test]
+    fn upgrade_with_outdated_task_repairs_when_enabled_and_removes_when_disabled() {
+        let enabled_dir = temporary_directory("upgrade-outdated-enabled");
+        std::fs::write(enabled_dir.join(PREFERENCE_FILE), "{\"enabled\": true}")
+            .expect("writes enabled preference");
+        let enabled_reg = FakeRegistration::new(Some("<outdated-task>"));
+        let enabled_startup = startup(Arc::clone(&enabled_reg), &enabled_dir);
+
+        enabled_startup
+            .apply_default()
+            .expect("repairs outdated task");
+        assert_eq!(enabled_reg.writes(), vec![true]);
+        assert_eq!(enabled_reg.registered().as_deref(), Some(COMMAND));
+        let _ = std::fs::remove_dir_all(&enabled_dir);
+
+        let disabled_dir = temporary_directory("upgrade-outdated-disabled");
+        std::fs::write(disabled_dir.join(PREFERENCE_FILE), "{\"enabled\": false}")
+            .expect("writes disabled preference");
+        let disabled_reg = FakeRegistration::new(Some("<outdated-task>"));
+        let disabled_startup = startup(Arc::clone(&disabled_reg), &disabled_dir);
+
+        disabled_startup
+            .apply_default()
+            .expect("removes leftover outdated task");
+        assert_eq!(disabled_reg.writes(), vec![false]);
+        assert_eq!(disabled_reg.registered(), None);
+        let _ = std::fs::remove_dir_all(&disabled_dir);
+    }
 }

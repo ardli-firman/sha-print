@@ -1,9 +1,10 @@
-//! Login-startup registration for the current user (#40).
+//! Login-startup registration for the current installation (#40, #200).
 //!
-//! Windows runs the command stored under the per-user `Run` key. That key needs no administrator
-//! rights and never touches machine-wide state, so starting at login stays an unprivileged action
-//! (ADR 0001). The registration is refreshed when the program moves, and removing it is what the
-//! user sees as turning "start at login" off.
+//! On Windows, ShaPrint registers a scheduled task (`ShaPrint_Startup`) under
+//! `BUILTIN\Administrators` (`S-1-5-32-544`) with `HighestAvailable` privileges so the elevated
+//! desktop shell starts automatically at logon without UAC prompts or Win32 Error 740. Legacy
+//! per-user `Run` registry keys are automatically cleaned up and migrated to the scheduled task,
+//! and outdated or relocated tasks are detected by inspecting the live task XML.
 
 use crate::application::StartupRegistration;
 use crate::domain::AppError;
@@ -66,16 +67,39 @@ pub const TASK_NAME: &str = "ShaPrint_Startup";
 #[cfg(any(windows, test))]
 pub const ADMINISTRATORS_GROUP_SID: &str = "S-1-5-32-544";
 
-/// Generates the XML definition for a Scheduled Task running with HighestAvailable privileges.
+/// Canonical name Windows may emit instead of the SID when exporting the Administrators group.
+#[cfg(any(windows, test))]
+const ADMINISTRATORS_GROUP_NAME: &str = r"BUILTIN\Administrators";
+
+/// Sentinel returned when a `ShaPrint_Startup` scheduled task exists in Windows Task Scheduler
+/// but its XML is outdated, disabled, or malformed (for example, an older `S-1-5-32-545` task).
+///
+/// Returning a non-matching sentinel instead of `None` lets `Startup::apply_default()` both
+/// upgrade the task when startup is enabled AND delete the leftover task when startup is disabled.
+#[cfg(windows)]
+const OUTDATED_TASK_SENTINEL: &str = "<outdated-task>";
+
+/// Generates the XML definition for a Scheduled Task running with `HighestAvailable` privileges.
+///
+/// Note: Under the Windows Task Scheduler XML schema (`[MS-TSCH]` `principalType`), `<GroupId>`
+/// implies group activation (`TASK_LOGON_GROUP`) and MUST NOT be paired with `<LogonType>`
+/// (pairing `<GroupId>` with `<LogonType>InteractiveToken</LogonType>` causes `schtasks.exe` to
+/// reject the XML with `SCHED_E_UNEXPECTEDNODE` / `SCHED_E_INVALIDVALUE`).
 #[cfg(any(windows, test))]
 pub fn generate_task_xml(exe_path: &str, argument: &str) -> String {
     let escaped_exe = escape_xml(exe_path);
     let escaped_arg = escape_xml(argument);
-    let exe_dir = std::path::Path::new(exe_path)
-        .parent()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let escaped_dir = escape_xml(&exe_dir);
+    let exe_dir = exe_path
+        .rsplit_once(['\\', '/'])
+        .map(|(dir, _)| dir)
+        .filter(|dir| !dir.is_empty());
+    let working_dir_tag = match exe_dir {
+        Some(dir) => format!(
+            "\n      <WorkingDirectory>{}</WorkingDirectory>",
+            escape_xml(dir)
+        ),
+        None => String::new(),
+    };
 
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
@@ -88,7 +112,6 @@ pub fn generate_task_xml(exe_path: &str, argument: &str) -> String {
   <Principals>
     <Principal id="Author">
       <GroupId>{ADMINISTRATORS_GROUP_SID}</GroupId>
-      <LogonType>InteractiveToken</LogonType>
       <RunLevel>HighestAvailable</RunLevel>
     </Principal>
   </Principals>
@@ -107,8 +130,7 @@ pub fn generate_task_xml(exe_path: &str, argument: &str) -> String {
   <Actions Context="Author">
     <Exec>
       <Command>{escaped_exe}</Command>
-      <Arguments>{escaped_arg}</Arguments>
-      <WorkingDirectory>{escaped_dir}</WorkingDirectory>
+      <Arguments>{escaped_arg}</Arguments>{working_dir_tag}
     </Exec>
   </Actions>
 </Task>"#
@@ -123,6 +145,128 @@ fn escape_xml(input: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+#[cfg(any(windows, test))]
+fn unescape_xml(input: &str) -> String {
+    input
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// Decodes stdout bytes from `schtasks.exe /query /xml`, which may be UTF-16 (with BOM) or UTF-8.
+#[cfg(any(windows, test))]
+fn decode_schtasks_output(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = rest
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        let units: Vec<u16> = rest
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    let trimmed = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8_lossy(trimmed).into_owned()
+}
+
+/// Extracts the inner text of the first `<tag ...>...</tag>` element inside `xml`.
+#[cfg(any(windows, test))]
+fn extract_xml_element<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
+    let open_prefix = format!("<{tag}");
+    let close_tag = format!("</{tag}>");
+    let mut search_from = 0;
+
+    while let Some(rel_start) = xml[search_from..].find(&open_prefix) {
+        let start = search_from + rel_start;
+        let after_name = start + open_prefix.len();
+        let next_char = xml[after_name..].chars().next()?;
+        if next_char != '>' && !next_char.is_whitespace() && next_char != '/' {
+            search_from = after_name;
+            continue;
+        }
+        let open_end = xml[after_name..].find('>')? + after_name;
+        if xml[start..=open_end].trim_end().ends_with("/>") {
+            return Some("");
+        }
+        let body_start = open_end + 1;
+        let body_end = xml[body_start..].find(&close_tag)? + body_start;
+        return Some(&xml[body_start..body_end]);
+    }
+    None
+}
+
+/// Validates an exported `schtasks.exe /query /xml` document and reconstructs the registered login
+/// command line (`"<exe>" <args>`).
+///
+/// Returns `None` if the task is disabled, lacks a `<LogonTrigger>`, uses an outdated or invalid
+/// `<Principal>` (such as `S-1-5-32-545`, missing `HighestAvailable`, or `<LogonType>` paired with
+/// `<GroupId>`), or has no `<Exec><Command>`.
+#[cfg(any(windows, test))]
+pub fn parse_registered_task_command(xml: &str) -> Option<String> {
+    // Task must have a LogonTrigger that is not explicitly disabled (omitted <Enabled> defaults to true).
+    let trigger = extract_xml_element(xml, "LogonTrigger")?;
+    if extract_xml_element(trigger, "Enabled")
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("false"))
+    {
+        return None;
+    }
+
+    // Settings must not explicitly disable the task (omitted <Enabled> defaults to true).
+    if let Some(settings) = extract_xml_element(xml, "Settings") {
+        if extract_xml_element(settings, "Enabled")
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("false"))
+        {
+            return None;
+        }
+    }
+
+    // Principal must target BUILTIN\Administrators with HighestAvailable and no conflicting LogonType.
+    let principal = extract_xml_element(xml, "Principal")?;
+    let group_id = extract_xml_element(principal, "GroupId")?.trim();
+    if !group_id.eq_ignore_ascii_case(ADMINISTRATORS_GROUP_SID)
+        && !group_id.eq_ignore_ascii_case(ADMINISTRATORS_GROUP_NAME)
+    {
+        return None;
+    }
+    let run_level = extract_xml_element(principal, "RunLevel")?.trim();
+    if !run_level.eq_ignore_ascii_case("HighestAvailable") {
+        return None;
+    }
+    if extract_xml_element(principal, "LogonType").is_some() {
+        return None;
+    }
+
+    // Reconstruct the canonical command line from <Exec>.
+    let exec = extract_xml_element(xml, "Exec")?;
+    let raw_command = unescape_xml(extract_xml_element(exec, "Command")?.trim());
+    let command = raw_command.trim_matches('"').trim();
+    if command.is_empty() {
+        return None;
+    }
+
+    let arguments = extract_xml_element(exec, "Arguments")
+        .map(|arg| unescape_xml(arg.trim()))
+        .unwrap_or_default();
+    let arguments = arguments.trim();
+
+    if arguments.is_empty() {
+        Some(format!("\"{command}\""))
+    } else {
+        Some(format!("\"{command}\" {arguments}"))
+    }
 }
 
 /// Reads and writes the per-user login registration using Windows Task Scheduler (HighestAvailable)
@@ -149,11 +293,13 @@ impl WindowsStartup {
     }
 
     /// Automatically migrates any legacy registry Run key to Windows Task Scheduler (HighestAvailable)
-    /// or cleans up obsolete Run keys if the Task Scheduler task is already registered.
+    /// or cleans up obsolete Run keys if an up-to-date Task Scheduler task is already registered.
     fn migrate_legacy_run_key(&self) {
-        if matches!(task_scheduler::is_task_enabled(TASK_NAME), Ok(true)) {
-            let _ = delete_run_value(RUN_VALUE);
-            return;
+        if let Ok(Some(xml)) = task_scheduler::query_task_xml(TASK_NAME) {
+            if parse_registered_task_command(&xml).as_deref() == Some(self.command.as_str()) {
+                let _ = delete_run_value(RUN_VALUE);
+                return;
+            }
         }
 
         if matches!(read_run_value(RUN_VALUE), Ok(Some(_))) {
@@ -180,9 +326,17 @@ impl Default for WindowsStartup {
 #[cfg(windows)]
 impl StartupRegistration for WindowsStartup {
     fn registered_command(&self) -> Result<Option<String>, AppError> {
-        if task_scheduler::is_task_enabled(TASK_NAME)? {
+        if let Some(xml) = task_scheduler::query_task_xml(TASK_NAME)? {
             let _ = delete_run_value(RUN_VALUE);
-            return Ok(Some(self.command.clone()));
+            return match parse_registered_task_command(&xml) {
+                Some(command) => Ok(Some(command)),
+                None => {
+                    log::info!(
+                        "existing scheduled task ({TASK_NAME}) is outdated or disabled; marking for repair"
+                    );
+                    Ok(Some(OUTDATED_TASK_SENTINEL.to_owned()))
+                }
+            };
         }
 
         if read_run_value(RUN_VALUE)?.is_some() {
@@ -228,16 +382,20 @@ mod task_scheduler {
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    pub(super) fn is_task_enabled(task_name: &str) -> Result<bool, AppError> {
+    pub(super) fn query_task_xml(task_name: &str) -> Result<Option<String>, AppError> {
         let output = std::process::Command::new("schtasks.exe")
-            .args(["/query", "/tn", task_name])
+            .args(["/query", "/tn", task_name, "/xml"])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|error| {
                 AppError::internal(format!("cannot query Windows Task Scheduler: {error}"))
             })?;
 
-        Ok(output.status.success())
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        Ok(Some(super::decode_schtasks_output(&output.stdout)))
     }
 
     pub(super) fn create_task(task_name: &str, exe_path: &str, arg: &str) -> Result<(), AppError> {
@@ -570,13 +728,156 @@ mod tests {
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(xml.contains("<LogonTrigger>"));
         assert!(xml.contains(&format!("<GroupId>{ADMINISTRATORS_GROUP_SID}</GroupId>")));
-        assert!(xml.contains("<LogonType>InteractiveToken</LogonType>"));
+        // Pairing <LogonType> with <GroupId> is rejected by Windows Task Scheduler XML validation.
+        assert!(!xml.contains("<LogonType>"));
         assert!(xml.contains("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>"));
         assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
         assert!(xml.contains(&format!("<Arguments>{BACKGROUND_ARG}</Arguments>")));
         assert!(
             xml.contains("<Command>C:\\Program Files\\ShaPrint\\shaprint-desktop.exe</Command>")
         );
+        assert!(xml.contains("<WorkingDirectory>C:\\Program Files\\ShaPrint</WorkingDirectory>"));
         assert!(!xml.contains("&quot;"));
+    }
+
+    #[test]
+    fn task_xml_omits_empty_working_directory() {
+        let xml = generate_task_xml("shaprint-desktop.exe", BACKGROUND_ARG);
+        assert!(!xml.contains("<WorkingDirectory>"));
+    }
+
+    #[test]
+    fn generated_task_xml_round_trips_through_parser() {
+        let xml = generate_task_xml(
+            "C:\\Program Files\\ShaPrint\\shaprint-desktop.exe",
+            BACKGROUND_ARG,
+        );
+        assert_eq!(
+            parse_registered_task_command(&xml).as_deref(),
+            Some(REGISTERED)
+        );
+    }
+
+    #[test]
+    fn parser_accepts_exported_windows_xml_with_omitted_default_enabled_and_builtin_name() {
+        let exported = r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <LogonTrigger />
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <GroupId>BUILTIN\Administrators</GroupId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>"C:\Program Files\ShaPrint\shaprint-desktop.exe"</Command>
+      <Arguments>--background</Arguments>
+    </Exec>
+  </Actions>
+</Task>"#;
+
+        assert_eq!(
+            parse_registered_task_command(exported).as_deref(),
+            Some(REGISTERED)
+        );
+    }
+
+    #[test]
+    fn parser_rejects_legacy_users_group_sid_task_so_upgrades_repair_it() {
+        let legacy_xml = generate_task_xml(
+            "C:\\Program Files\\ShaPrint\\shaprint-desktop.exe",
+            BACKGROUND_ARG,
+        )
+        .replace(ADMINISTRATORS_GROUP_SID, "S-1-5-32-545");
+
+        assert_eq!(parse_registered_task_command(&legacy_xml), None);
+    }
+
+    #[test]
+    fn parser_rejects_invalid_logon_type_paired_with_group_id() {
+        let invalid_xml = generate_task_xml(
+            "C:\\Program Files\\ShaPrint\\shaprint-desktop.exe",
+            BACKGROUND_ARG,
+        )
+        .replace(
+            "<RunLevel>HighestAvailable</RunLevel>",
+            "<LogonType>InteractiveToken</LogonType>\n      <RunLevel>HighestAvailable</RunLevel>",
+        );
+
+        assert_eq!(parse_registered_task_command(&invalid_xml), None);
+    }
+
+    #[test]
+    fn parser_rejects_disabled_task_or_trigger() {
+        let disabled_settings = generate_task_xml(
+            "C:\\Program Files\\ShaPrint\\shaprint-desktop.exe",
+            BACKGROUND_ARG,
+        )
+        .replace(
+            "<AllowStartOnDemand>true</AllowStartOnDemand>\n    <Enabled>true</Enabled>",
+            "<AllowStartOnDemand>true</AllowStartOnDemand>\n    <Enabled>false</Enabled>",
+        );
+        assert_eq!(parse_registered_task_command(&disabled_settings), None);
+
+        let disabled_trigger = generate_task_xml(
+            "C:\\Program Files\\ShaPrint\\shaprint-desktop.exe",
+            BACKGROUND_ARG,
+        )
+        .replace(
+            "<LogonTrigger>\n      <Enabled>true</Enabled>",
+            "<LogonTrigger>\n      <Enabled>false</Enabled>",
+        );
+        assert_eq!(parse_registered_task_command(&disabled_trigger), None);
+    }
+
+    #[test]
+    fn schtasks_output_decoder_handles_utf16_le_and_utf8_bom() {
+        let sample = "<Task />";
+        let mut utf16_le = vec![0xFF, 0xFE];
+        for unit in sample.encode_utf16() {
+            utf16_le.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert_eq!(decode_schtasks_output(&utf16_le), sample);
+
+        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];
+        utf8_bom.extend_from_slice(sample.as_bytes());
+        assert_eq!(decode_schtasks_output(&utf8_bom), sample);
+        assert_eq!(decode_schtasks_output(sample.as_bytes()), sample);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "registers and removes a temporary elevated Windows Scheduled Task; needs an elevated session"]
+    fn windows_schtasks_creates_and_round_trips_generated_task_xml() {
+        struct TaskCleanup(String);
+        impl Drop for TaskCleanup {
+            fn drop(&mut self) {
+                let _ = task_scheduler::delete_task(&self.0);
+            }
+        }
+
+        let task_name = format!("ShaPrint_Startup_Test_{}", std::process::id());
+        let _cleanup = TaskCleanup(task_name.clone());
+        let exe_path = r"C:\Program Files\ShaPrint\shaprint-desktop.exe";
+        let expected_command = format!("\"{exe_path}\" {BACKGROUND_ARG}");
+
+        task_scheduler::create_task(&task_name, exe_path, BACKGROUND_ARG)
+            .expect("schtasks.exe accepts the generated XML");
+
+        let exported_xml = task_scheduler::query_task_xml(&task_name)
+            .expect("queries created task")
+            .expect("created task exists in Windows Task Scheduler");
+
+        assert_eq!(
+            parse_registered_task_command(&exported_xml).as_deref(),
+            Some(expected_command.as_str()),
+            "exported Windows Task Scheduler XML did not round-trip:\n{exported_xml}"
+        );
     }
 }

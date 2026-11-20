@@ -88,6 +88,10 @@ jobs:
           SHAPRINT_DIAGNOSTICS_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: cargo test --test windows_local_troubleshooting windows_native_diagnostics_are_self_contained -- --ignored --exact --nocapture --test-threads=1
 
+      - name: Native Windows Task Scheduler XML verification
+        timeout-minutes: 2
+        run: cargo test --lib adapters::startup::tests::windows_schtasks_creates_and_round_trips_generated_task_xml -- --ignored --exact --nocapture
+
       - name: Clean up native diagnostics fixture
         if: always()
         shell: powershell

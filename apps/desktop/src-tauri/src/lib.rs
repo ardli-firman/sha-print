@@ -627,7 +627,14 @@ pub fn run(background: bool) -> Result<(), AppError> {
                         error
                     );
                 }
-                if let Err(error) = runtime.start_autostart().await {
+                if let Err(error) = runtime
+                    .start_autostart_with_retries(&[
+                        std::time::Duration::from_secs(3),
+                        std::time::Duration::from_secs(6),
+                        std::time::Duration::from_secs(12),
+                    ])
+                    .await
+                {
                     log::warn!(
                         "autostart incomplete code={} message={}",
                         error.code_str(),
