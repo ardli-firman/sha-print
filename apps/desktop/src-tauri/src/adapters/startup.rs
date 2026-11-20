@@ -62,6 +62,10 @@ fn decode_registry_string(bytes: &[u8]) -> String {
 #[cfg(windows)]
 pub const TASK_NAME: &str = "ShaPrint_Startup";
 
+/// Well-known Security Identifier (SID) for the local Administrators group (`BUILTIN\Administrators`).
+#[cfg(any(windows, test))]
+pub const ADMINISTRATORS_GROUP_SID: &str = "S-1-5-32-544";
+
 /// Generates the XML definition for a Scheduled Task running with HighestAvailable privileges.
 #[cfg(any(windows, test))]
 pub fn generate_task_xml(exe_path: &str, argument: &str) -> String {
@@ -83,7 +87,8 @@ pub fn generate_task_xml(exe_path: &str, argument: &str) -> String {
   </Triggers>
   <Principals>
     <Principal id="Author">
-      <GroupId>S-1-5-32-545</GroupId>
+      <GroupId>{ADMINISTRATORS_GROUP_SID}</GroupId>
+      <LogonType>InteractiveToken</LogonType>
       <RunLevel>HighestAvailable</RunLevel>
     </Principal>
   </Principals>
@@ -564,7 +569,8 @@ mod tests {
         );
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(xml.contains("<LogonTrigger>"));
-        assert!(xml.contains("<GroupId>S-1-5-32-545</GroupId>"));
+        assert!(xml.contains(&format!("<GroupId>{ADMINISTRATORS_GROUP_SID}</GroupId>")));
+        assert!(xml.contains("<LogonType>InteractiveToken</LogonType>"));
         assert!(xml.contains("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>"));
         assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
         assert!(xml.contains(&format!("<Arguments>{BACKGROUND_ARG}</Arguments>")));

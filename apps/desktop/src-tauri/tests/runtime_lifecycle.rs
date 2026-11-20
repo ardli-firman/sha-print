@@ -329,8 +329,8 @@ async fn explicitly_stopping_sharing_stays_stopped_across_restarts_while_preserv
 }
 
 #[tokio::test]
-async fn restarting_when_one_printer_removed_filters_it_and_resumes_sharing() {
-    let dir = temporary_directory("persist-lifecycle-one-removed");
+async fn restarting_when_one_printer_not_yet_enumerated_preserves_both_and_resumes_sharing() {
+    let dir = temporary_directory("persist-lifecycle-one-offline");
 
     // Session 1: select two printers, start, shutdown
     {
@@ -353,10 +353,10 @@ async fn restarting_when_one_printer_removed_filters_it_and_resumes_sharing() {
         runtime.shutdown().await.expect("clean shutdown");
     }
 
-    // Session 2: Zebra was uninstalled from the OS
+    // Session 2: Zebra has not finished Plug-and-Play enumeration yet
     {
         let (sharing, endpoint) = support::sharing_runtime_persistent(&["HP LaserJet"], &dir);
-        sharing.restore().await.expect("restores and filters");
+        sharing.restore().await.expect("restores sharing state");
 
         let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
             Arc::clone(&sharing),
@@ -374,7 +374,7 @@ async fn restarting_when_one_printer_removed_filters_it_and_resumes_sharing() {
                 .iter()
                 .map(|p| p.as_str())
                 .collect::<Vec<_>>(),
-            vec!["HP LaserJet"]
+            vec!["HP LaserJet", "Zebra"]
         );
 
         runtime.shutdown().await.expect("clean shutdown");
@@ -384,8 +384,8 @@ async fn restarting_when_one_printer_removed_filters_it_and_resumes_sharing() {
 }
 
 #[tokio::test]
-async fn restarting_when_all_printers_removed_leaves_sharing_stopped_cleanly() {
-    let dir = temporary_directory("persist-lifecycle-all-removed");
+async fn restarting_when_all_printers_not_yet_enumerated_preserves_selection_and_resumes_sharing() {
+    let dir = temporary_directory("persist-lifecycle-all-offline");
 
     // Session 1: select Zebra, start, shutdown
     {
@@ -407,10 +407,10 @@ async fn restarting_when_all_printers_removed_leaves_sharing_stopped_cleanly() {
         runtime.shutdown().await.expect("clean shutdown");
     }
 
-    // Session 2: Zebra was uninstalled, only Canon exists
+    // Session 2: Zebra has not yet enumerated, catalog only reports other queues (e.g. virtual Canon/XPS)
     {
         let (sharing, endpoint) = support::sharing_runtime_persistent(&["Canon"], &dir);
-        sharing.restore().await.expect("restores and filters");
+        sharing.restore().await.expect("restores sharing state");
 
         let runtime = RuntimeCoordinator::new(vec![Arc::new(support::sharing_service(
             Arc::clone(&sharing),
@@ -420,12 +420,19 @@ async fn restarting_when_all_printers_removed_leaves_sharing_stopped_cleanly() {
         runtime
             .start_autostart()
             .await
-            .expect("autostart cleanly skips sharing");
+            .expect("autostart resumes sharing");
         assert_eq!(
             state(&runtime, ServiceId::ServerSharing),
-            ServiceState::Stopped
+            ServiceState::Running
         );
-        assert!(sharing.shared_printers().is_empty());
+        assert_eq!(
+            sharing
+                .shared_printers()
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Zebra"]
+        );
 
         runtime.shutdown().await.expect("clean shutdown");
     }

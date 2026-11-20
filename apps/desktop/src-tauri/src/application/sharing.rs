@@ -176,17 +176,28 @@ impl Sharing {
         enabled && has_printers
     }
 
-    /// Restores the saved selection against the currently available local queues.
+    /// Restores the persistent sharing state against available local queues.
     ///
-    /// Filters out missing queues from the selection. If at least one valid printer remains,
-    /// sharing will autostart if enabled was true. If all saved printers are gone,
-    /// the selection is empty and autostart will be false.
+    /// Recognised client queues (queues installed by the ShaPrint client targeting remote servers)
+    /// are filtered out in-memory to prevent circular re-sharing loops (ADR 0005). Physical and network
+    /// printer selections are preserved even if they are offline or still initializing during boot,
+    /// ensuring server sharing autostarts and settings are not wiped out.
     pub async fn restore(&self) -> Result<(), AppError> {
-        let queues = self.catalog.local_printers().await?;
-        if queues.is_empty() {
-            log::info!("local printer catalog reported no queues during restore; preserving saved selection");
-            return Ok(());
-        }
+        let client_queues = match self.catalog.recognised_client_queues().await {
+            Ok(queues) => queues,
+            Err(error) => {
+                log::warn!(
+                    "cannot query recognised client queues during restore; retaining saved state: {error}"
+                );
+                return Ok(());
+            }
+        };
+
+        let client_queue_names: Vec<&str> = client_queues
+            .iter()
+            .map(|q| q.queue_name().as_str())
+            .collect();
+
         let mut updated_selection = Vec::new();
         let mut changed = false;
         {
@@ -195,11 +206,14 @@ impl Sharing {
                 .read()
                 .map_err(|_| AppError::internal("printer selection lock is poisoned"))?;
             for printer in current.as_slice() {
-                if queues.contains(printer) {
-                    updated_selection.push(printer.clone());
-                } else {
-                    log::info!("filtered out removed printer: {}", printer.as_str());
+                if client_queue_names.contains(&printer.as_str()) {
+                    log::info!(
+                        "filtered out recognised client queue from sharing: {}",
+                        printer.as_str()
+                    );
                     changed = true;
+                } else {
+                    updated_selection.push(printer.clone());
                 }
             }
         }
@@ -221,7 +235,6 @@ impl Sharing {
             if *self.changes.borrow() != selection {
                 self.changes.send_replace(selection);
             }
-            self.persist()?;
         }
         Ok(())
     }
@@ -490,8 +503,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restore_filters_out_removed_printers_and_still_autostarts_if_any_remain() {
-        let path = temporary_directory("restore-filter");
+    async fn restore_preserves_selection_and_enabled_when_catalog_returns_non_matching_queues() {
+        let path = temporary_directory("restore-non-matching");
 
         let sharing1 =
             Sharing::with_persistence(FakeCatalog::new(&["HP LaserJet", "Zebra"]), Some(&path));
@@ -501,33 +514,19 @@ mod tests {
             .expect("selects both");
         sharing1.set_sharing_enabled(true).expect("enables");
 
-        // Zebra was removed while ShaPrint was closed
-        let sharing2 = Sharing::with_persistence(FakeCatalog::new(&["HP LaserJet"]), Some(&path));
-        sharing2.restore().await.expect("restores and filters");
+        // Only default virtual printer returned by catalog during boot
+        let sharing2 = Sharing::with_persistence(
+            FakeCatalog::new(&["Microsoft XPS Document Writer"]),
+            Some(&path),
+        );
+        sharing2.restore().await.expect("restores without wiping");
 
-        assert_eq!(sharing2.shared_printers(), vec![name("HP LaserJet")]);
+        // Both printers and autostart enabled status must be preserved
+        assert_eq!(
+            sharing2.shared_printers(),
+            vec![name("HP LaserJet"), name("Zebra")]
+        );
         assert!(sharing2.is_autostart_enabled());
-
-        std::fs::remove_dir_all(&path).ok();
-    }
-
-    #[tokio::test]
-    async fn restore_leaves_sharing_stopped_cleanly_if_all_saved_printers_removed() {
-        let path = temporary_directory("restore-empty");
-
-        let sharing1 = Sharing::with_persistence(FakeCatalog::new(&["Zebra"]), Some(&path));
-        sharing1
-            .set_shared(vec![name("Zebra")])
-            .await
-            .expect("selects Zebra");
-        sharing1.set_sharing_enabled(true).expect("enables");
-
-        // All saved printers removed while ShaPrint was closed
-        let sharing2 = Sharing::with_persistence(FakeCatalog::new(&["Canon"]), Some(&path));
-        sharing2.restore().await.expect("restores and filters");
-
-        assert!(sharing2.shared_printers().is_empty());
-        assert!(!sharing2.is_autostart_enabled());
 
         std::fs::remove_dir_all(&path).ok();
     }
